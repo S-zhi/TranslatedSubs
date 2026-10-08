@@ -96,6 +96,7 @@ function buildRow(t) {
       tag(`${LANG_LABEL[t.sourceLang] || t.sourceLang} → ${LANG_LABEL[t.targetLang] || t.targetLang}`),
       tag(t.mode === "bilingual" ? "双语对照" : "仅译文"),
       tag(t.burn === "hard" ? "硬烧录" : "软字幕（可开关）"),
+      ...(t.ttsEnabled ? [tag(t.ttsStatus === "SUCCESS" ? "配音已生成" : t.ttsStatus === "FAILED" ? "配音失败" : "配音中")] : []),
       tag("whisper " + t.model)
     );
   }
@@ -162,7 +163,7 @@ function applyDynamic(row, t) {
 
   if (row.dataset.cat !== cat) {
     row.dataset.cat = cat;
-    dyn.innerHTML = dynMarkup(cat);
+    dyn.innerHTML = dynMarkup(cat, t);
     if (cat === "failed") fillError(dyn, t);
     actions.replaceChildren(...buildActions(t, cat));
   }
@@ -170,10 +171,11 @@ function applyDynamic(row, t) {
   if (cat === "failed") fillError(dyn, t); // 错误文案可能更新
 }
 
-function dynMarkup(cat) {
+function dynMarkup(cat, task) {
   if (cat === "success") return `<div class="donebar"></div>`;
   if (cat === "failed") return `<div class="qrow__error"></div>`;
-  const segs = STEPS.map(
+  const steps = task.ttsEnabled ? [...STEPS, { label: "生成配音" }, { label: "封装配音" }] : STEPS;
+  const segs = steps.map(
     (s) => `<div class="track__seg"><div class="track__bar"></div><div class="track__label">${s.label}</div></div>`
   ).join("");
   return `
@@ -187,7 +189,7 @@ function dynMarkup(cat) {
 function updateTrack(row, t) {
   const meta = STATUS_META[t.status] || STATUS_META.PENDING;
   const isActive = !TERMINAL.has(t.status) && t.status !== "PENDING";
-  const curIdx = progressToStepIndex(t.progress);
+  const curIdx = t.status === "SYNTHESIZING" ? STEPS.length : t.status === "DUBBING" ? STEPS.length + 1 : progressToStepIndex(t.progress);
   const segs = row.querySelectorAll(".track__seg");
   segs.forEach((s, i) => {
     s.classList.toggle("is-done", t.status !== "PENDING" && i < curIdx);
@@ -246,6 +248,7 @@ function buildActions(t, cat) {
       }),
       iconBtn("ph-folder-open", "打开文件夹", "", () => openFolder(t)),
       iconBtn("ph-download-simple", "下载视频", "", () => download(t, "video")),
+      ...(t.ttsStatus === "SUCCESS" ? [iconBtn("ph-speaker-high", "下载配音视频", "", () => download(t, "dubbed"))] : []),
       iconBtn("ph-closed-captioning", "下载字幕", "", () => download(t, "subtitle")),
       iconBtn("ph-trash", "删除", "iconbtn--danger", () => remove(t)),
     ];

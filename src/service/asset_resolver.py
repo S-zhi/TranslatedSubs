@@ -250,7 +250,9 @@ class AssetResolver:
             return
 
         step_artifacts_map = {
-            "BURNING": list(OUTPUT_VIDEO_NAMES),
+            "BURNING": [*OUTPUT_VIDEO_NAMES, "output_dubbed.mp4", "dubbed.wav", "dubbed_mix.wav"],
+            "SYNTHESIZING": ["tts_source.wav", "dubbed.wav", "dubbed_mix.wav", "output_dubbed.mp4"],
+            "DUBBING": ["tts_source.wav", "background.wav", "background.meta.json", "vocal_stem.wav", "dubbed_mix.wav", "output_dubbed.mp4"],
             "TRANSLATING": [TRANSLATED_SRT, *OUTPUT_VIDEO_NAMES],
             "TRANSCRIBING": [ORIGINAL_SRT, TRANSLATED_SRT, *OUTPUT_VIDEO_NAMES],
             "EXTRACTING": [AUDIO_FILENAME, "audio.meta.json", "vocal.wav", "vocal.meta.json", ORIGINAL_SRT, TRANSLATED_SRT, *OUTPUT_VIDEO_NAMES],

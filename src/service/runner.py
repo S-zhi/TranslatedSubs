@@ -129,7 +129,7 @@ def _cleanup_partial_artifacts(task_id: str) -> None:
     if not d.exists():
         return
 
-    for output_name in OUTPUT_VIDEO_NAMES:
+    for output_name in (*OUTPUT_VIDEO_NAMES, "output_dubbed.mp4"):
         out_video = d / output_name
         if out_video.exists():
             try:
@@ -257,6 +257,9 @@ def _run(task_id: str) -> None:
         need_subtitle=bool(rec.need_subtitle),
         title=rec.title,
         quality=getattr(rec, "quality", None),
+        tts_enabled=bool(getattr(rec, "tts_enabled", 0)),
+        tts_voice=getattr(rec, "tts_voice", "auto"),
+        original_voice_mode=getattr(rec, "original_voice_mode", "keep"),
     )
 
     last_state = {
@@ -275,7 +278,7 @@ def _run(task_id: str) -> None:
         is_terminal = ev.status in {"SUCCESS", "FAILED", "CANCELLED"}
         has_extra = (
             ev.title is not None and ev.title != last_state["title"]
-        ) or ev.error is not None or ev.error_code is not None or bool(ev.outputs)
+        ) or ev.error is not None or ev.error_code is not None or bool(ev.outputs) or ev.tts_status is not None or ev.tts_error is not None
 
         if not (status_changed or progress_decade_changed or progress_reached_100 or is_terminal or has_extra):
             return
@@ -297,6 +300,12 @@ def _run(task_id: str) -> None:
             subtitle = ev.outputs.get("subtitle")
             fields["output_video"] = artifact_name(video) if video else None
             fields["output_subtitle"] = artifact_name(subtitle) if subtitle else None
+            dubbed = ev.outputs.get("dubbedVideo")
+            fields["output_dubbed_video"] = artifact_name(dubbed) if dubbed else None
+        if ev.tts_status is not None:
+            fields["tts_status"] = ev.tts_status
+        if ev.tts_error is not None:
+            fields["tts_error"] = ev.tts_error
 
         _store.update(task_id, **fields)
         last_state["status"] = ev.status

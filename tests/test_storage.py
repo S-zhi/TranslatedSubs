@@ -144,8 +144,9 @@ def test_drive_upload_uses_task_id_and_selected_artifacts(client, monkeypatch):
     assert [item["name"] for item in manager.calls[0][2]] == ["output.mp4"]
 
 
-def test_drive_sync_rejects_running_task(client, monkeypatch):
-    task_id = _seed_task(client, client._store, status="DOWNLOADING", progress=10)
+@pytest.mark.parametrize("status", ["DOWNLOADING", "SYNTHESIZING", "DUBBING"])
+def test_drive_sync_rejects_running_task(client, monkeypatch, status):
+    task_id = _seed_task(client, client._store, status=status, progress=10)
     manager = _StubDriveSyncManager()
     monkeypatch.setattr(storage_routes, "get_drive_sync_manager", lambda: manager)
 
@@ -154,6 +155,25 @@ def test_drive_sync_rejects_running_task(client, monkeypatch):
     assert response.status_code == 409
     assert "运行中" in response.json()["detail"]
     assert manager.calls == []
+
+
+@pytest.mark.parametrize("status", ["SYNTHESIZING", "DUBBING"])
+def test_cleanup_preview_and_execute_skip_tts_running_task(client, status):
+    task_id = _seed_task(
+        client, client._store, title=status, status=status, progress=96,
+        source_bytes=1500, audio_bytes=0, srt_bytes=0, output_bytes=0,
+    )
+    task_path = client._tmp / task_id
+
+    preview = client.post("/api/storage/cleanup_preview", json={}).json()
+    assert task_id not in {item["taskId"] for item in preview["targets"]}
+    assert task_id in {item["taskId"] for item in preview["skippedTasks"]}
+
+    result = _post_cleanup(client, taskIds=[task_id])
+    assert result["deletedTasks"] == 0
+    assert task_id in {item["taskId"] for item in result["skippedTasks"]}
+    assert client._store.get(task_id).status == status
+    assert task_path.is_dir()
 
 
 # ---------- stats ----------

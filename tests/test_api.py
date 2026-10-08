@@ -87,6 +87,35 @@ def test_create_task(client):
     assert data["targetLang"] == "zh-CN"
     assert data["outputs"] is None
     assert data["createdAt"] > 0
+    assert data["ttsEnabled"] is False
+    assert data["ttsStatus"] == "DISABLED"
+
+
+def test_create_task_persists_tts_options(client):
+    response = client.post("/api/tasks", json=_payload(
+        ttsEnabled=True, ttsVoice="zm_010", originalVoiceMode="lower",
+    ))
+    assert response.status_code == 201
+    data = response.json()
+    record = client._store.get(data["id"])
+    assert (record.tts_enabled, record.tts_voice, record.original_voice_mode) == (1, "zm_010", "lower")
+    assert data["ttsStatus"] == "PENDING"
+
+
+def test_tts_failure_keeps_regular_video_output(client):
+    rec = TaskRecord(
+        id="task_tts_failed", url="u", source_lang="en", target_lang="zh-CN",
+        mode="mono", burn="hard", model="small", engine="deepseek",
+        status="SUCCESS", need_subtitle=1, tts_enabled=1,
+        tts_status="FAILED", tts_error="model unavailable",
+    )
+    output = to_out(rec)
+    assert output.outputs == {
+        "video": "/api/tasks/task_tts_failed/download",
+        "subtitle": "/api/tasks/task_tts_failed/subtitle",
+    }
+    assert output.ttsStatus == "FAILED"
+    assert output.ttsError == "model unavailable"
 
 
 # ---------- API Token 鉴权 ----------
@@ -938,6 +967,36 @@ def test_download_missing_subtitle_marks_resource_missing(client):
 
     rec = client._store.get(cid)
     assert rec.resource_status == RESOURCE_STATUS_MISSING
+
+
+def test_download_dubbed_video_returns_generated_file(client):
+    cid = client.post("/api/tasks", json=_payload(ttsEnabled=True)).json()["id"]
+    client._store.update(
+        cid, status="SUCCESS", progress=100, tts_status="SUCCESS",
+        output_dubbed_video="output_dubbed.mp4",
+    )
+    dubbed = client._tmp / cid / "output_dubbed.mp4"
+    dubbed.parent.mkdir(parents=True, exist_ok=True)
+    dubbed.write_bytes(b"DUBBED VIDEO")
+
+    response = client.get(f"/api/tasks/{cid}/dubbed")
+    assert response.status_code == 200
+    assert response.content == b"DUBBED VIDEO"
+    assert response.headers["content-type"] == "video/mp4"
+    assert client.head(f"/api/tasks/{cid}/dubbed").status_code == 204
+
+
+def test_download_dubbed_video_reports_unavailable_artifact(client):
+    cid = client.post("/api/tasks", json=_payload(ttsEnabled=True)).json()["id"]
+    client._store.update(
+        cid, status="SUCCESS", progress=100, tts_status="SUCCESS",
+        output_dubbed_video="output_dubbed.mp4",
+    )
+
+    response = client.get(f"/api/tasks/{cid}/dubbed")
+    assert response.status_code == 409
+    assert response.json()["detail"] == "配音视频不可用"
+    assert client.head(f"/api/tasks/{cid}/dubbed").status_code == 409
 
 
 def test_download_keeps_not_generated_message_for_running_task(client):

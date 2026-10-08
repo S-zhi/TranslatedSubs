@@ -9,7 +9,7 @@ import { toast } from "./toast.js";
 
 const RUNNING = new Set([
   "PENDING", "DOWNLOADING", "EXTRACTING",
-  "TRANSCRIBING", "TRANSLATING", "BURNING",
+  "TRANSCRIBING", "TRANSLATING", "BURNING", "SYNTHESIZING", "DUBBING",
 ]);
 const STORAGE_REFRESH_INTERVAL_MS = 8000;
 const DEFAULT_RETENTION_DAYS = 30;
@@ -30,6 +30,8 @@ const STATUS_LABEL = {
   TRANSCRIBING: "识别中",
   TRANSLATING: "翻译中",
   BURNING: "烧录中",
+  SYNTHESIZING: "生成配音中",
+  DUBBING: "封装配音中",
   SUCCESS: "已完成",
   FAILED: "失败",
 };

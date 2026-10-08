@@ -285,6 +285,9 @@ def create_task(
         need_subtitle=body.needSubtitle,
         quality=body.quality,
         task_origin="mcp" if task_origin.strip().lower() == "mcp" else "web",
+        tts_enabled=body.ttsEnabled,
+        tts_voice=body.ttsVoice,
+        original_voice_mode=body.originalVoiceMode,
     )
     if not created:
         raise HTTPException(
@@ -309,6 +312,9 @@ def create_upload_task(
     model: str = Form("local:tiny", min_length=1),
     engine: str = Form("deepseek", min_length=1),
     needSubtitle: bool = Form(True),
+    ttsEnabled: bool = Form(False),
+    ttsVoice: str = Form("auto"),
+    originalVoiceMode: Literal["keep", "lower", "replace"] = Form("keep"),
     store: TaskStore = Depends(get_store),
     engines: TranslationEngineStore = Depends(get_translation_engine_store),
 ) -> TaskOut:
@@ -322,6 +328,16 @@ def create_upload_task(
     filename = (file.filename or "").strip()
     _ensure_translation_engine(engine, needSubtitle, engines)
     _ensure_local_model_ready(model)
+    if ttsEnabled and not needSubtitle:
+        raise HTTPException(status_code=422, detail="配音需要启用字幕翻译")
+    if ttsEnabled and not targetLang.lower().startswith(("zh", "en")):
+        raise HTTPException(status_code=422, detail="Kokoro 配音目前支持中文和英文目标语")
+    if ttsEnabled and ttsVoice not in {"auto", "zf_001", "zm_010", "af_maple", "af_sol"}:
+        raise HTTPException(status_code=422, detail="不支持的 Kokoro 音色")
+    if ttsEnabled and ttsVoice in {"zf_001", "zm_010"} and not targetLang.lower().startswith("zh"):
+        raise HTTPException(status_code=422, detail="中文音色只能用于中文目标语")
+    if ttsEnabled and ttsVoice in {"af_maple", "af_sol"} and not targetLang.lower().startswith("en"):
+        raise HTTPException(status_code=422, detail="英文音色只能用于英文目标语")
     ext = Path(filename).suffix.lower()
     if ext not in _UPLOAD_VIDEO_EXTS:
         supported_formats = sorted(_UPLOAD_VIDEO_EXTS)
@@ -345,6 +361,9 @@ def create_upload_task(
         source_type="upload",
         need_subtitle=needSubtitle,
         title=Path(filename).stem or "上传的视频",
+        tts_enabled=ttsEnabled,
+        tts_voice=ttsVoice,
+        original_voice_mode=originalVoiceMode,
     )
 
     d = task_dir(rec.id)
@@ -672,6 +691,23 @@ def download_video(task_id: str, store: TaskStore = Depends(get_store)):
         status_code=409,
         detail=_DELETED_MESSAGE,
     )
+
+
+@router.head("/{task_id}/dubbed", status_code=204, dependencies=[Depends(require_api_token)])
+def check_dubbed_video(task_id: str, store: TaskStore = Depends(get_store)):
+    download_dubbed_video(task_id, store)
+    return Response(status_code=204)
+
+
+@router.get("/{task_id}/dubbed", dependencies=[Depends(require_api_token)])
+def download_dubbed_video(task_id: str, store: TaskStore = Depends(get_store)):
+    rec = _require(store, task_id)
+    if rec.status != "SUCCESS" or rec.tts_status != "SUCCESS":
+        raise HTTPException(status_code=409, detail="配音视频尚未生成")
+    path = task_dir(task_id) / (rec.output_dubbed_video or "output_dubbed.mp4")
+    if AssetResolver.check_file_state(path) != ResourceState.AVAILABLE:
+        raise HTTPException(status_code=409, detail="配音视频不可用")
+    return FileResponse(path, media_type="video/mp4", filename=path.name)
 
 
 def _resolve_video(task_id: str, mode: str | None = None):

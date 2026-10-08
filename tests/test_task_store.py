@@ -246,6 +246,8 @@ def test_resource_status_migration_adds_column(tmp_path):
     assert rec is not None
     assert rec.resource_status == RESOURCE_STATUS_AVAILABLE
     assert rec.status == "SUCCESS"  # 其它字段保持不变
+    assert rec.tts_enabled == 0
+    assert rec.tts_status == "DISABLED"
 
 
 def test_downgrade_audit_round_trip(store):

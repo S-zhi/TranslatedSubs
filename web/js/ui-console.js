@@ -341,6 +341,9 @@ export function initConsole() {
       engine: $("#engine").value,
       needSubtitle: form.elements.needSubtitle.value === "on",
       quality: $("#quality")?.value || "480p",
+      ttsEnabled: form.elements.ttsEnabled.checked,
+      ttsVoice: form.elements.ttsVoice.value,
+      originalVoiceMode: form.elements.originalVoiceMode.value,
     };
   }
 
@@ -409,6 +412,10 @@ export function initConsole() {
   const paramsBox = form.querySelector(".params");
   function syncSubtitleParams() {
     const need = form.elements.needSubtitle.value === "on";
+    if (!need && ttsEnabledInput.checked) {
+      ttsEnabledInput.checked = false;
+      syncTtsHint();
+    }
     paramsBox.querySelectorAll(".param").forEach((p) => {
       if (p.querySelector('[name="needSubtitle"]')) return; // 跳过开关自身
       if (p.id === "qualityParam") return; // 下载画质始终保持可用
@@ -416,6 +423,20 @@ export function initConsole() {
       p.querySelectorAll("select, input").forEach((c) => (c.disabled = !need));
     });
   }
+  const ttsEnabledInput = form.elements.ttsEnabled;
+  const ttsHint = $("#ttsHint");
+  function syncTtsHint() {
+    const supported = $("#targetLang").value.toLowerCase().startsWith("zh")
+      || $("#targetLang").value.toLowerCase().startsWith("en");
+    ttsHint.textContent = !ttsEnabledInput.checked
+      ? "仅支持中文或英文目标语。"
+      : supported ? "将生成单独的配音视频；原字幕视频仍会保留。" : "当前目标语不支持 Kokoro 配音，请改选中文或英文。";
+    ttsHint.classList.toggle("is-error", ttsEnabledInput.checked && !supported);
+    return supported;
+  }
+  ttsEnabledInput.addEventListener("change", syncTtsHint);
+  $("#targetLang").addEventListener("change", syncTtsHint);
+  syncTtsHint();
   form.querySelectorAll('input[name="needSubtitle"]').forEach((r) =>
     r.addEventListener("change", syncSubtitleParams)
   );
@@ -425,6 +446,11 @@ export function initConsole() {
     e.preventDefault();
     const videoFile = currentVideoFile();
     const url = urlInput.value.trim();
+
+    if (ttsEnabledInput.checked && !syncTtsHint()) {
+      $("#targetLang").focus();
+      return;
+    }
 
     if (!videoFile && (!url || !isValidUrl(url))) {
       setProbeState("failed", "请输入有效的视频链接（以 http(s):// 开头）", true);

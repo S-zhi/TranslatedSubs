@@ -22,6 +22,8 @@ STATUSES = (
     "TRANSCRIBING",
     "TRANSLATING",
     "BURNING",
+    "SYNTHESIZING",
+    "DUBBING",
     "SUCCESS",
     "FAILED",
     "CANCELLED",
@@ -76,6 +78,12 @@ class TaskRecord:
     downgraded_at: Optional[int] = None
     is_cancelling: int = 0  # 1=取消清理进行中，0=未取消
     quality: str = "480p"  # 下载清晰度策略：best/1080p/720p/480p/360p/audio_only
+    tts_enabled: int = 0
+    tts_voice: str = "auto"
+    original_voice_mode: str = "keep"
+    tts_status: str = "DISABLED"
+    tts_error: Optional[str] = None
+    output_dubbed_video: Optional[str] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -189,6 +197,17 @@ class TaskStore:
                 conn.execute("ALTER TABLE tasks ADD COLUMN downgraded_at INTEGER")
             if "quality" not in cols:
                 conn.execute("ALTER TABLE tasks ADD COLUMN quality TEXT NOT NULL DEFAULT '480p'")
+            for name, declaration in (
+                ("tts_enabled", "INTEGER NOT NULL DEFAULT 0"),
+                ("tts_voice", "TEXT NOT NULL DEFAULT 'auto'"),
+                ("original_voice_mode", "TEXT NOT NULL DEFAULT 'keep'"),
+                ("tts_status", "TEXT NOT NULL DEFAULT 'DISABLED'"),
+                ("tts_error", "TEXT"),
+            ):
+                if name not in cols:
+                    conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {declaration}")
+            if "output_dubbed_video" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN output_dubbed_video TEXT")
             # Older versions persisted absolute output paths. Keep only the
             # task-local name so the database survives volume and OS changes.
             for row in conn.execute(
@@ -227,6 +246,9 @@ class TaskStore:
         need_subtitle: bool = True,
         title: Optional[str] = None,
         quality: Optional[str] = "480p",
+        tts_enabled: bool = False,
+        tts_voice: str = "auto",
+        original_voice_mode: str = "keep",
     ) -> TaskRecord:
         with self._connect() as conn:
             return self._insert(
@@ -243,6 +265,9 @@ class TaskStore:
                 need_subtitle=need_subtitle,
                 title=title,
                 quality=quality or "480p",
+                tts_enabled=tts_enabled,
+                tts_voice=tts_voice,
+                original_voice_mode=original_voice_mode,
             )
 
     def create_if_no_recent_active(
@@ -260,7 +285,7 @@ class TaskStore:
             row = conn.execute(
                 "SELECT * FROM tasks WHERE url_hash = ? AND created_at >= ? "
                 "AND task_origin = ? "
-                "AND status IN ('PENDING', 'DOWNLOADING', 'EXTRACTING', 'TRANSCRIBING', 'TRANSLATING', 'BURNING') "
+                "AND status IN ('PENDING', 'DOWNLOADING', 'EXTRACTING', 'TRANSCRIBING', 'TRANSLATING', 'BURNING', 'SYNTHESIZING', 'DUBBING') "
                 "ORDER BY created_at DESC LIMIT 1",
                 (url_hash, cutoff, kwargs.get("task_origin", "web")),
             ).fetchone()
@@ -285,6 +310,10 @@ class TaskStore:
             need_subtitle=int(kwargs.get("need_subtitle", True)),
             title=kwargs.get("title"),
             quality=kwargs.get("quality") or "480p",
+            tts_enabled=int(kwargs.get("tts_enabled", False)),
+            tts_voice=kwargs.get("tts_voice", "auto"),
+            original_voice_mode=kwargs.get("original_voice_mode", "keep"),
+            tts_status="PENDING" if kwargs.get("tts_enabled", False) else "DISABLED",
             status="PENDING",
             progress=0,
             created_at=now,

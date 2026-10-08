@@ -183,6 +183,29 @@
                       <option value="audio_only">仅提取音频 (极速)</option>
                     </select>
                   </div>
+                  <label class="param">
+                    <span class="param__label">生成 Kokoro 配音视频</span>
+                    <span><input type="checkbox" name="ttsEnabled" /> 按译文字幕时间轴配音（CPU）</span>
+                    <small class="muted" id="ttsHint">仅支持中文或英文目标语。</small>
+                  </label>
+                  <div class="param">
+                    <span class="param__label">配音音色</span>
+                    <select class="select" name="ttsVoice">
+                      <option value="auto" selected>按目标语自动选择</option>
+                      <option value="zf_001">中文女声 zf_001</option>
+                      <option value="zm_010">中文男声 zm_010</option>
+                      <option value="af_maple">英文女声 af_maple</option>
+                      <option value="af_sol">英文女声 af_sol</option>
+                    </select>
+                  </div>
+                  <div class="param">
+                    <span class="param__label">原始人声</span>
+                    <select class="select" name="originalVoiceMode">
+                      <option value="keep" selected>保留</option>
+                      <option value="lower">降低（Demucs 分离）</option>
+                      <option value="replace">替换（保留背景音）</option>
+                    </select>
+                  </div>
                 </div>
               </details>
             </div>
