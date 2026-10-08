@@ -71,6 +71,7 @@ curl http://127.0.0.1:8000/api/health
 curl http://127.0.0.1:8000/api/health/ready
 ffmpeg -hide_banner -filters | grep " subtitles "
 ```
+
 ### Windows 构建
 
 在 Windows 10/11 上，可使用 PowerShell 从源码启动 TranslatedSubs。项目使用 Python 3.10–3.12；以下步骤固定使用 Python 3.12，并通过 uv.lock 安装已锁定的依赖。网页工作台由 API 服务提供，不需要单独安装 Node.js。
