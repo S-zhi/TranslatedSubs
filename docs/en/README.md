@@ -1,15 +1,35 @@
 English | [简体中文](../zh/README.md) | [हिन्दी](../hi/README.md) | [Español](../es/README.md) | [Français](../fr/README.md) | [Português](../pt/README.md) | [Русский](../ru/README.md)
 
 <div align="center">
-  <img src="../../web/assets/translatedsubs-logo.svg" width="88" alt="TranslatedSubs Logo" />
+  <img src="../assets/eye-subtitles-logo.svg" width="88" alt="TranslatedSubs Logo" />
   <h1>TranslatedSubs</h1>
-  <p><strong>From video to translated subtitles in one workflow.</strong></p>
-  <p>Download, transcribe, translate, and package subtitles. Preview, edit, and download results in the Web workbench.</p>
+  <p><strong>Understand both speech and on-screen text in video, from transcription and subtitle translation to handwritten board recognition.</strong></p>
+  <p>Quick deployment with MCP integration.</p>
 </div>
 
-TranslatedSubs is a video and audio subtitle workbench. It downloads media, transcribes speech, translates subtitles, and produces soft or hard-subtitled output. Jobs can be managed through the Web workbench or MCP.
+TranslatedSubs is a video and audio understanding workbench for downloading media, transcribing speech, translating subtitles, and recognizing written content in videos.
 
-It is designed for people and teams turning a video page URL or a local video into translated subtitles. Track progress, correct subtitles, and retrieve the video and SRT file in one place. Google Drive syncing is optional and is not required for the subtitle pipeline. The Web workbench currently uses Chinese labels.
+- **Video from multiple sources**: Download directly from supported video platforms, without downloading and re-uploading files by hand.
+- **Flexible local deployment and model choices**: Start quickly or run a lightweight setup; configure more capable models for better matching, including community models.
+- **Parallel tasks and resource visibility**: Run multiple jobs at once and review their status and resource use. Google Drive sync is also available.
+- **Dedicated model fine-tuning service**: Fine-tune supported models through a separate service to improve results for your needs.
+- **Use across devices**: Available on the web, Windows, and macOS, with mobile support planned for the future.
+
+Supported video platforms:
+[![YouTube](https://img.shields.io/badge/YouTube-FF0033?style=plastic&logo=youtube&logoColor=white)](https://www.youtube.com/)
+[![Vimeo](https://img.shields.io/badge/Vimeo-1AB7EA?style=plastic&logo=vimeo&logoColor=white)](https://vimeo.com/)
+[![Dailymotion](https://img.shields.io/badge/Dailymotion-0066DC?style=plastic&logo=dailymotion&logoColor=white)](https://www.dailymotion.com/)
+[![Twitch](https://img.shields.io/badge/Twitch-9146FF?style=plastic&logo=twitch&logoColor=white)](https://www.twitch.tv/)
+[![TikTok](https://img.shields.io/badge/TikTok-111111?style=plastic&logo=tiktok&logoColor=white)](https://www.tiktok.com/)
+[![X / Twitter](https://img.shields.io/badge/X%20%28Twitter%29-111111?style=plastic&logo=x&logoColor=white)](https://x.com/)
+[![Instagram](https://img.shields.io/badge/Instagram-E4405F?style=plastic&logo=instagram&logoColor=white)](https://www.instagram.com/)
+[![AcFun](https://img.shields.io/badge/AcFun-FD4C5D?style=plastic)](https://www.acfun.cn/)
+[![Niconico](https://img.shields.io/badge/Niconico-252525?style=plastic&logo=niconico&logoColor=white)](https://www.nicovideo.jp/)
+[![Pornhub](https://img.shields.io/badge/Pornhub-FF9900?style=plastic)](https://www.pornhub.com/)
+
+![TranslatedSubs](../assets/readme-demo-1.png)
+
+![TranslatedSubs](../assets/readme-demo-2.png)
 
 ## Docker quick start
 

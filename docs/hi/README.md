@@ -1,15 +1,35 @@
 [English](../../README.md) | [简体中文](../zh/README.md) | हिन्दी | [Español](../es/README.md) | [Français](../fr/README.md) | [Português](../pt/README.md) | [Русский](../ru/README.md)
 
 <div align="center">
-  <img src="../../web/assets/translatedsubs-logo.svg" width="88" alt="TranslatedSubs लोगो" />
+  <img src="../assets/eye-subtitles-logo.svg" width="88" alt="TranslatedSubs लोगो" />
   <h1>TranslatedSubs</h1>
-  <p><strong>वीडियो से अनूदित सबटाइटल तक, एक ही कार्यप्रवाह में।</strong></p>
-  <p>मीडिया डाउनलोड करें, आवाज़ का प्रतिलेखन और अनुवाद करें, फिर सबटाइटल तैयार करें। वेब कार्यक्षेत्र में नतीजे देखें, संपादित करें और डाउनलोड करें।</p>
+  <p><strong>वीडियो में बोली और स्क्रीन पर दिखने वाला पाठ, दोनों समझें: वाणी का प्रतिलेखन, सबटाइटल अनुवाद और बोर्ड पर लिखी सामग्री की पहचान।</strong></p>
+  <p>तेज़ सेटअप और MCP एकीकरण।</p>
 </div>
 
-TranslatedSubs वीडियो और ऑडियो सबटाइटल के लिए एक कार्यक्षेत्र है। यह मीडिया डाउनलोड करने, वाणी पहचानने, सबटाइटल का अनुवाद करने और अलग सबटाइटल फ़ाइल या वीडियो में स्थायी रूप से जुड़े सबटाइटल बनाने में मदद करता है। कार्यों को वेब कार्यक्षेत्र या MCP से प्रबंधित किया जा सकता है।
+TranslatedSubs वीडियो और ऑडियो को समझने का कार्यक्षेत्र है: मीडिया डाउनलोड करें, वाणी का प्रतिलेखन और सबटाइटल अनुवाद करें, तथा वीडियो में दिखाई देने वाली लिखित सामग्री पहचानें।
 
-यह उन लोगों और टीमों के लिए उपयोगी है जो वीडियो पेज के लिंक या स्थानीय वीडियो से अनूदित सबटाइटल बनाना चाहते हैं। एक ही जगह पर काम की प्रगति देखें, सबटाइटल सुधारें और वीडियो तथा SRT फ़ाइल डाउनलोड करें। Google Drive के साथ सिंक करना वैकल्पिक है। वेब इंटरफ़ेस के लेबल अभी चीनी भाषा में हैं।
+- **कई स्रोतों से वीडियो**: समर्थित प्लेटफ़ॉर्म से सीधे डाउनलोड करें; फ़ाइल को पहले डाउनलोड करके फिर अपलोड करने की ज़रूरत नहीं।
+- **लचीला स्थानीय सेटअप और मॉडल विकल्प**: तेज़ी से शुरू करें या हल्का सेटअप चुनें; बेहतर मिलान के लिए उन्नत और समुदाय के मॉडल कॉन्फ़िगर करें।
+- **समानांतर कार्य और संसाधन जानकारी**: एक साथ कई कार्य चलाएँ और उनकी स्थिति व संसाधन उपयोग देखें। Google Drive सिंक भी उपलब्ध है।
+- **अलग मॉडल फ़ाइन-ट्यूनिंग सेवा**: समर्थित मॉडल को अलग सेवा के माध्यम से फ़ाइन-ट्यून करके परिणाम बेहतर करें।
+- **कई डिवाइस पर उपयोग**: वेब, Windows और macOS पर उपलब्ध; मोबाइल समर्थन भविष्य के लिए नियोजित है।
+
+समर्थित वीडियो प्लेटफ़ॉर्म:
+[![YouTube](https://img.shields.io/badge/YouTube-FF0033?style=plastic&logo=youtube&logoColor=white)](https://www.youtube.com/)
+[![Vimeo](https://img.shields.io/badge/Vimeo-1AB7EA?style=plastic&logo=vimeo&logoColor=white)](https://vimeo.com/)
+[![Dailymotion](https://img.shields.io/badge/Dailymotion-0066DC?style=plastic&logo=dailymotion&logoColor=white)](https://www.dailymotion.com/)
+[![Twitch](https://img.shields.io/badge/Twitch-9146FF?style=plastic&logo=twitch&logoColor=white)](https://www.twitch.tv/)
+[![TikTok](https://img.shields.io/badge/TikTok-111111?style=plastic&logo=tiktok&logoColor=white)](https://www.tiktok.com/)
+[![X / Twitter](https://img.shields.io/badge/X%20%28Twitter%29-111111?style=plastic&logo=x&logoColor=white)](https://x.com/)
+[![Instagram](https://img.shields.io/badge/Instagram-E4405F?style=plastic&logo=instagram&logoColor=white)](https://www.instagram.com/)
+[![AcFun](https://img.shields.io/badge/AcFun-FD4C5D?style=plastic)](https://www.acfun.cn/)
+[![Niconico](https://img.shields.io/badge/Niconico-252525?style=plastic&logo=niconico&logoColor=white)](https://www.nicovideo.jp/)
+[![Pornhub](https://img.shields.io/badge/Pornhub-FF9900?style=plastic)](https://www.pornhub.com/)
+
+![TranslatedSubs](../assets/readme-demo-1.png)
+
+![TranslatedSubs](../assets/readme-demo-2.png)
 
 ## Docker से तुरंत शुरू करें
 
