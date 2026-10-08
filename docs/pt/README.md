@@ -31,6 +31,84 @@ Plataformas de vídeo compatíveis:
 
 ![TranslatedSubs](../assets/readme-demo-2.png)
 
+## Compilar a partir do código-fonte
+
+### Build no macOS
+
+Para executar o projeto localmente no macOS, você precisa do Python 3.10–3.12, do `uv` e do FFmpeg com suporte a libass. A API também serve a interface web, então não é necessário instalar o Node.js separadamente.
+
+Execute estes comandos em um diretório adequado:
+
+```sh
+git clone https://github.com/S-zhi/TranslatedSubs.git
+cd TranslatedSubs
+brew install uv
+brew tap homebrew-ffmpeg/ffmpeg
+brew install ffmpeg-full
+uv sync
+cp .env.example .env
+```
+
+Você pode adicionar ao `.env` as chaves de API na nuvem necessárias ou configurá-las depois de iniciar o serviço, que é a opção recomendada.
+
+Inicie a API e a interface web:
+
+```sh
+uv run uvicorn src.handler.app:app --port 8000
+```
+
+Abra <http://127.0.0.1:8000/>. Verifique o serviço e confirme que o FFmpeg tem o filtro de legendas embutidas:
+
+```sh
+curl http://127.0.0.1:8000/api/health
+curl http://127.0.0.1:8000/api/health/ready
+ffmpeg -hide_banner -filters | grep " subtitles "
+```
+
+### Build no Windows
+
+No Windows 10 ou 11, você pode executar o TranslatedSubs a partir do código-fonte pelo PowerShell. O projeto aceita Python 3.10–3.12; estas etapas usam o Python 3.12 e instalam as versões fixadas em `uv.lock`. A API serve a interface web, sem necessidade de instalar o Node.js separadamente.
+
+1. Instale o `uv`:
+
+   ```powershell
+   powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+   ```
+
+   Abra o PowerShell novamente após a instalação.
+
+2. Instale o FFmpeg. Na [página de downloads do FFmpeg](https://ffmpeg.org/download.html), escolha uma versão para Windows e baixe a versão completa do Gyan. Extraia-a e adicione a pasta `bin` (por exemplo, `C:\ffmpeg\bin`) ao `PATH`; depois, abra o PowerShell novamente. Verifique se `ffmpeg`, `ffprobe` e o filtro de legendas embutidas estão disponíveis:
+
+   ```powershell
+   ffprobe -version
+   ffmpeg -hide_banner -filters | findstr /i subtitles
+   ```
+
+3. Clone o projeto, instale as dependências e crie a configuração local:
+
+   ```powershell
+   git clone https://github.com/S-zhi/TranslatedSubs.git
+   cd TranslatedSubs
+   uv python install 3.12
+   uv sync --python 3.12 --locked
+   Copy-Item .env.example .env
+   ```
+
+   Você pode adicionar ao `.env` as chaves de API na nuvem necessárias ou configurá-las depois de iniciar o serviço, que é a opção recomendada.
+
+Inicie a API e a interface web:
+
+```powershell
+uv run --locked uvicorn src.handler.app:app --host 127.0.0.1 --port 8000
+```
+
+Abra <http://127.0.0.1:8000/>. Verifique o serviço com:
+
+```powershell
+curl.exe http://127.0.0.1:8000/api/health
+curl.exe http://127.0.0.1:8000/api/health/ready
+```
+
 ## Início rápido com Docker
 
 Execute os comandos na raiz do repositório:

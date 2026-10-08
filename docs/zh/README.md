@@ -36,6 +36,86 @@ TranslatedSubs 是视频与音频字幕处理工作台，支持媒体下载、�
 
 ![TranslatedSubs](../assets/readme-demo-2.png)
 
+## 从源码构建
+
+### macOS 构建
+
+macOS 本地运行需要 Python 3.10–3.12、`uv` 和启用 libass 的 FFmpeg。网页工作台由 API 一并提供，不需要单独安装 Node.js。
+
+在合适目录执行：
+
+```sh
+git clone https://github.com/S-zhi/TranslatedSubs.git
+cd TranslatedSubs
+
+brew install uv
+brew tap homebrew-ffmpeg/ffmpeg
+brew install ffmpeg-full
+uv sync
+
+cp .env.example .env
+```
+
+可以将需要的云端 API Key 填入 `.env`，也可以在启动后再配置；项目推荐在启动后配置。
+
+启动业务 API 和网页工作台：
+
+```sh
+uv run uvicorn src.handler.app:app --port 8000
+```
+
+然后打开 <http://127.0.0.1:8000/>。可用下面的命令检查服务状态，以及 FFmpeg 是否支持硬字幕：
+
+```sh
+curl http://127.0.0.1:8000/api/health
+curl http://127.0.0.1:8000/api/health/ready
+ffmpeg -hide_banner -filters | grep " subtitles "
+```
+
+### Windows 构建
+
+在 Windows 10/11 上，可使用 PowerShell 从源码启动 TranslatedSubs。项目使用 Python 3.10–3.12；以下步骤固定使用 Python 3.12，并通过 uv.lock 安装已锁定的依赖。网页工作台由 API 服务提供，不需要单独安装 Node.js。
+
+1. 安装 `uv`：
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+安装完成后，重新打开 PowerShell。
+
+2. 安装 FFmpeg：在 [FFmpeg 下载页](https://ffmpeg.org/download.html)选择 Windows builds，下载 Gyan 的 full build。解压后将其中的 `bin` 目录（例如 `C:\ffmpeg\bin`）加入 Windows `PATH`，然后重新打开 PowerShell。检查 `ffmpeg`、`ffprobe` 是否可用，以及 FFmpeg 是否包含硬字幕所需的 `subtitles` 滤镜：
+
+```powershell
+ffprobe -version
+ffmpeg -hide_banner -filters | findstr /i subtitles
+```
+
+3. 在项目根目录安装依赖并创建本地配置：
+
+```powershell
+git clone https://github.com/S-zhi/TranslatedSubs.git
+cd TranslatedSubs
+uv python install 3.12
+uv sync --python 3.12 --locked
+Copy-Item .env.example .env
+```
+
+可以将需要的云端 API Key 填入 `.env`，也可以在启动后再配置；项目推荐在启动后配置。
+
+启动 API 和网页工作台：
+
+```powershell
+uv run --locked uvicorn src.handler.app:app --host 127.0.0.1 --port 8000
+```
+
+打开 <http://127.0.0.1:8000/> 使用工作台。可通过以下命令检查服务：
+
+```powershell
+curl.exe http://127.0.0.1:8000/api/health
+curl.exe http://127.0.0.1:8000/api/health/ready
+```
+
 ## Docker 快速启动
 
 在仓库根目录执行：

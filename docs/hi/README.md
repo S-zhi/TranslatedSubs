@@ -31,6 +31,84 @@ TranslatedSubs वीडियो और ऑडियो को समझने 
 
 ![TranslatedSubs](../assets/readme-demo-2.png)
 
+## सोर्स कोड से बिल्ड करें
+
+### macOS पर बिल्ड
+
+macOS पर प्रोजेक्ट को स्थानीय रूप से चलाने के लिए Python 3.10–3.12, `uv` और libass support वाला FFmpeg चाहिए। API वेब वर्कबेंच भी उपलब्ध कराता है, इसलिए Node.js अलग से इंस्टॉल करने की आवश्यकता नहीं है।
+
+किसी उपयुक्त डायरेक्टरी में ये कमांड चलाएँ:
+
+```sh
+git clone https://github.com/S-zhi/TranslatedSubs.git
+cd TranslatedSubs
+brew install uv
+brew tap homebrew-ffmpeg/ffmpeg
+brew install ffmpeg-full
+uv sync
+cp .env.example .env
+```
+
+ज़रूरी क्लाउड API कुंजियाँ `.env` में जोड़ें या सेवा शुरू होने के बाद कॉन्फ़िगर करें; बाद में कॉन्फ़िगर करना सुझाया गया तरीका है।
+
+API और वेब वर्कबेंच शुरू करें:
+
+```sh
+uv run uvicorn src.handler.app:app --port 8000
+```
+
+<http://127.0.0.1:8000/> खोलें। सेवा की स्थिति और FFmpeg में हार्ड-सबटाइटल फ़िल्टर की उपलब्धता जाँचें:
+
+```sh
+curl http://127.0.0.1:8000/api/health
+curl http://127.0.0.1:8000/api/health/ready
+ffmpeg -hide_banner -filters | grep " subtitles "
+```
+
+### Windows पर बिल्ड
+
+Windows 10 या 11 पर PowerShell से TranslatedSubs को सोर्स कोड से चला सकते हैं। प्रोजेक्ट Python 3.10–3.12 का समर्थन करता है; इन चरणों में Python 3.12 और `uv.lock` में लॉक किए गए संस्करण इस्तेमाल होते हैं। API वेब वर्कबेंच देता है, इसलिए Node.js अलग से इंस्टॉल करने की ज़रूरत नहीं है।
+
+1. `uv` इंस्टॉल करें:
+
+   ```powershell
+   powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+   ```
+
+   इंस्टॉलेशन के बाद PowerShell फिर से खोलें।
+
+2. FFmpeg इंस्टॉल करें। [FFmpeg डाउनलोड पेज](https://ffmpeg.org/download.html) पर Windows build चुनें और Gyan का full build डाउनलोड करें। इसे extract करें और इसके `bin` डायरेक्टरी (उदाहरण के लिए, `C:\ffmpeg\bin`) को `PATH` में जोड़ें; फिर PowerShell फिर से खोलें। जाँचें कि `ffmpeg`, `ffprobe` और हार्ड-सबटाइटल फ़िल्टर उपलब्ध हैं:
+
+   ```powershell
+   ffprobe -version
+   ffmpeg -hide_banner -filters | findstr /i subtitles
+   ```
+
+3. प्रोजेक्ट clone करें, निर्भरताएँ इंस्टॉल करें और स्थानीय कॉन्फ़िगरेशन बनाएँ:
+
+   ```powershell
+   git clone https://github.com/S-zhi/TranslatedSubs.git
+   cd TranslatedSubs
+   uv python install 3.12
+   uv sync --python 3.12 --locked
+   Copy-Item .env.example .env
+   ```
+
+   ज़रूरी क्लाउड API कुंजियाँ `.env` में जोड़ें या सेवा शुरू होने के बाद कॉन्फ़िगर करें; बाद में कॉन्फ़िगर करना सुझाया गया तरीका है।
+
+API और वेब वर्कबेंच शुरू करें:
+
+```powershell
+uv run --locked uvicorn src.handler.app:app --host 127.0.0.1 --port 8000
+```
+
+<http://127.0.0.1:8000/> खोलें। सेवा की स्थिति जाँचने के लिए:
+
+```powershell
+curl.exe http://127.0.0.1:8000/api/health
+curl.exe http://127.0.0.1:8000/api/health/ready
+```
+
 ## Docker से तुरंत शुरू करें
 
 रिपॉज़िटरी की मूल डायरेक्टरी में ये कमांड चलाएँ:
