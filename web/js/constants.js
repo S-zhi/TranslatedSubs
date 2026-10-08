@@ -16,6 +16,8 @@ export const STATUS_META = {
   TRANSCRIBING: { label: "语音识别", cls: "active", icon: "ph-spinner" },
   TRANSLATING: { label: "翻译字幕", cls: "active", icon: "ph-spinner" },
   BURNING: { label: "烧录字幕", cls: "active", icon: "ph-spinner" },
+  SYNTHESIZING: { label: "生成配音", cls: "active", icon: "ph-spinner" },
+  DUBBING: { label: "封装配音", cls: "active", icon: "ph-spinner" },
   SUCCESS: { label: "已完成", cls: "success", icon: "ph-check" },
   FAILED: { label: "失败", cls: "failed", icon: "ph-warning" },
   CANCELLED: { label: "已取消", cls: "failed", icon: "ph-stop-circle" },

@@ -115,6 +115,8 @@ _RUNNING_STATUSES = {
     "TRANSCRIBING",
     "TRANSLATING",
     "BURNING",
+    "SYNTHESIZING",
+    "DUBBING",
 }
 
 # 产物类别：固定文件名映射到显示名/可清理性。其它文件归到 other，

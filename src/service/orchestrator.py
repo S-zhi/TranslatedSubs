@@ -21,6 +21,8 @@ from src.core.downloader import download_video
 from src.core.subtitle_burner import burn_subtitles
 from src.core.transcriber import TranscribeCancelledError, transcribe
 from src.core.translator import translate_srt
+from src.core.tts import TTSError, generate_timeline_audio
+from src.core.ffmpeg_utils import probe_duration, run_ffmpeg
 from src.core.vocal_separator import (
     VocalSeparationCancelledError,
     VocalSeparationError,
@@ -84,6 +86,9 @@ class PipelineParams:
     need_subtitle: bool = True  # False = 仅下载视频，跳过识别/翻译/烧录
     title: Optional[str] = None  # 上传模式下用原始文件名作为展示标题
     quality: Optional[str] = None  # 下载清晰度策略：best/1080p/720p/480p/360p/audio_only
+    tts_enabled: bool = False
+    tts_voice: str = "auto"
+    original_voice_mode: str = "keep"
 
 
 @dataclass
@@ -95,6 +100,8 @@ class PipelineEvent:
     error: Optional[str] = None
     error_code: Optional[str] = None
     outputs: Optional[dict] = None
+    tts_status: Optional[str] = None
+    tts_error: Optional[str] = None
 
 
 EventHook = Callable[[PipelineEvent], None]
@@ -106,6 +113,8 @@ _BANDS = {
     "TRANSCRIBING": (35, 65),
     "TRANSLATING": (65, 85),
     "BURNING": (85, 100),
+    "SYNTHESIZING": (94, 97),
+    "DUBBING": (97, 100),
 }
 
 _EXCEPTION_CODE_MAP: tuple[tuple[type[Exception], str], ...] = (
@@ -455,14 +464,14 @@ class SubtitleBurningHandler(PipelineHandler):
             # Keep the legacy one-argument call contract for injected resolvers
             # and test doubles; mode-aware selection already happened above.
             context.resources.output_video_path = AssetResolver.require_output_video(tid)
-            context.emit("BURNING", 100)
+            context.emit("BURNING", 94 if params.tts_enabled else 100)
         else:
             burn_subtitles(
                 context.resources.video_path,
                 context.resources.translated_srt_path,
                 tid,
                 mode=params.burn,
-                on_progress=context.step_callback("BURNING"),
+                on_progress=(lambda p: context.emit("BURNING", _scale(85, 94 if params.tts_enabled else 100, getattr(p, "percent", None)))),
             )
             context.resources.output_video_path = AssetResolver.require_output_video(tid)
 
@@ -470,8 +479,83 @@ class SubtitleBurningHandler(PipelineHandler):
             "video": str(context.resources.output_video_path),
             "subtitle": str(context.resources.translated_srt_path),
         }
+        if params.tts_enabled:
+            self._add_dubbed_video(context, outputs)
         context.complete(outputs=outputs, title=context.title)
         logger.info("责任链完成: task=%s", tid)
+
+    def _add_dubbed_video(self, context: PipelineContext, outputs: dict) -> None:
+        """独立生成配音视频；失败时保留普通成品并只记录 TTS 错误。"""
+        from src.config import settings, task_dir
+        from src.core.vocal_separator import separate_background, separate_vocals
+        tid = context.task_id
+        params = context.params
+        context.emit("SYNTHESIZING", 95, tts_status="RUNNING")
+        try:
+            task_path = task_dir(tid)
+            high_quality_audio = task_path / "tts_source.wav"
+            run_ffmpeg([
+                settings.ffmpeg_bin, "-y", "-i", str(context.resources.video_path),
+                "-vn", "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le",
+                "-progress", "pipe:1", "-nostats", "-loglevel", "error", str(high_quality_audio),
+            ], task_id=tid)
+            voice = params.tts_voice
+            if voice == "auto":
+                voice = "zf_001" if params.target_lang.lower().startswith("zh") else "af_maple"
+            speech = generate_timeline_audio(
+                context.resources.translated_srt_path,
+                context.resources.original_srt_path,
+                task_path / "dubbed.wav",
+                target_lang=params.target_lang,
+                voice=voice,
+                bilingual=params.mode == "bilingual",
+                duration=probe_duration(context.resources.video_path, settings.ffprobe_bin),
+                cancel_check=lambda: _check_cancelled(tid),
+                on_progress=lambda pct: context.emit("SYNTHESIZING", _scale(95, 97, pct)),
+                task_id=tid,
+            )
+            context.emit("DUBBING", 97, tts_status="RUNNING")
+            mixed = task_path / "dubbed_mix.wav"
+            inputs = []
+            filters = []
+            if params.original_voice_mode == "keep":
+                inputs += ["-i", str(high_quality_audio)]
+                filters.append("[0:a]volume=1.0[base]")
+                speech_index = 1
+            else:
+                bg = separate_background(
+                    high_quality_audio, tid,
+                    cancel_check=lambda: _check_cancelled(tid),
+                )
+                inputs += ["-i", str(bg)]
+                filters.append("[0:a]volume=1.0[base]")
+                speech_index = 1
+                if params.original_voice_mode == "lower":
+                    vocal = task_path / "vocal_stem.wav"
+                    if not vocal.is_file():
+                        raise TTSError("Demucs 未生成高质量人声 stem")
+                    inputs += ["-i", str(vocal)]
+                    filters.append("[1:a]volume=0.25[vocal]")
+                    speech_index = 2
+            inputs += ["-i", str(speech)]
+            filters.append(f"[{speech_index}:a]volume=1.0[tts]")
+            labels = "[base]" + ("[vocal]" if params.original_voice_mode == "lower" else "") + "[tts]"
+            filters.append(f"{labels}amix=inputs={2 if params.original_voice_mode != 'lower' else 3}:duration=longest:normalize=0[mix]")
+            run_ffmpeg([settings.ffmpeg_bin, "-y", *inputs, "-filter_complex", ";".join(filters), "-map", "[mix]", "-ar", "48000", "-progress", "pipe:1", "-nostats", "-loglevel", "error", str(mixed)], task_id=tid)
+            dubbed_video = task_path / "output_dubbed.mp4"
+            base_video = context.resources.output_video_path
+            run_ffmpeg([
+                settings.ffmpeg_bin, "-y", "-i", str(base_video), "-i", str(mixed),
+                "-map", "0:v:0", "-map", "1:a:0", "-map", "0:s?", "-c:v", "copy",
+                "-c:a", "aac", "-c:s", "copy", "-progress", "pipe:1", "-nostats", "-loglevel", "error", str(dubbed_video),
+            ], task_id=tid)
+            outputs["dubbedVideo"] = str(dubbed_video)
+            context.emit("DUBBING", 99, tts_status="SUCCESS")
+        except PipelineCancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("TTS 生成失败，保留原译制视频: task=%s", tid)
+            context.emit("DUBBING", 99, tts_status="FAILED", tts_error=str(exc))
 
 
 def build_pipeline_chain(*handlers: PipelineHandler) -> PipelineHandler:

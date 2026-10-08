@@ -133,6 +133,7 @@ def _separate_vocals_impl(
     audio_path: Path | str,
     task_id: str,
     *,
+    keep_background: bool = False,
     cancel_check: Optional[Callable[[], None]] = None,
 ) -> Path:
     """用 CPU Demucs 二分模式抽取人声，并输出 16 kHz 单声道 WAV。"""
@@ -175,6 +176,10 @@ def _separate_vocals_impl(
         raise VocalSeparationError("Demucs 执行完成但未生成 vocals.wav")
 
     output = task_dir / "vocal.wav"
+    backgrounds = sorted(work_dir.rglob("no_vocals.wav"), key=lambda p: len(p.parts))
+    if keep_background and backgrounds:
+        shutil.copy2(backgrounds[0], task_dir / "background.wav")
+        shutil.copy2(candidates[0], task_dir / "vocal_stem.wav")
     temporary_output = task_dir / ".vocal.wav.tmp"
     try:
         temporary_output.unlink()
@@ -182,7 +187,7 @@ def _separate_vocals_impl(
         pass
     normalize_cmd = [
         settings.ffmpeg_bin, "-y", "-i", str(candidates[0]), "-vn",
-        "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(temporary_output),
+        "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", "-f", "wav", str(temporary_output),
     ]
     return_code, stdout, stderr = _run_external(
         normalize_cmd, timeout=120, task_id=task_id, cancel_check=cancel_check
@@ -231,5 +236,59 @@ def separate_vocals(
             cancel_check()
     try:
         return _separate_vocals_impl(audio_path, task_id, cancel_check=cancel_check)
+    finally:
+        _SEPARATION_SLOT.release()
+
+
+def separate_background(
+    audio_path: Path | str,
+    task_id: str,
+    *,
+    cancel_check: Optional[Callable[[], None]] = None,
+) -> Path:
+    """用 Demucs two-stems 提取背景音，供配音时保留音乐和环境声。"""
+    output = ensure_task_dir(task_id) / "background.wav"
+    metadata = output.parent / "background.meta.json"
+    source = Path(audio_path)
+    vocal_stem = output.parent / "vocal_stem.wav"
+    if (
+        output.is_file() and output.stat().st_size
+        and vocal_stem.is_file() and vocal_stem.stat().st_size
+        and metadata.is_file()
+    ):
+        try:
+            cached = json.loads(metadata.read_text(encoding="utf-8"))
+            st = source.stat()
+            if (
+                cached.get("source") == str(source.resolve())
+                and cached.get("source_size") == st.st_size
+                and cached.get("source_mtime_ns") == st.st_mtime_ns
+                and cached.get("backend") == getattr(settings, "vocal_separation_backend", "demucs")
+                and cached.get("model") == getattr(settings, "vocal_separation_model", "htdemucs")
+                and cached.get("threads") == int(getattr(settings, "vocal_separation_threads", 1))
+                and cached.get("command") == getattr(
+                    settings, "vocal_separation_command", "python -m demucs.separate"
+                )
+            ):
+                return output
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            pass
+    while not _SEPARATION_SLOT.acquire(timeout=0.5):
+        if cancel_check is not None:
+            cancel_check()
+    try:
+        _separate_vocals_impl(audio_path, task_id, keep_background=True, cancel_check=cancel_check)
+        if not output.is_file() or not output.stat().st_size:
+            raise VocalSeparationError("Demucs 未生成背景音 stem")
+        st = source.stat()
+        metadata.write_text(json.dumps({
+            "source": str(source.resolve()), "source_size": st.st_size,
+            "source_mtime_ns": st.st_mtime_ns,
+            "backend": getattr(settings, "vocal_separation_backend", "demucs"),
+            "model": getattr(settings, "vocal_separation_model", "htdemucs"),
+            "threads": int(getattr(settings, "vocal_separation_threads", 1)),
+            "command": getattr(settings, "vocal_separation_command", "python -m demucs.separate"),
+        }, sort_keys=True), encoding="utf-8")
+        return output
     finally:
         _SEPARATION_SLOT.release()

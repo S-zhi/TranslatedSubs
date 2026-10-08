@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from src.store import RESOURCE_STATUS_AVAILABLE, RESOURCE_STATUS_MISSING, ProbeRecord, TaskRecord
 
@@ -48,6 +48,23 @@ class TaskCreate(BaseModel):
     engine: str = Field(default="deepseek", min_length=1)
     needSubtitle: bool = True  # False = 仅下载视频，跳过识别/翻译/烧录
     quality: Optional[str] = Field(default=None, description="下载画质策略：best/1080p/720p/480p/360p/audio_only")
+    ttsEnabled: bool = False
+    ttsVoice: str = "auto"
+    originalVoiceMode: Literal["keep", "lower", "replace"] = "keep"
+
+    @model_validator(mode="after")
+    def validate_tts_options(self):
+        if self.ttsEnabled and not self.needSubtitle:
+            raise ValueError("配音需要启用字幕翻译")
+        if self.ttsEnabled and not self.targetLang.lower().startswith(("zh", "en")):
+            raise ValueError("Kokoro 配音目前支持中文和英文目标语")
+        if self.ttsEnabled and self.ttsVoice not in {"auto", "zf_001", "zm_010", "af_maple", "af_sol"}:
+            raise ValueError("不支持的 Kokoro 音色")
+        if self.ttsEnabled and self.ttsVoice in {"zf_001", "zm_010"} and not self.targetLang.lower().startswith("zh"):
+            raise ValueError("中文音色只能用于中文目标语")
+        if self.ttsEnabled and self.ttsVoice in {"af_maple", "af_sol"} and not self.targetLang.lower().startswith("en"):
+            raise ValueError("英文音色只能用于英文目标语")
+        return self
 
 
 class ErrorDetail(BaseModel):
@@ -188,6 +205,11 @@ class TaskOut(BaseModel):
     downgradeErrno: Optional[int] = None
     downgradedAt: Optional[int] = None
     quality: Optional[str] = None
+    ttsEnabled: bool = False
+    ttsVoice: str = "auto"
+    originalVoiceMode: str = "keep"
+    ttsStatus: str = "DISABLED"
+    ttsError: Optional[str] = None
     createdAt: int
     updatedAt: int
 
@@ -207,6 +229,8 @@ def to_out(rec: TaskRecord) -> TaskOut:
         outputs = {"video": f"/api/tasks/{rec.id}/download"}
         if need_subtitle:
             outputs["subtitle"] = f"/api/tasks/{rec.id}/subtitle"
+        if bool(getattr(rec, "tts_enabled", 0)) and getattr(rec, "tts_status", "") == "SUCCESS":
+            outputs["dubbedVideo"] = f"/api/tasks/{rec.id}/dubbed"
     return TaskOut(
         id=rec.id,
         url=rec.url,
@@ -231,6 +255,11 @@ def to_out(rec: TaskRecord) -> TaskOut:
         downgradeErrno=rec.downgrade_errno,
         downgradedAt=rec.downgraded_at,
         quality=getattr(rec, "quality", None),
+        ttsEnabled=bool(getattr(rec, "tts_enabled", 0)),
+        ttsVoice=getattr(rec, "tts_voice", "auto"),
+        originalVoiceMode=getattr(rec, "original_voice_mode", "keep"),
+        ttsStatus=getattr(rec, "tts_status", "DISABLED"),
+        ttsError=getattr(rec, "tts_error", None),
         createdAt=rec.created_at,
         updatedAt=rec.updated_at,
     )

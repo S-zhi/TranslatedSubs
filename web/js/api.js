@@ -114,6 +114,9 @@ const RealApi = {
     body.append("model", payload.model);
     body.append("engine", payload.engine);
     body.append("needSubtitle", String(payload.needSubtitle));
+    body.append("ttsEnabled", String(payload.ttsEnabled));
+    body.append("ttsVoice", payload.ttsVoice || "auto");
+    body.append("originalVoiceMode", payload.originalVoiceMode || "keep");
 
     const res = await request(this.base, "/api/tasks/upload", {
       method: "POST",
@@ -530,6 +533,8 @@ const RealApi = {
   downloadUrl(id, kind) {
     return kind === "subtitle"
       ? `${this.base}/api/tasks/${id}/subtitle`
+      : kind === "dubbed"
+        ? `${this.base}/api/tasks/${id}/dubbed`
       : kind === "source"
         ? `${this.base}/api/tasks/${id}/source`
       : `${this.base}/api/tasks/${id}/download`;

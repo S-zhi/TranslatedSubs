@@ -100,9 +100,12 @@ function renderStage(sel) {
   }
 
   const hasSubtitledVideo = sel.needSubtitle !== false;
+  if (selectedTrack === "dubbed" && sel.ttsStatus !== "SUCCESS") {
+    selectedTrack = hasSubtitledVideo ? "subtitled" : "source";
+  }
   const track = hasSubtitledVideo ? selectedTrack : "source";
-  const videoKind = track === "source" ? "source" : "video";
-  const trackLabel = track === "source" ? "源视频" : "带字幕视频";
+  const videoKind = track === "source" ? "source" : track === "dubbed" ? "dubbed" : "video";
+  const trackLabel = track === "source" ? "源视频" : track === "dubbed" ? "配音视频" : "带字幕视频";
   const stage = el("div", "stage");
 
   const screen = el("div", "stage__screen");
@@ -114,14 +117,19 @@ function renderStage(sel) {
   const tracks = el("div", "stage__tracks");
   const sourceTrack = stageTrack("source", "源视频", track === "source");
   const subtitledTrack = stageTrack("subtitled", "带字幕视频", track === "subtitled");
+  const dubbedTrack = stageTrack("dubbed", "配音视频", track === "dubbed");
   if (!hasSubtitledVideo) {
     subtitledTrack.disabled = true;
     subtitledTrack.title = "该任务未生成字幕成品";
   }
-  tracks.append(sourceTrack, subtitledTrack);
+  if (sel.ttsStatus !== "SUCCESS") {
+    dubbedTrack.disabled = true;
+    dubbedTrack.title = sel.ttsStatus === "FAILED" ? (sel.ttsError || "配音生成失败") : "配音尚未生成";
+  }
+  tracks.append(sourceTrack, subtitledTrack, dubbedTrack);
   tracks.addEventListener("click", (event) => {
     const next = event.target.closest("[data-track]")?.dataset.track;
-    if (!next || next === track || (next === "subtitled" && !hasSubtitledVideo)) return;
+    if (!next || next === track || (next === "subtitled" && !hasSubtitledVideo) || (next === "dubbed" && sel.ttsStatus !== "SUCCESS")) return;
     selectedTrack = next;
     renderStage(sel);
   });
