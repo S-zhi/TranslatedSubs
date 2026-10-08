@@ -1,15 +1,35 @@
 [English](../../README.md) | [简体中文](../zh/README.md) | [हिन्दी](../hi/README.md) | Español | [Français](../fr/README.md) | [Português](../pt/README.md) | [Русский](../ru/README.md)
 
 <div align="center">
-  <img src="../../web/assets/translatedsubs-logo.svg" width="88" alt="Logotipo de TranslatedSubs" />
+  <img src="../assets/eye-subtitles-logo.svg" width="88" alt="Logotipo de TranslatedSubs" />
   <h1>TranslatedSubs</h1>
-  <p><strong>Del vídeo a los subtítulos traducidos en un solo flujo.</strong></p>
-  <p>Descarga, transcribe, traduce e integra subtítulos. Previsualiza, edita y descarga los resultados en la interfaz web.</p>
+  <p><strong>Comprende tanto la voz como el texto en pantalla: transcripción, traducción de subtítulos y reconocimiento de contenido escrito en pizarras.</strong></p>
+  <p>Implementación rápida e integración con MCP.</p>
 </div>
 
-TranslatedSubs es una plataforma de trabajo para subtítulos de vídeo y audio. Permite descargar medios, reconocer voz, traducir subtítulos y generar vídeos con subtítulos integrados o archivos de subtítulos independientes. Las tareas se gestionan desde la interfaz web o mediante MCP.
+TranslatedSubs es un espacio de trabajo para comprender vídeo y audio: descarga contenido, transcribe voz, traduce subtítulos y reconoce texto escrito que aparece en los vídeos.
 
-Está pensado para personas y equipos que necesitan convertir la URL de una página de vídeo o un archivo local en subtítulos traducidos. En un mismo lugar pueden seguir el progreso, corregir subtítulos y descargar el vídeo y el archivo SRT. La sincronización con Google Drive es opcional. La interfaz web todavía muestra sus controles en chino.
+- **Vídeos de múltiples fuentes**: descarga directamente desde las plataformas compatibles, sin tener que descargar y volver a subir los archivos manualmente.
+- **Despliegue local y modelos flexibles**: inicia el sistema rápidamente o usa una configuración ligera; configura modelos más avanzados para mejorar la correspondencia, incluidos modelos de la comunidad.
+- **Tareas paralelas y recursos visibles**: ejecuta varios trabajos a la vez y consulta su estado y consumo de recursos. También se puede sincronizar con Google Drive.
+- **Servicio independiente de ajuste fino**: ajusta los modelos compatibles mediante un servicio separado para mejorar los resultados según tus necesidades.
+- **Uso en varios dispositivos**: disponible en la web, Windows y macOS; el soporte para móviles está previsto para el futuro.
+
+Plataformas de vídeo compatibles:
+[![YouTube](https://img.shields.io/badge/YouTube-FF0033?style=plastic&logo=youtube&logoColor=white)](https://www.youtube.com/)
+[![Vimeo](https://img.shields.io/badge/Vimeo-1AB7EA?style=plastic&logo=vimeo&logoColor=white)](https://vimeo.com/)
+[![Dailymotion](https://img.shields.io/badge/Dailymotion-0066DC?style=plastic&logo=dailymotion&logoColor=white)](https://www.dailymotion.com/)
+[![Twitch](https://img.shields.io/badge/Twitch-9146FF?style=plastic&logo=twitch&logoColor=white)](https://www.twitch.tv/)
+[![TikTok](https://img.shields.io/badge/TikTok-111111?style=plastic&logo=tiktok&logoColor=white)](https://www.tiktok.com/)
+[![X / Twitter](https://img.shields.io/badge/X%20%28Twitter%29-111111?style=plastic&logo=x&logoColor=white)](https://x.com/)
+[![Instagram](https://img.shields.io/badge/Instagram-E4405F?style=plastic&logo=instagram&logoColor=white)](https://www.instagram.com/)
+[![AcFun](https://img.shields.io/badge/AcFun-FD4C5D?style=plastic)](https://www.acfun.cn/)
+[![Niconico](https://img.shields.io/badge/Niconico-252525?style=plastic&logo=niconico&logoColor=white)](https://www.nicovideo.jp/)
+[![Pornhub](https://img.shields.io/badge/Pornhub-FF9900?style=plastic)](https://www.pornhub.com/)
+
+![TranslatedSubs](../assets/readme-demo-1.png)
+
+![TranslatedSubs](../assets/readme-demo-2.png)
 
 ## Inicio rápido con Docker
 

@@ -1,15 +1,35 @@
 [English](../../README.md) | [简体中文](../zh/README.md) | [हिन्दी](../hi/README.md) | [Español](../es/README.md) | [Français](../fr/README.md) | Português | [Русский](../ru/README.md)
 
 <div align="center">
-  <img src="../../web/assets/translatedsubs-logo.svg" width="88" alt="Logotipo do TranslatedSubs" />
+  <img src="../assets/eye-subtitles-logo.svg" width="88" alt="Logotipo do TranslatedSubs" />
   <h1>TranslatedSubs</h1>
-  <p><strong>Do vídeo às legendas traduzidas em um só fluxo.</strong></p>
-  <p>Baixe, transcreva, traduza e incorpore legendas. Visualize, edite e baixe os resultados na interface web.</p>
+  <p><strong>Compreenda tanto a fala quanto o texto na tela: transcrição, tradução de legendas e reconhecimento de conteúdo escrito em quadros.</strong></p>
+  <p>Implantação rápida com integração MCP.</p>
 </div>
 
-TranslatedSubs é um ambiente de trabalho para legendas de vídeo e áudio. Ele permite baixar mídias, transcrever falas, traduzir legendas e produzir arquivos de legenda ou vídeos com legendas incorporadas. As tarefas podem ser gerenciadas pela interface web ou via MCP.
+TranslatedSubs é um ambiente de trabalho para compreensão de vídeo e áudio: baixa mídias, transcreve falas, traduz legendas e reconhece conteúdo escrito exibido nos vídeos.
 
-É útil para pessoas e equipes que precisam transformar o endereço de uma página de vídeo ou um arquivo local em legendas traduzidas. Acompanhe o progresso, corrija legendas e obtenha o vídeo e o arquivo SRT no mesmo lugar. A sincronização com o Google Drive é opcional. Os controles da interface web estão atualmente em chinês.
+- **Vídeos de várias fontes**: baixe diretamente das plataformas compatíveis, sem precisar baixar e enviar os arquivos novamente.
+- **Implantação local e modelos flexíveis**: inicie rapidamente ou use uma configuração leve; configure modelos mais avançados para melhorar a correspondência, incluindo modelos da comunidade.
+- **Tarefas paralelas e recursos visíveis**: execute vários trabalhos ao mesmo tempo e acompanhe o status e o uso de recursos. A sincronização com o Google Drive também está disponível.
+- **Serviço dedicado de ajuste fino**: ajuste modelos compatíveis em um serviço separado para melhorar os resultados conforme suas necessidades.
+- **Uso em vários dispositivos**: disponível na web, Windows e macOS; o suporte a celulares está planejado para o futuro.
+
+Plataformas de vídeo compatíveis:
+[![YouTube](https://img.shields.io/badge/YouTube-FF0033?style=plastic&logo=youtube&logoColor=white)](https://www.youtube.com/)
+[![Vimeo](https://img.shields.io/badge/Vimeo-1AB7EA?style=plastic&logo=vimeo&logoColor=white)](https://vimeo.com/)
+[![Dailymotion](https://img.shields.io/badge/Dailymotion-0066DC?style=plastic&logo=dailymotion&logoColor=white)](https://www.dailymotion.com/)
+[![Twitch](https://img.shields.io/badge/Twitch-9146FF?style=plastic&logo=twitch&logoColor=white)](https://www.twitch.tv/)
+[![TikTok](https://img.shields.io/badge/TikTok-111111?style=plastic&logo=tiktok&logoColor=white)](https://www.tiktok.com/)
+[![X / Twitter](https://img.shields.io/badge/X%20%28Twitter%29-111111?style=plastic&logo=x&logoColor=white)](https://x.com/)
+[![Instagram](https://img.shields.io/badge/Instagram-E4405F?style=plastic&logo=instagram&logoColor=white)](https://www.instagram.com/)
+[![AcFun](https://img.shields.io/badge/AcFun-FD4C5D?style=plastic)](https://www.acfun.cn/)
+[![Niconico](https://img.shields.io/badge/Niconico-252525?style=plastic&logo=niconico&logoColor=white)](https://www.nicovideo.jp/)
+[![Pornhub](https://img.shields.io/badge/Pornhub-FF9900?style=plastic)](https://www.pornhub.com/)
+
+![TranslatedSubs](../assets/readme-demo-1.png)
+
+![TranslatedSubs](../assets/readme-demo-2.png)
 
 ## Início rápido com Docker
 

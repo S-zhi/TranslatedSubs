@@ -1,15 +1,40 @@
 [English](../../README.md) | 简体中文 | [हिन्दी](../hi/README.md) | [Español](../es/README.md) | [Français](../fr/README.md) | [Português](../pt/README.md) | [Русский](../ru/README.md)
 
 <div align="center">
-  <img src="../../web/assets/translatedsubs-logo.svg" width="88" alt="TranslatedSubs Logo" />
+  <img src="../assets/eye-subtitles-logo.svg" width="88" alt="TranslatedSubs Logo" />
   <h1>TranslatedSubs</h1>
-  <p><strong>从视频到译文字幕，一站完成。</strong></p>
-  <p>下载、转写、翻译并封装字幕，在 Web 工作台中预览、编辑和下载结果。</p>
+  <p><strong>解析视频中的语音与画面文字，支持语音转写、字幕翻译和板书内容识别，让视频中的讲述与书写信息得到全面理解。</strong></p>
+  <p>支持快速部署，MCP接入</p>
 </div>
 
-TranslatedSubs 是视频与音频字幕处理工作台，支持媒体下载、语音识别、字幕翻译、软硬字幕封装，以及通过 Web 和 MCP 管理任务。
+TranslatedSubs 是视频与音频字幕处理工作台，支持媒体下载、语音识别、字幕翻译、软硬字幕封装。
 
-适合需要把公开视频链接或本地视频快速处理成译文字幕的个人和团队。输入视频后，可以在同一处查看任务进度、校对字幕并取回视频与 SRT 文件；Google Drive 同步是按需启用的扩展，不是运行字幕流水线的前提。
+
+
+- **多源视频获取**：支持从多种视频平台直接下载内容，无需用户先下载文件再手动上传。
+
+- **灵活的本地部署与模型配置**：支持一键启动和轻量运行，并可按需接入更高级的模型以提升匹配效果，也支持配置社区模型。
+
+- **高效任务管理**：支持多任务并行处理，并提供清晰的任务状态与资源使用情况查看能力。Google Drive 同步。
+
+- **独立模型微调服务**：为适配的模型提供独立微调服务，支持按需优化模型效果。
+
+- **多端使用**：覆盖 Web、Windows 和 macOS，未来逐步支持在手机端运行。
+
+已经适配支持的网站列表：[![YouTube](https://img.shields.io/badge/YouTube-FF0033?style=plastic&logo=youtube&logoColor=white)](https://www.youtube.com/)
+[![Vimeo](https://img.shields.io/badge/Vimeo-1AB7EA?style=plastic&logo=vimeo&logoColor=white)](https://vimeo.com/)
+[![Dailymotion](https://img.shields.io/badge/Dailymotion-0066DC?style=plastic&logo=dailymotion&logoColor=white)](https://www.dailymotion.com/)
+[![Twitch](https://img.shields.io/badge/Twitch-9146FF?style=plastic&logo=twitch&logoColor=white)](https://www.twitch.tv/)
+[![TikTok](https://img.shields.io/badge/TikTok-111111?style=plastic&logo=tiktok&logoColor=white)](https://www.tiktok.com/)
+[![X / Twitter](https://img.shields.io/badge/X%20%28Twitter%29-111111?style=plastic&logo=x&logoColor=white)](https://x.com/)
+[![Instagram](https://img.shields.io/badge/Instagram-E4405F?style=plastic&logo=instagram&logoColor=white)](https://www.instagram.com/)
+[![AcFun](https://img.shields.io/badge/AcFun-FD4C5D?style=plastic)](https://www.acfun.cn/)
+[![Niconico](https://img.shields.io/badge/Niconico-252525?style=plastic&logo=niconico&logoColor=white)](https://www.nicovideo.jp/)
+[![Pornhub](https://img.shields.io/badge/Pornhub-FF9900?style=plastic)](https://www.pornhub.com/)
+
+![TranslatedSubs](../assets/readme-demo-1.png)
+
+![TranslatedSubs](../assets/readme-demo-2.png)
 
 ## Docker 快速启动
 
@@ -45,13 +70,13 @@ docker build -t translatedsubs:local . && docker run -d --name translatedsubs --
 
 先复制 `.env.example`，再在 `.env` 填写 `SUBTRANS_DEEPSEEK_API_KEY`。完整字段和默认值以[环境变量模板](../../.env.example)为准；日常最常调整的是：
 
-| 配置 | 用途 |
-| --- | --- |
-| `SUBTRANS_DEEPSEEK_API_KEY` | 字幕翻译所需的 DeepSeek 密钥；缺失时完整字幕流水线不会就绪。 |
-| `SUBTRANS_DATA_DIR`、`SUBTRANS_DB` | 视频、字幕和 SQLite 任务数据库的位置；Docker 示例把两者放在持久化数据卷中。 |
-| `SUBTRANS_TRANSCRIBER_BACKEND` | 默认 `local_whisper`；可显式选择 `replicate` 或兼容 HTTP 服务。 |
-| `SUBTRANS_COOKIES` | 仅在目标网站要求登录或年龄验证时配置 Cookie 文件。 |
-| `SUBTRANS_WORKERS`、`SUBTRANS_DOWNLOAD_WORKERS` | 控制流水线和下载的并发数，按机器资源调整。 |
+| 配置                                            | 用途                                                                        |
+| ----------------------------------------------- | --------------------------------------------------------------------------- |
+| `SUBTRANS_DEEPSEEK_API_KEY`                     | 字幕翻译所需的 DeepSeek 密钥；缺失时完整字幕流水线不会就绪。                |
+| `SUBTRANS_DATA_DIR`、`SUBTRANS_DB`              | 视频、字幕和 SQLite 任务数据库的位置；Docker 示例把两者放在持久化数据卷中。 |
+| `SUBTRANS_TRANSCRIBER_BACKEND`                  | 默认 `local_whisper`；可显式选择 `replicate` 或兼容 HTTP 服务。             |
+| `SUBTRANS_COOKIES`                              | 仅在目标网站要求登录或年龄验证时配置 Cookie 文件。                          |
+| `SUBTRANS_WORKERS`、`SUBTRANS_DOWNLOAD_WORKERS` | 控制流水线和下载的并发数，按机器资源调整。                                  |
 
 升级容器时复用原数据卷；不要只迁移视频文件而丢掉 SQLite 数据库。不要提交 `.env`、Cookie、OAuth 凭据或测试生成的媒体文件。Google Drive 需要额外启动 sidecar，见[本地快速启动](../local-quick-start.md)。
 
