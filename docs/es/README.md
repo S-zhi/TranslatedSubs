@@ -37,7 +37,7 @@ Ejecuta lo siguiente desde la raíz del repositorio:
 
 ```bash
 cp .env.example .env
-# Set SUBTRANS_DEEPSEEK_API_KEY in .env
+# Configura SUBTRANS_DEEPSEEK_API_KEY en .env
 docker build -t translatedsubs:local . && docker run -d --name translatedsubs --restart unless-stopped -p 8000:8000 --env-file .env -e SUBTRANS_DATA_DIR=/data -e SUBTRANS_DB=/data/db/app.db -v translatedsubs-data:/data translatedsubs:local
 ```
 
@@ -49,6 +49,7 @@ Abre <http://localhost:8000/>. Ejecuta `curl http://127.0.0.1:8000/api/health` p
 
 - **Procesamiento de subtítulos**: Descarga vídeos, extrae audio, transcribe y traduce la voz, y genera subtítulos independientes o integrados en el vídeo.
 - **Interfaz web**: Gestiona la cola de tareas, sigue el progreso, previsualiza vídeos, edita subtítulos y descarga los resultados en el navegador.
+- **Interfaz multilingüe**: Cambia desde la barra lateral entre chino simplificado, inglés, hindi, español, árabe, francés, portugués y ruso. La selección se guarda en el navegador; en la primera visita se usa el idioma del navegador, salvo que el despliegue haya definido otro idioma predeterminado. Este se configura con `UI_LOCALE` en `web/config.js`.
 - **Integración MCP**: Permite que Codex, Claude Desktop y otros clientes de IA creen y sigan tareas mediante lenguaje natural.
 - **Extensión de Google Drive**: Sube, descarga y organiza archivos por tarea para compartir los resultados con un equipo.
 - **Motores de transcripción intercambiables**: Elige entre faster-whisper local, Replicate o un servicio HTTP compatible según tus necesidades de coste, velocidad y privacidad.
