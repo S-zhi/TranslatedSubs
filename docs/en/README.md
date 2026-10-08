@@ -49,7 +49,7 @@ Open <http://localhost:8000/>. Run `curl http://127.0.0.1:8000/api/health` to ch
 
 - **Subtitle pipeline**: Download, transcribe, translate, and produce soft or hard subtitles for faster understanding and cross-language viewing.
 - **Web workbench**: Queue jobs, follow progress, preview video, edit subtitles, and download results in a browser.
-- **Localized interface**: Switch between Simplified Chinese, English, Hindi, Spanish, Arabic, French, Portuguese, and Russian from the sidebar. The choice is saved in the browser; first visits follow the browser language. Deployments can set the default with `UI_LOCALE` in `web/config.js`.
+- **Localized interface**: Switch between Simplified Chinese, English, Hindi, Spanish, Arabic, French, Portuguese, and Russian from the sidebar. The choice is saved in the browser; on first visit, the browser language is used unless the deployment has set a default. Set the default with `UI_LOCALE` in `web/config.js`.
 - **MCP integration**: Let Codex, Claude Desktop, and other AI clients create and track jobs from natural language.
 - **Google Drive extension**: Upload, download, and organize task files when results need to move through a shared file workflow.
 - **Replaceable transcription backends**: Choose local faster-whisper, Replicate, or a compatible HTTP service for different cost, speed, and privacy needs.

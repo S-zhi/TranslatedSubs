@@ -37,7 +37,7 @@ TranslatedSubs वीडियो और ऑडियो को समझने 
 
 ```bash
 cp .env.example .env
-# Set SUBTRANS_DEEPSEEK_API_KEY in .env
+# .env में SUBTRANS_DEEPSEEK_API_KEY सेट करें
 docker build -t translatedsubs:local . && docker run -d --name translatedsubs --restart unless-stopped -p 8000:8000 --env-file .env -e SUBTRANS_DATA_DIR=/data -e SUBTRANS_DB=/data/db/app.db -v translatedsubs-data:/data translatedsubs:local
 ```
 
@@ -49,6 +49,7 @@ docker build -t translatedsubs:local . && docker run -d --name translatedsubs --
 
 - **सबटाइटल प्रक्रिया**: वीडियो डाउनलोड करना, ऑडियो निकालना, वाणी का प्रतिलेखन और अनुवाद करना तथा अलग या वीडियो में स्थायी रूप से जुड़े सबटाइटल बनाना।
 - **वेब कार्यक्षेत्र**: कार्य कतार और प्रगति देखना, वीडियो का पूर्वावलोकन करना, सबटाइटल संपादित करना और नतीजे डाउनलोड करना।
+- **बहुभाषी इंटरफ़ेस**: साइडबार से सरल चीनी, अंग्रेज़ी, हिंदी, स्पेनिश, अरबी, फ़्रेंच, पुर्तगाली और रूसी के बीच स्विच करें। आपकी पसंद ब्राउज़र में सहेजी जाती है; पहली बार आने पर ब्राउज़र की भाषा इस्तेमाल होती है, जब तक डिप्लॉयमेंट में कोई डिफ़ॉल्ट भाषा तय न की गई हो। डिफ़ॉल्ट भाषा `web/config.js` में `UI_LOCALE` से तय करें।
 - **MCP एकीकरण**: Codex, Claude Desktop और अन्य AI क्लाइंट स्वाभाविक भाषा से कार्य बना और उनकी प्रगति देख सकते हैं।
 - **Google Drive विस्तार**: टीम के साथ नतीजे साझा करने के लिए हर कार्य की फ़ाइलें अपलोड, डाउनलोड और व्यवस्थित करना।
 - **बदले जा सकने वाले प्रतिलेखन बैकएंड**: लागत, गति और गोपनीयता के अनुसार स्थानीय faster-whisper, Replicate या संगत HTTP सेवा चुनना।

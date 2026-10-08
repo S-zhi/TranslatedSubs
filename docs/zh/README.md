@@ -42,7 +42,7 @@ TranslatedSubs 是视频与音频字幕处理工作台，支持媒体下载、�
 
 ```bash
 cp .env.example .env
-# Set SUBTRANS_DEEPSEEK_API_KEY in .env
+# 在 .env 中填写 SUBTRANS_DEEPSEEK_API_KEY
 docker build -t translatedsubs:local . && docker run -d --name translatedsubs --restart unless-stopped -p 8000:8000 --env-file .env -e SUBTRANS_DATA_DIR=/data -e SUBTRANS_DB=/data/db/app.db -v translatedsubs-data:/data translatedsubs:local
 ```
 
@@ -54,6 +54,7 @@ docker build -t translatedsubs:local . && docker run -d --name translatedsubs --
 
 - **字幕流水线**：下载视频、提取音频、语音识别、翻译，并生成软字幕或硬字幕成品，解决视频内容快速理解和跨语言观看问题。
 - **Web 工作台**：提供任务队列、实时进度、视频预览、字幕编辑和结果下载，适合直接在浏览器中处理媒体。
+- **多语言界面**：可在侧栏切换简体中文、英语、印地语、西班牙语、阿拉伯语、法语、葡萄牙语和俄语。用户选择会保存在浏览器中；首次访问时，除非部署方设置了默认值，否则会跟随浏览器语言。部署方可通过 `web/config.js` 中的 `UI_LOCALE` 设置默认界面语言。
 - **MCP 接入**：让 Codex、Claude Desktop 等 AI 客户端通过自然语言创建和跟踪处理任务，适合把媒体处理接入 Agent 工作流。
 - **Google Drive 扩展**：按任务上传、下载和管理云端文件，适合将处理结果接入团队文件流转。
 - **可替换转写后端**：支持本地 faster-whisper、Replicate 和兼容 HTTP 服务，适合在成本、速度、隐私之间选择。

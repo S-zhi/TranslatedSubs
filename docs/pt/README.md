@@ -37,7 +37,7 @@ Execute os comandos na raiz do repositório:
 
 ```bash
 cp .env.example .env
-# Set SUBTRANS_DEEPSEEK_API_KEY in .env
+# Defina SUBTRANS_DEEPSEEK_API_KEY em .env
 docker build -t translatedsubs:local . && docker run -d --name translatedsubs --restart unless-stopped -p 8000:8000 --env-file .env -e SUBTRANS_DATA_DIR=/data -e SUBTRANS_DB=/data/db/app.db -v translatedsubs-data:/data translatedsubs:local
 ```
 
@@ -49,6 +49,7 @@ Acesse <http://localhost:8000/>. Execute `curl http://127.0.0.1:8000/api/health`
 
 - **Fluxo de legendagem**: Baixa vídeos, extrai áudio, transcreve e traduz a fala e gera arquivos de legenda ou vídeos com legendas incorporadas.
 - **Interface web**: Gerencia a fila de tarefas, acompanha o progresso, permite visualizar vídeos, editar legendas e baixar resultados no navegador.
+- **Interface multilíngue**: Alterne pela barra lateral entre chinês simplificado, inglês, hindi, espanhol, árabe, francês, português e russo. A escolha fica salva no navegador; na primeira visita, usa-se o idioma do navegador, a menos que a implantação tenha definido um idioma padrão. Defina esse padrão com `UI_LOCALE` em `web/config.js`.
 - **Integração MCP**: Permite que Codex, Claude Desktop e outros clientes de IA criem e acompanhem tarefas por linguagem natural.
 - **Extensão Google Drive**: Envia, baixa e organiza arquivos por tarefa para compartilhar resultados com a equipe.
 - **Mecanismos de transcrição substituíveis**: Escolha entre faster-whisper local, Replicate ou um serviço HTTP compatível conforme custo, velocidade e privacidade.

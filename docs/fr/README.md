@@ -37,7 +37,7 @@ Exécutez ces commandes à la racine du dépôt :
 
 ```bash
 cp .env.example .env
-# Set SUBTRANS_DEEPSEEK_API_KEY in .env
+# Renseignez SUBTRANS_DEEPSEEK_API_KEY dans .env
 docker build -t translatedsubs:local . && docker run -d --name translatedsubs --restart unless-stopped -p 8000:8000 --env-file .env -e SUBTRANS_DATA_DIR=/data -e SUBTRANS_DB=/data/db/app.db -v translatedsubs-data:/data translatedsubs:local
 ```
 
@@ -49,6 +49,7 @@ Ouvrez <http://localhost:8000/>. Exécutez `curl http://127.0.0.1:8000/api/healt
 
 - **Chaîne de sous-titrage** : Télécharge des vidéos, extrait l'audio, transcrit et traduit la parole, puis produit des sous-titres séparés ou incrustés dans la vidéo.
 - **Interface web** : Gère la file de tâches, affiche la progression, permet de prévisualiser les vidéos, de modifier les sous-titres et de télécharger les résultats.
+- **Interface multilingue** : Choisissez depuis la barre latérale le chinois simplifié, l’anglais, l’hindi, l’espagnol, l’arabe, le français, le portugais ou le russe. Le choix est enregistré dans le navigateur ; lors de la première visite, la langue du navigateur est utilisée, sauf si le déploiement en définit une par défaut. Celle-ci se configure avec `UI_LOCALE` dans `web/config.js`.
 - **Intégration MCP** : Permet à Codex, Claude Desktop et d'autres clients IA de créer et de suivre des tâches en langage naturel.
 - **Extension Google Drive** : Téléverse, télécharge et organise les fichiers par tâche pour partager les résultats au sein d'une équipe.
 - **Moteurs de transcription interchangeables** : Choisissez entre faster-whisper en local, Replicate et un service HTTP compatible selon vos besoins de coût, de rapidité et de confidentialité.
