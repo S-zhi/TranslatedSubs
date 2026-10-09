@@ -241,6 +241,32 @@ class AssetResolver:
         return path
 
     @classmethod
+    def cleanup_download_temp_files(cls, task_id: str) -> None:
+        """删除下载器临时文件，防止恢复任务复用不兼容的半截下载。
+
+        参数:
+            task_id: 任务标识，用于定位任务目录。
+
+        返回:
+            None。目录不存在或单个文件删除失败时记录日志并继续。
+
+        副作用:
+            删除任务目录中由 yt-dlp 产生的 ``.part`` 和 ``.ytdl`` 文件。
+            仅供 URL 下载任务调用，不会删除正式 source 文件。
+        """
+        d = task_dir(task_id)
+        if not d.is_dir():
+            return
+
+        for pattern in ("*.part", "*.ytdl"):
+            for path in d.glob(pattern):
+                try:
+                    path.unlink()
+                    logger.info("已清理恢复任务的下载临时文件: task=%s, file=%s", task_id, path.name)
+                except OSError as e:
+                    logger.warning("清理恢复任务下载临时文件失败: task=%s, file=%s, err=%s", task_id, path.name, e)
+
+    @classmethod
     def cleanup_cancelled_artifacts(
         cls, task_id: str, current_step: Optional[str] = None, source_type: Optional[str] = None
     ) -> None:
@@ -275,12 +301,7 @@ class AssetResolver:
                 except OSError as e:
                     logger.warning("清理取消任务产物失败: task=%s, file=%s, err=%s", task_id, name, e)
 
-        for p in d.glob("*.part"):
-            try:
-                p.unlink()
-                logger.info("已清理取消任务的 .part 文件: task=%s, file=%s", task_id, p.name)
-            except OSError as e:
-                logger.warning("清理 .part 文件失败: task=%s, file=%s, err=%s", task_id, p.name, e)
+        cls.cleanup_download_temp_files(task_id)
 
         # Demucs 会在该目录下生成模型名子目录；取消时整目录删除，避免
         # 下一次重试误拾取半截 stems 或长期占用大量磁盘。

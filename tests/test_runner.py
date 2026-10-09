@@ -283,6 +283,39 @@ def test_recover_interrupted_upload_task_fails_when_source_missing(store, tmp_pa
     assert updated.error_code == "resource_error"
 
 
+
+def test_recover_url_task_cleans_download_temp_files(store, tmp_path, monkeypatch):
+    """URL 任务恢复前删除 yt-dlp 临时文件，但保留正式源文件并继续入队。"""
+    rec = store.create(
+        url="http://x/v", source_lang="auto", target_lang="zh-CN",
+        mode="mono", burn="hard", model="small", engine="deepseek",
+    )
+    store.update(rec.id, status="DOWNLOADING")
+
+    task_path = tmp_path / rec.id
+    task_path.mkdir()
+    (task_path / "source.mp4.part").write_bytes(b"partial")
+    (task_path / "source.mp4.ytdl").write_text("metadata")
+    (task_path / "source.mp4").write_bytes(b"complete")
+    monkeypatch.setattr("src.service.asset_resolver.task_dir", lambda tid: tmp_path / tid)
+
+    submitted = []
+
+    class FakeExecutor:
+        def submit(self, fn, *args):
+            submitted.append((fn, args))
+
+    monkeypatch.setattr(runner, "_executor", FakeExecutor())
+
+    recovered = runner.recover_interrupted_tasks()
+
+    assert recovered == [rec.id]
+    assert submitted == [(runner._run, (rec.id,))]
+    assert not (task_path / "source.mp4.part").exists()
+    assert not (task_path / "source.mp4.ytdl").exists()
+    assert (task_path / "source.mp4").exists()
+
+
 def test_get_executor_dynamic_worker_update(monkeypatch):
     runner.shutdown_executor(wait=True)
     monkeypatch.setenv("SUBTRANS_WORKERS", "3")

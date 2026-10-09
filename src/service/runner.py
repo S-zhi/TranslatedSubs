@@ -226,6 +226,9 @@ def recover_interrupted_tasks() -> list[str]:
                 )
                 logger.warning("恢复中断任务时发现上传源文件缺失或损坏，标记为 FAILED: task=%s, msg=%s", rec.id, msg)
                 continue
+        else:
+            # URL 任务的临时下载可能对应已变更的 URL 或格式，恢复前不可安全续传。
+            AssetResolver.cleanup_download_temp_files(rec.id)
         enqueue_pipeline(rec.id)
         recovered.append(rec.id)
     return recovered
