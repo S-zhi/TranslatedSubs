@@ -26,7 +26,14 @@ window.APP_CONFIG = {
   DRIVE_API_TIMEOUT_MS: 600000,
 
   // 高级设置中的引擎配置由后端动态加载；此项仅作为无后端时的兼容兜底
-  TRANSLATION_ENGINES: [{ value: "deepseek", label: "DeepSeek（兼容旧配置）", enabled: true }],
+  TRANSLATION_ENGINES: [{
+    value: "local-opus-en-zh",
+    label: "本地 CPU 英译中（请先下载模型）",
+    enabled: true,
+    apiType: "local_ct2",
+    modelStatus: "NOT_INSTALLED",
+    availability: "UNAVAILABLE",
+  }],
 
   // 默认支持的目标语言列表
   TARGET_LANGUAGES: [

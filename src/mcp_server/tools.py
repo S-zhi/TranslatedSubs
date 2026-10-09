@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from pydantic import Field
 
 from .business_client import BusinessApiClient, BusinessApiError
+from src.store import DEFAULT_TRANSLATION_ENGINE_ID
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +105,7 @@ class SubtitleMcpTools:
         self,
         url: str,
         *,
-        source_lang: str = "auto",
+        source_lang: str = "en",
         target_lang: str = "zh-CN",
         mode: Literal["mono", "bilingual"] = "mono",
         burn: Literal["hard", "soft"] = "hard",
@@ -147,7 +148,7 @@ class SubtitleMcpTools:
                     "mode": mode,
                     "burn": burn,
                     "model": model.strip(),
-                    "engine": "deepseek",
+                    "engine": DEFAULT_TRANSLATION_ENGINE_ID,
                     "needSubtitle": need_subtitle,
                 }
             )
@@ -330,8 +331,8 @@ def register_tools(server: Any, api: BusinessApiClient | None = None) -> Subtitl
         ],
         source_lang: Annotated[
             str,
-            Field(description="源语言代码；auto 表示自动识别。"),
-        ] = "auto",
+            Field(description="源语言代码；本地默认翻译引擎使用 en。"),
+        ] = "en",
         target_lang: Annotated[
             str,
             Field(description="目标语言代码，默认 zh-CN。"),

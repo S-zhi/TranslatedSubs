@@ -31,7 +31,7 @@ SERVER_INSTRUCTIONS = """你是 TranslatedSubs 的字幕处理助手。
 8. 如果 setup 提示 agent_action=use_soft_burn_or_install_libass，优先询问用户是否接受外挂字幕，
    或提示安装带 libass 的 FFmpeg；不要擅自改变用户明确指定的 burn=hard。
 
-默认参数是 source_lang=auto、target_lang=zh-CN、mode=mono、burn=hard、model=local:tiny。
+默认参数是 source_lang=en、target_lang=zh-CN、mode=mono、burn=hard、model=local:tiny，默认翻译引擎为本地 CPU 英译中。
 MCP 只负责调用业务 API，不直接访问业务数据库、文件或底层下载/翻译实现。"""
 
 AGENT_GUIDE_PATH = Path(__file__).resolve().parents[2] / "docs" / "mcp-agent-guide.md"

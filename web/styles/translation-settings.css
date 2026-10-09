@@ -151,6 +151,14 @@
 .engine-status--unknown, .engine-status--checking { color:var(--amber-text); background:var(--amber-soft); }
 .engine-status--unavailable { color:var(--danger-text); background:var(--danger-soft); }
 .engine-status--unconfigured { color:var(--text-3); background:var(--surface-2); }
+.engine-status--ready { color:var(--ok-text); background:var(--ok-soft); }
+.engine-status--busy { color:var(--accent-text); background:var(--accent-soft); }
+.engine-status--idle { color:var(--text-3); background:var(--surface-2); }
+.engine-status--error { color:var(--danger-text); background:var(--danger-soft); }
+.local-engine-card__details { display:flex; flex-wrap:wrap; gap:8px; }
+.local-engine-card__details span { padding:5px 8px; color:var(--text-2); background:var(--surface-2); border:1px solid var(--border); border-radius:var(--r-pill); font-size:10px; }
+.local-engine-card__message { min-height:16px; margin:0; color:var(--text-3); font-size:11px; line-height:1.5; overflow-wrap:anywhere; }
+.local-engine-card__message[role="alert"] { color:var(--danger-text); }
 .engine-card__form { display:grid; gap:10px; }
 .engine-card__grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
 .engine-field { display:grid; gap:5px; min-width:0; }

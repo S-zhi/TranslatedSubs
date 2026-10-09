@@ -30,6 +30,7 @@ from src.core.vocal_separator import (
     separate_vocals,
 )
 from src.service.asset_resolver import AssetResolver, ResourceError, ResourceState
+from src.store import DEFAULT_TRANSLATION_ENGINE_ID
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +82,7 @@ class PipelineParams:
     mode: str = "mono"     # mono | bilingual
     burn: str = "hard"     # hard | soft
     model: str = "local:tiny"
-    engine: str = "deepseek"
+    engine: str = DEFAULT_TRANSLATION_ENGINE_ID
     source_type: str = "url"    # url=在线链接下载 upload=本地上传视频
     need_subtitle: bool = True  # False = 仅下载视频，跳过识别/翻译/烧录
     title: Optional[str] = None  # 上传模式下用原始文件名作为展示标题

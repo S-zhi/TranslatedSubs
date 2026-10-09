@@ -220,3 +220,17 @@ def test_dataclasses_replace_compatibility(monkeypatch):
 
     # 原始 settings 实例不受影响
     assert settings.max_upload_mb == 2048
+
+
+def test_local_translation_batch_is_independent_and_defaults_to_sixteen(monkeypatch):
+    monkeypatch.setenv("SUBTRANS_TRANSLATE_BATCH", "8")
+    monkeypatch.setenv("SUBTRANS_LOCAL_TRANSLATE_BATCH", "16")
+    monkeypatch.setattr(config, "_sync_env_file", lambda: None)
+
+    settings = config.Settings()
+
+    assert settings.translate_batch_size == 8
+    assert settings.local_translate_batch_size == 16
+
+    monkeypatch.setenv("SUBTRANS_LOCAL_TRANSLATE_BATCH", "32")
+    assert config.Settings().local_translate_batch_size == 32

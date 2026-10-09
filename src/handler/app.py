@@ -37,6 +37,7 @@ from src.handler.deps import get_probe_store, get_store
 
 from src.service.retention_scheduler import start_retention_scheduler
 from src.service.probe_batch import start_startup_probe, stop_startup_probe
+from src.service.translation_model_manager import get_translation_model_manager
 
 from src.service.runner import recover_interrupted_tasks, shutdown_executor
 from src.store import (
@@ -130,6 +131,13 @@ def create_app() -> FastAPI:
             if abnormal:
                 logger.warning("启动扫描检测到 %d 个磁盘故障或存储迁移任务: %s", abnormal, downgraded)
 
+        # Local translation is optional at startup.  If a complete model and
+        # its optional dependencies are already present, warm the cached
+        # runtime in the background without blocking API startup or downloading.
+        local_manager = get_translation_model_manager()
+        if local_manager.start_warmup():
+            logger.info("本地翻译模型已提交后台预热")
+
         recovered = recover_interrupted_tasks()
         if recovered:
             logger.warning("启动恢复：以下未完成任务已重新入队: %s", recovered)
@@ -140,6 +148,7 @@ def create_app() -> FastAPI:
     def _shutdown_runner() -> None:
         """关闭应用时通知 runner 线程池退出。"""
         stop_startup_probe()
+        get_translation_model_manager().cancel_warmup()
         shutdown_executor(wait=False)
 
     return app

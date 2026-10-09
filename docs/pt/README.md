@@ -115,7 +115,7 @@ Execute os comandos na raiz do repositório:
 
 ```bash
 cp .env.example .env
-# Defina SUBTRANS_DEEPSEEK_API_KEY em .env
+# O tradutor local padrão não precisa de uma chave de API; configure chaves de nuvem apenas quando necessário.
 docker build -t translatedsubs:local . && docker run -d --name translatedsubs --restart unless-stopped -p 8000:8000 --env-file .env -e SUBTRANS_DATA_DIR=/data -e SUBTRANS_DB=/data/db/app.db -v translatedsubs-data:/data translatedsubs:local
 ```
 
@@ -142,11 +142,11 @@ Legendas separadas podem ser ativadas ou desativadas no player. Legendas gravada
 
 ## Configuração e dados
 
-Copie `.env.example` e preencha `SUBTRANS_DEEPSEEK_API_KEY` em `.env`. O [modelo de variáveis de ambiente](../../.env.example) lista todos os ajustes e valores padrão. Os mais usados são:
+Copie `.env.example` e inicie sem uma chave de API. O tradutor padrão é local, usa CPU e traduz inglês → chinês simplificado; instale as dependências com `uv sync --extra local-translation` e baixe o modelo nas configurações. Preencha `SUBTRANS_DEEPSEEK_API_KEY` somente se escolher DeepSeek. O [modelo de variáveis de ambiente](../../.env.example) lista todos os ajustes e valores padrão. Os mais usados são:
 
 | Ajuste | Finalidade |
 | --- | --- |
-| `SUBTRANS_DEEPSEEK_API_KEY` | Chave da DeepSeek para traduzir legendas; sem ela, o fluxo completo não fica pronto. |
+| `SUBTRANS_DEEPSEEK_API_KEY` | Chave opcional da DeepSeek para o caminho explícito de compatibilidade em nuvem. |
 | `SUBTRANS_DATA_DIR`, `SUBTRANS_DB` | Locais dos arquivos e do banco SQLite de tarefas; o exemplo Docker guarda ambos em um volume persistente. |
 | `SUBTRANS_TRANSCRIBER_BACKEND` | O padrão é `local_whisper`; selecione `replicate` ou um serviço HTTP compatível quando necessário. |
 | `SUBTRANS_COOKIES` | Arquivo de cookies para sites que exigem login ou verificação de idade. |

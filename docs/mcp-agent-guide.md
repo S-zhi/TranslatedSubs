@@ -31,7 +31,7 @@ get_task_artifacts
 `restart_required`：
 
 - `agent_action=continue`：可以继续调用后续工具。
-- `agent_action=ask_user_to_configure`：不要调用处理工具。告诉用户按照 `config_file` 指向的固定位置（通常是业务项目根目录的 `.env`）补齐 `missing` 中的配置，并重启业务 FastAPI 服务。
+- `agent_action=ask_user_to_configure`：不要调用处理工具。根据 `missing` 的内容安装本地翻译依赖/模型，或按 `config_file` 指向的固定位置补齐云端配置；仅修改 `.env` 后才需要重启业务 FastAPI 服务。
 - `agent_action=use_soft_burn_or_install_libass`：基础流水线已就绪，但硬字幕不可用。询问用户是否改用 `burn=soft`，或提示用户安装带 libass 字幕滤镜的 FFmpeg。
 - `error_code=BUSINESS_UNAVAILABLE`：业务 API 没有运行，请用户先启动业务服务。
 
@@ -48,12 +48,14 @@ Agent 不得：
 
 `start_subtitle_pipeline` 的默认值为：
 
-- `source_lang=auto`：自动识别源语言；
+- `source_lang=en`：默认本地翻译引擎使用英语源语言；
 - `target_lang=zh-CN`：翻译为简体中文；
 - `mode=mono`：单语字幕；
 - `burn=hard`：将字幕烧录进视频，需要 FFmpeg 的 libass；
 - `model=local:tiny`：使用本地 faster-whisper tiny 语音识别模型；
 - `need_subtitle=true`：执行识别和翻译。
+
+默认翻译引擎是本地 CPU 英译中。模型未下载时不要静默切换到 DeepSeek；先提示用户安装 `uv sync --extra local-translation` 并在 Web 设置中点击“下载并转换”。
 
 用户没有明确指定时使用这些默认值。用户明确指定 `burn=hard` 时，不要在硬字幕不可用时悄悄改成 soft，应先说明并请求确认。
 
@@ -74,7 +76,9 @@ Agent 不得：
 | --- | --- |
 | `INVALID_URL` | 请求用户提供合法的 `http://` 或 `https://` 视频页面地址。 |
 | `PROBE_FAILED` | 把预检查错误告知用户，请求新的 URL；不要直接启动流水线。 |
-| `NOT_INITIALIZED` | 使用 `config_file` 和 `missing` 指导用户配置并重启业务服务。 |
+| `NOT_INITIALIZED` | 根据 `missing` 安装本地依赖/模型或配置云端环境；修改 `.env` 后再重启业务服务。 |
+| `LOCAL_TRANSLATION_MODEL_NOT_READY` | 提示用户在设置中下载并转换本地模型。 |
+| `LOCAL_TRANSLATION_DEPENDENCY_MISSING` | 运行 `uv sync --extra local-translation`，无需重启服务。 |
 | `HARD_BURN_UNAVAILABLE` | 询问是否改用 `burn=soft`，或提示安装带 libass 的 FFmpeg。 |
 | `BUSINESS_UNAVAILABLE` | 提示用户启动业务 FastAPI，并重新检查 setup。 |
 | `TASK_NOT_FOUND` | 确认 task_id 是否正确，必要时用 `list_tasks` 查找。 |

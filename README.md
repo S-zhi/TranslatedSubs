@@ -115,7 +115,7 @@ Run this from the repository root:
 
 ```bash
 cp .env.example .env
-# Set SUBTRANS_DEEPSEEK_API_KEY in .env
+# The default local translator needs no API key. Configure cloud keys only when needed.
 docker build -t translatedsubs:local . && docker run -d --name translatedsubs --restart unless-stopped -p 8000:8000 --env-file .env -e SUBTRANS_DATA_DIR=/data -e SUBTRANS_DB=/data/db/app.db -v translatedsubs-data:/data translatedsubs:local
 ```
 
@@ -142,11 +142,11 @@ Soft subtitles can be toggled in a player. Hard subtitles are written into the p
 
 ## Key configuration and data
 
-Copy `.env.example` and set `SUBTRANS_DEEPSEEK_API_KEY` in `.env`. The [environment template](.env.example) lists every setting and its default. Common settings are:
+Copy `.env.example` and start the service without an API key. The default translator is the local CPU English → Simplified Chinese model; install it with `uv sync --extra local-translation`, then download and convert it from Settings → Translation engines. Configure `SUBTRANS_DEEPSEEK_API_KEY` only when you explicitly choose DeepSeek. The [environment template](.env.example) lists every setting and its default. Common settings are:
 
 | Setting | Purpose |
 | --- | --- |
-| `SUBTRANS_DEEPSEEK_API_KEY` | DeepSeek key for subtitle translation; the full subtitle pipeline is not ready without it. |
+| `SUBTRANS_DEEPSEEK_API_KEY` | Optional DeepSeek key for the explicit cloud compatibility path. |
 | `SUBTRANS_DATA_DIR`, `SUBTRANS_DB` | Locations of video and subtitle files and the SQLite job database; the Docker example stores both in a persistent volume. |
 | `SUBTRANS_TRANSCRIBER_BACKEND` | Defaults to `local_whisper`; select `replicate` or a compatible HTTP service explicitly. |
 | `SUBTRANS_COOKIES` | Cookie file for sites that require login or age verification. |

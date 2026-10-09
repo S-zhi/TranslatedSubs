@@ -10,7 +10,13 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
-from src.store import RESOURCE_STATUS_AVAILABLE, RESOURCE_STATUS_MISSING, ProbeRecord, TaskRecord
+from src.store import (
+    DEFAULT_TRANSLATION_ENGINE_ID,
+    RESOURCE_STATUS_AVAILABLE,
+    RESOURCE_STATUS_MISSING,
+    ProbeRecord,
+    TaskRecord,
+)
 
 
 def _probe_record_to_out(rec: ProbeRecord) -> "ProbeRecordOut":
@@ -39,13 +45,13 @@ class TaskCreate(BaseModel):
     """POST /api/tasks 的请求体。"""
 
     url: str
-    sourceLang: str = Field(default="auto", min_length=1)
+    sourceLang: str = Field(default="en", min_length=1)
     targetLang: str = Field(default="zh-CN", min_length=1)
     mode: Literal["mono", "bilingual"] = "mono"
     burn: Literal["hard", "soft"] = "hard"
     model: str = Field(default="local:tiny", min_length=1)
     # 配置实例 ID；保留 deepseek 以兼容旧版环境变量配置。
-    engine: str = Field(default="deepseek", min_length=1)
+    engine: str = Field(default=DEFAULT_TRANSLATION_ENGINE_ID, min_length=1)
     needSubtitle: bool = True  # False = 仅下载视频，跳过识别/翻译/烧录
     quality: Optional[str] = Field(default=None, description="下载画质策略：best/1080p/720p/480p/360p/audio_only")
     ttsEnabled: bool = False

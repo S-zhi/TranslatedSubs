@@ -115,7 +115,7 @@ Ejecuta lo siguiente desde la raíz del repositorio:
 
 ```bash
 cp .env.example .env
-# Configura SUBTRANS_DEEPSEEK_API_KEY en .env
+# El traductor local predeterminado no necesita una clave API; configura claves en la nube solo cuando las necesites.
 docker build -t translatedsubs:local . && docker run -d --name translatedsubs --restart unless-stopped -p 8000:8000 --env-file .env -e SUBTRANS_DATA_DIR=/data -e SUBTRANS_DB=/data/db/app.db -v translatedsubs-data:/data translatedsubs:local
 ```
 
@@ -142,11 +142,11 @@ Los subtítulos separados se pueden activar o desactivar en el reproductor. Los 
 
 ## Configuración y datos
 
-Copia `.env.example` y configura `SUBTRANS_DEEPSEEK_API_KEY` en `.env`. La [plantilla de variables de entorno](../../.env.example) contiene todos los valores y ajustes. Los más habituales son:
+Copia `.env.example` y inicia sin una clave API. El traductor predeterminado es local y usa CPU para inglés → chino simplificado; instala sus dependencias con `uv sync --extra local-translation` y descarga el modelo desde Configuración. Configura `SUBTRANS_DEEPSEEK_API_KEY` solo si eliges DeepSeek. La [plantilla de variables de entorno](../../.env.example) contiene todos los valores y ajustes. Los más habituales son:
 
 | Ajuste | Uso |
 | --- | --- |
-| `SUBTRANS_DEEPSEEK_API_KEY` | Clave de DeepSeek para traducir subtítulos; sin ella no está listo el flujo completo. |
+| `SUBTRANS_DEEPSEEK_API_KEY` | Clave opcional de DeepSeek para la ruta explícita de compatibilidad en la nube. |
 | `SUBTRANS_DATA_DIR`, `SUBTRANS_DB` | Ubicación de los archivos y la base SQLite de tareas; el ejemplo con Docker guarda ambos en un volumen persistente. |
 | `SUBTRANS_TRANSCRIBER_BACKEND` | Usa `local_whisper` por defecto; también admite `replicate` o un servicio HTTP compatible. |
 | `SUBTRANS_COOKIES` | Archivo de cookies para sitios que requieren inicio de sesión o verificación de edad. |

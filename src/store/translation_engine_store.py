@@ -15,8 +15,12 @@ from pathlib import Path
 from typing import List, Optional
 
 
-ENGINE_TYPES = ("openai_compatible", "anthropic_compatible")
+ENGINE_TYPES = ("openai_compatible", "anthropic_compatible", "local_ct2")
 AVAILABILITY = ("UNCONFIGURED", "UNKNOWN", "CHECKING", "AVAILABLE", "UNAVAILABLE")
+LOCAL_TRANSLATION_ENGINE_ID = "local-opus-en-zh"
+DEFAULT_TRANSLATION_ENGINE_ID = LOCAL_TRANSLATION_ENGINE_ID
+LOCAL_TRANSLATION_ENGINE_NAME = "本地 CPU 英译中"
+LOCAL_TRANSLATION_MODEL = "Helsinki-NLP/opus-mt-en-zh"
 
 
 @dataclass
@@ -145,6 +149,41 @@ class TranslationEngineStore:
                 rec.created_at, rec.updated_at),
             )
         return self.get("deepseek") or rec
+
+    def ensure_local_ct2(self) -> TranslationEngine:
+        """Seed the one supported local engine without requiring a secret."""
+        now = _now_ms()
+        rec = TranslationEngine(
+            id=LOCAL_TRANSLATION_ENGINE_ID,
+            name=LOCAL_TRANSLATION_ENGINE_NAME,
+            api_type="local_ct2",
+            base_url="",
+            model=LOCAL_TRANSLATION_MODEL,
+            api_key=None,
+            enabled=1,
+            availability="UNKNOWN",
+            created_at=now,
+            updated_at=now,
+        )
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT OR IGNORE INTO translation_engines
+                (id, name, api_type, base_url, model, api_key, enabled, availability,
+                 last_checked_at, last_error, api_key_rotated_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (rec.id, rec.name, rec.api_type, rec.base_url, rec.model, None, 1,
+                 rec.availability, None, None, None, rec.created_at, rec.updated_at),
+            )
+            # Restore the immutable model identity if an older/custom record used
+            # this reserved ID. Preserve only the user's enable/disable choice.
+            conn.execute(
+                """UPDATE translation_engines
+                SET name = ?, api_type = ?, base_url = '', model = ?, api_key = NULL,
+                    api_key_rotated_at = NULL
+                WHERE id = ?""",
+                (rec.name, rec.api_type, rec.model, rec.id),
+            )
+        return self.get(LOCAL_TRANSLATION_ENGINE_ID) or rec
 
     def get(self, engine_id: str) -> Optional[TranslationEngine]:
         with self._connect() as conn:

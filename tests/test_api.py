@@ -213,9 +213,14 @@ def test_api_token_auth_when_token_unset(client, monkeypatch):
 
 def test_create_defaults_when_minimal(client):
     r = client.post("/api/tasks", json={"url": "https://x/y"})
-    assert r.status_code == 201
-    data = r.json()
-    assert data["targetLang"] == "zh-CN" and data["mode"] == "mono"
+    # Minimal requests use the local CPU engine by default.  Until its model
+    # has been downloaded and converted, task creation must fail explicitly
+    # instead of silently falling back to a cloud engine.
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] in {
+        "LOCAL_TRANSLATION_MODEL_NOT_READY",
+        "LOCAL_TRANSLATION_DEPENDENCY_MISSING",
+    }
 
 
 def test_create_missing_url_422(client):
