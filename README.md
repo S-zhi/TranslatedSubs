@@ -31,6 +31,84 @@ Supported video platforms:
 
 ![TranslatedSubs](./docs/assets/readme-demo-2.png)
 
+## Build from source
+
+### macOS
+
+To run the project locally on macOS, you need Python 3.10–3.12, `uv`, and FFmpeg built with libass support. The API also serves the web workbench, so you do not need to install Node.js separately.
+
+Run these commands in a suitable directory:
+
+```sh
+git clone https://github.com/S-zhi/TranslatedSubs.git
+cd TranslatedSubs
+brew install uv
+brew tap homebrew-ffmpeg/ffmpeg
+brew install ffmpeg-full
+uv sync
+cp .env.example .env
+```
+
+You can add the cloud API keys you need to `.env`, or configure them after startup, which is the recommended approach.
+
+Start the API and web workbench:
+
+```sh
+uv run uvicorn src.handler.app:app --port 8000
+```
+
+Open <http://127.0.0.1:8000/>. Check the service and confirm FFmpeg has the hard-subtitle filter with:
+
+```sh
+curl http://127.0.0.1:8000/api/health
+curl http://127.0.0.1:8000/api/health/ready
+ffmpeg -hide_banner -filters | grep " subtitles "
+```
+
+### Windows
+
+On Windows 10 or 11, you can run TranslatedSubs from source in PowerShell. The project supports Python 3.10–3.12; these steps use Python 3.12 and install the versions pinned in `uv.lock`. The API serves the web workbench, so a separate Node.js installation is not needed.
+
+1. Install `uv`:
+
+   ```powershell
+   powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+   ```
+
+   Reopen PowerShell after installation.
+
+2. Install FFmpeg. On the [FFmpeg download page](https://ffmpeg.org/download.html), choose a Windows build and download Gyan's full build. Extract it and add its `bin` directory (for example, `C:\ffmpeg\bin`) to `PATH`, then reopen PowerShell. Check that `ffmpeg`, `ffprobe`, and the hard-subtitle filter are available:
+
+   ```powershell
+   ffprobe -version
+   ffmpeg -hide_banner -filters | findstr /i subtitles
+   ```
+
+3. Clone the project, install dependencies, and create the local configuration:
+
+   ```powershell
+   git clone https://github.com/S-zhi/TranslatedSubs.git
+   cd TranslatedSubs
+   uv python install 3.12
+   uv sync --python 3.12 --locked
+   Copy-Item .env.example .env
+   ```
+
+   You can add the cloud API keys you need to `.env`, or configure them after startup, which is the recommended approach.
+
+Start the API and web workbench:
+
+```powershell
+uv run --locked uvicorn src.handler.app:app --host 127.0.0.1 --port 8000
+```
+
+Open <http://127.0.0.1:8000/>. Check the service with:
+
+```powershell
+curl.exe http://127.0.0.1:8000/api/health
+curl.exe http://127.0.0.1:8000/api/health/ready
+```
+
 ## Docker quick start
 
 Run this from the repository root:
