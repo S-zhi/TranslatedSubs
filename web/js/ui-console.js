@@ -26,30 +26,140 @@ const PROBE_DEBOUNCE_MS = 800;
 const LANGUAGE_DISPLAY = typeof Intl !== "undefined" && Intl.DisplayNames
   ? new Intl.DisplayNames(["zh-CN"], { type: "language" })
   : null;
+const LOCAL_ENGINE_ID = "local-opus-en-zh";
+const LOCAL_ENGINE_FALLBACK = {
+  id: LOCAL_ENGINE_ID,
+  name: "本地 CPU 英译中",
+  apiType: "local_ct2",
+  model: "Helsinki-NLP/opus-mt-en-zh",
+  enabled: true,
+  availability: "UNAVAILABLE",
+  modelStatus: "NOT_INSTALLED",
+  hasApiKey: false,
+};
+let engineLanguageController = null;
+
+export function localTranslationLanguagePair() {
+  return { sourceLang: "en", targetLang: "zh-CN" };
+}
+
+export function ttsHintForTarget(targetLang, enabled) {
+  if (!enabled) return "仅支持中文或英文目标语。";
+  const supported = String(targetLang || "").toLowerCase().startsWith("zh")
+    || String(targetLang || "").toLowerCase().startsWith("en");
+  return supported
+    ? "将生成单独的配音视频；原字幕视频仍会保留。"
+    : "当前目标语不支持 Kokoro 配音，请改选中文或英文。";
+}
+
+export function isTaskEngineSelectable(engine) {
+  if (!engine?.enabled) return false;
+  if (engine.id === LOCAL_ENGINE_ID) return String(engine.modelStatus || "").toUpperCase() === "READY";
+  return engine.id === "deepseek" || !engine.availability || engine.availability === "AVAILABLE";
+}
+
+export function requiresReadyLocalTranslation(engine, needSubtitle) {
+  return Boolean(needSubtitle
+    && engine?.id === LOCAL_ENGINE_ID
+    && String(engine.modelStatus || "").toUpperCase() !== "READY");
+}
+
+export function preferredTaskEngine(items, currentValue = "") {
+  const current = items.find((engine) => (engine.id || engine.value) === currentValue);
+  if (current && (isTaskEngineSelectable(current) || current.id === LOCAL_ENGINE_ID)) return current;
+  const local = items.find((engine) => engine.id === LOCAL_ENGINE_ID);
+  if (local) return local;
+  const selectable = items.filter(isTaskEngineSelectable);
+  return selectable.find((engine) => engine.active) || selectable[0] || items[0] || null;
+}
+
+export function createEngineLanguageController({ engineSelect, sourceSelect, targetSelect, onLockChange = () => {} }) {
+  let engines = [];
+  let previous = null;
+  let locked = false;
+
+  function sync() {
+    const selected = engines.find((engine) => engine.id === engineSelect.value);
+    const shouldLock = selected?.id === LOCAL_ENGINE_ID
+      && String(selected.modelStatus || "").toUpperCase() === "READY"
+      && selected.enabled !== false;
+    if (shouldLock && !locked) previous = { sourceLang: sourceSelect.value, targetLang: targetSelect.value };
+    if (!shouldLock && locked && previous) {
+      sourceSelect.value = previous.sourceLang;
+      targetSelect.value = previous.targetLang;
+      previous = null;
+    }
+    locked = shouldLock;
+    if (locked) {
+      const pair = localTranslationLanguagePair();
+      sourceSelect.value = pair.sourceLang;
+      targetSelect.value = pair.targetLang;
+    }
+    onLockChange(locked);
+    return locked;
+  }
+
+  return {
+    setEngines(items) { engines = items || []; return sync(); },
+    sync,
+    setOnLockChange(callback) { onLockChange = callback || (() => {}); onLockChange(locked); },
+    isLocked() { return locked; },
+    selectedEngine() { return engines.find((engine) => engine.id === engineSelect.value) || null; },
+  };
+}
+
+export function collectTaskPayload(form) {
+  return {
+    sourceLang: $("#sourceLang").value,
+    targetLang: $("#targetLang").value,
+    mode: form.elements.mode.value,
+    burn: form.elements.burn.value,
+    model: $("#model").value,
+    engine: $("#engine").value,
+    needSubtitle: form.elements.needSubtitle.value === "on",
+    quality: $("#quality")?.value || "480p",
+    ttsEnabled: form.elements.ttsEnabled.checked,
+    ttsVoice: form.elements.ttsVoice.value,
+    originalVoiceMode: form.elements.originalVoiceMode.value,
+  };
+}
+
+function normalizeTaskEngines(engines) {
+  const items = [...(engines || [])];
+  if (!items.some((engine) => engine.id === LOCAL_ENGINE_ID)) items.unshift({ ...LOCAL_ENGINE_FALLBACK });
+  return items.sort((left, right) => (left.id === LOCAL_ENGINE_ID ? -1 : right.id === LOCAL_ENGINE_ID ? 1 : 0));
+}
 
 function initEngines(engines = null) {
   // 初始化翻译引擎下拉框；引擎来自高级设置中的持久化配置。
   const sel = $("#engine");
+  const previousValue = sel.value;
   sel.innerHTML = "";
-  const items = engines?.length ? engines : [{ id: "deepseek", name: "DeepSeek（兼容旧配置）", availability: "UNKNOWN", enabled: true }];
+  const items = normalizeTaskEngines(engines?.length ? engines : [LOCAL_ENGINE_FALLBACK]);
   items.forEach((e) => {
     const o = el("option");
     o.value = e.id || e.value;
-    const unavailable = !e.enabled || (e.availability && e.availability !== "AVAILABLE" && e.id !== "deepseek");
-    o.textContent = unavailable ? `${e.name || e.label}（${e.availability === "UNCONFIGURED" ? "未配置" : "不可用"}）` : (e.name || e.label);
+    const isLocal = e.id === LOCAL_ENGINE_ID;
+    const localReady = String(e.modelStatus || "").toUpperCase() === "READY";
+    const unavailable = !isTaskEngineSelectable(e);
+    const localState = !e.enabled ? "已停用" : !localReady ? (String(e.modelStatus || "").toUpperCase() === "FAILED" ? "模型失败" : "请先下载模型") : "";
+    o.textContent = unavailable ? `${e.name || e.label}（${isLocal ? localState : e.availability === "UNCONFIGURED" ? "未配置" : "不可用"}）` : (e.name || e.label);
     o.disabled = unavailable;
     sel.append(o);
   });
-  const first = items.find((e) => e.enabled && (e.availability === "AVAILABLE" || e.id === "deepseek")) || items[0];
-  if (first) sel.value = first.id || first.value;
+  const selected = preferredTaskEngine(items, previousValue);
+  if (selected) sel.value = selected.id || selected.value;
 }
 
 async function loadEngines() {
   try {
     // 检测由高级设置模块在应用启动时统一执行，任务页只读取最新状态。
-    initEngines(await Api.listTranslationEngines());
+    const items = normalizeTaskEngines(await Api.listTranslationEngines());
+    initEngines(items);
+    engineLanguageController?.setEngines(items);
   } catch (_) {
     initEngines();
+    engineLanguageController?.setEngines([LOCAL_ENGINE_FALLBACK]);
   }
 }
 
@@ -178,6 +288,7 @@ async function initSrtOptions() {
     renderTargetLanguages(targetLanguages);
     const localOptions = localStates.filter((item) => item.status === "READY").map((item) => `local:${item.name}`);
     renderModelWeights([...models.filter((model) => !String(model).startsWith("local:")), ...localOptions], localStates);
+    engineLanguageController?.sync();
   } catch (err) {
     toast(err.message || "获取识别选项失败，已使用默认选项", "ph-warning-circle");
   }
@@ -185,9 +296,17 @@ async function initSrtOptions() {
 
 export function initConsole() {
   // 初始化控制台表单交互。
+  engineLanguageController = createEngineLanguageController({
+    engineSelect: $("#engine"),
+    sourceSelect: $("#sourceLang"),
+    targetSelect: $("#targetLang"),
+  });
   initEngines();
-  loadEngines();
+  engineLanguageController.setEngines([LOCAL_ENGINE_FALLBACK]);
   document.addEventListener("translation-engines-change", () => loadEngines());
+  document.addEventListener("viewchange", (event) => {
+    if (event.detail?.view === "tasks") loadEngines();
+  });
   initSrtOptions();
 
   const form = $("#taskForm");
@@ -330,23 +449,6 @@ export function initConsole() {
     return runProbe(url);
   }
 
-  function collectPayload() {
-    // 收集表单参数，URL 和上传任务共用同一组字幕/烧录设置。
-    return {
-      sourceLang: $("#sourceLang").value,
-      targetLang: $("#targetLang").value,
-      mode: form.elements.mode.value,
-      burn: form.elements.burn.value,
-      model: $("#model").value,
-      engine: $("#engine").value,
-      needSubtitle: form.elements.needSubtitle.value === "on",
-      quality: $("#quality")?.value || "480p",
-      ttsEnabled: form.elements.ttsEnabled.checked,
-      ttsVoice: form.elements.ttsVoice.value,
-      originalVoiceMode: form.elements.originalVoiceMode.value,
-    };
-  }
-
   function currentVideoFile() {
     // 读取当前上传视频；即使组件状态被重建，也以 file input 中的文件为准。
     const file = selectedFile || Array.from(fileInput.files || []).find(isVideoFile);
@@ -420,17 +522,18 @@ export function initConsole() {
       if (p.querySelector('[name="needSubtitle"]')) return; // 跳过开关自身
       if (p.id === "qualityParam") return; // 下载画质始终保持可用
       p.classList.toggle("is-disabled", !need);
-      p.querySelectorAll("select, input").forEach((c) => (c.disabled = !need));
+      p.querySelectorAll("select, input").forEach((c) => {
+        c.disabled = !need || (engineLanguageController?.isLocked() && ["sourceLang", "targetLang"].includes(c.id));
+      });
     });
   }
   const ttsEnabledInput = form.elements.ttsEnabled;
   const ttsHint = $("#ttsHint");
   function syncTtsHint() {
-    const supported = $("#targetLang").value.toLowerCase().startsWith("zh")
-      || $("#targetLang").value.toLowerCase().startsWith("en");
-    ttsHint.textContent = !ttsEnabledInput.checked
-      ? "仅支持中文或英文目标语。"
-      : supported ? "将生成单独的配音视频；原字幕视频仍会保留。" : "当前目标语不支持 Kokoro 配音，请改选中文或英文。";
+    const targetLang = $("#targetLang").value;
+    const supported = String(targetLang).toLowerCase().startsWith("zh")
+      || String(targetLang).toLowerCase().startsWith("en");
+    ttsHint.textContent = ttsHintForTarget(targetLang, ttsEnabledInput.checked);
     ttsHint.classList.toggle("is-error", ttsEnabledInput.checked && !supported);
     return supported;
   }
@@ -440,12 +543,27 @@ export function initConsole() {
   form.querySelectorAll('input[name="needSubtitle"]').forEach((r) =>
     r.addEventListener("change", syncSubtitleParams)
   );
+  engineLanguageController.setOnLockChange(() => {
+    syncSubtitleParams();
+    syncTtsHint();
+  });
   syncSubtitleParams();
+  loadEngines();
+
+  $("#engine").addEventListener("change", () => {
+    if (engineLanguageController.sync()) toast("本地引擎仅支持英语 → 简体中文", "ph-info");
+  });
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const videoFile = currentVideoFile();
     const url = urlInput.value.trim();
+    const selectedEngine = engineLanguageController.selectedEngine();
+
+    if (requiresReadyLocalTranslation(selectedEngine, form.elements.needSubtitle.value === "on")) {
+      toast("本地模型尚未就绪，请先下载并转换模型", "ph-warning-circle");
+      return;
+    }
 
     if (ttsEnabledInput.checked && !syncTtsHint()) {
       $("#targetLang").focus();
@@ -467,7 +585,7 @@ export function initConsole() {
     }
 
     const payload = {
-      ...collectPayload(),
+      ...collectTaskPayload(form),
       ...(videoFile ? { file: videoFile } : { url }),
     };
 

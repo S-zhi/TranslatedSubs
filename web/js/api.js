@@ -303,6 +303,14 @@ const RealApi = {
     return res.json();
   },
 
+  async downloadTranslationEngine(id) {
+    const res = await request(this.base, `/api/settings/translation-engines/${encodeURIComponent(id)}/download`, {
+      method: "POST",
+    });
+    if (!res.ok) throw new Error(await readError(res, "下载本地翻译模型失败"));
+    return res.json();
+  },
+
   async deleteTranslationEngine(id) {
     const res = await request(this.base, `/api/settings/translation-engines/${encodeURIComponent(id)}`, { method: "DELETE" });
     if (!res.ok) throw new Error(await readError(res, "删除翻译引擎失败"));
@@ -848,7 +856,11 @@ const MockApi = (() => {
       };
     },
     async listTranslationEngines() {
-      try { return JSON.parse(localStorage.getItem("subtrans_mock_engines_v1") || "[]"); } catch (_) { return []; }
+      const fallbackLocal = { id: "local-opus-en-zh", name: "本地 CPU 英译中", apiType: "local_ct2", model: "Helsinki-NLP/opus-mt-en-zh", baseUrl: "", enabled: true, hasApiKey: false, availability: "UNAVAILABLE", modelStatus: "NOT_INSTALLED", installedBytes: 0 };
+      try {
+        const list = JSON.parse(localStorage.getItem("subtrans_mock_engines_v1") || "[]");
+        return list.some((engine) => engine.id === fallbackLocal.id) ? list : [...list, fallbackLocal];
+      } catch (_) { return [fallbackLocal]; }
     },
     async createTranslationEngine(payload) {
       const list = await this.listTranslationEngines();
@@ -862,6 +874,17 @@ const MockApi = (() => {
       localStorage.setItem("subtrans_mock_engines_v1", JSON.stringify(list.map((e) => e.id === id ? item : e))); return item;
     },
     async validateTranslationEngine(id) { const list = await this.listTranslationEngines(); const item = list.find((e) => e.id === id); if (item) { item.availability = item.hasApiKey ? "AVAILABLE" : "UNCONFIGURED"; localStorage.setItem("subtrans_mock_engines_v1", JSON.stringify(list)); } return item || {}; },
+    async downloadTranslationEngine(id) {
+      if (id !== "local-opus-en-zh") throw new Error("未知本地翻译模型");
+      const list = await this.listTranslationEngines();
+      const defaults = { id, name: "本地 CPU 英译中", apiType: "local_ct2", model: "Helsinki-NLP/opus-mt-en-zh", baseUrl: "", enabled: true, hasApiKey: false, availability: "AVAILABLE", modelStatus: "READY", installedBytes: 0 };
+      const next = list.some((engine) => engine.id === id)
+        ? list.map((engine) => engine.id === id ? { ...engine, ...defaults } : engine)
+        : [...list, defaults];
+      localStorage.setItem("subtrans_mock_engines_v1", JSON.stringify(next));
+      await delay(120);
+      return defaults;
+    },
     async deleteTranslationEngine(id) { const list = (await this.listTranslationEngines()).filter((e) => e.id !== id); localStorage.setItem("subtrans_mock_engines_v1", JSON.stringify(list)); },
     async deleteTask(id) { tasks = tasks.filter((t) => t.id !== id); persist(); await delay(80); },
     async cancelTask(id) {

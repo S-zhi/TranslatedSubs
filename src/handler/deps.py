@@ -38,6 +38,7 @@ def get_translation_engine_store() -> TranslationEngineStore:
             base_url=settings.deepseek_base_url,
             model=settings.deepseek_model,
         )
+        _translation_engine_store.ensure_local_ct2()
     return _translation_engine_store
 
 

@@ -18,6 +18,36 @@ def _settings(tmp_path, *, deepseek_api_key=None, api_token=None):
     )
 
 
+def _mock_local_engine(
+    monkeypatch, *, model_ready: bool, dependencies_ready: bool, enabled: bool = True,
+    missing_dependencies=(),
+):
+    import src.handler.deps as deps
+
+    monkeypatch.setattr(
+        deps,
+        "get_translation_engine_store",
+        lambda: SimpleNamespace(
+            get=lambda engine_id: SimpleNamespace(id=engine_id, enabled=enabled)
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_check,
+        "get_translation_model_manager",
+        lambda: SimpleNamespace(
+            is_ready=lambda: model_ready,
+            dependency_status=lambda: {
+                "ready": dependencies_ready,
+                "missing": list(missing_dependencies),
+            },
+        ),
+    )
+
+
+def _mock_ready_local_engine(monkeypatch):
+    _mock_local_engine(monkeypatch, model_ready=True, dependencies_ready=True)
+
+
 def test_readiness_reports_fixed_config_location_and_missing_values(monkeypatch, tmp_path):
     monkeypatch.setattr(runtime_check, "settings", _settings(tmp_path))
     monkeypatch.delenv("REPLICATE_API_TOKEN", raising=False)
@@ -26,6 +56,12 @@ def test_readiness_reports_fixed_config_location_and_missing_values(monkeypatch,
     monkeypatch.setattr(runtime_check.shutil, "which", lambda _: None)
     monkeypatch.setattr(runtime_check.importlib.util, "find_spec", lambda _: None)
     monkeypatch.setattr(runtime_check, "has_subtitles_filter", lambda _: False)
+    _mock_local_engine(
+        monkeypatch,
+        model_ready=False,
+        dependencies_ready=False,
+        missing_dependencies=("ctranslate2", "transformers"),
+    )
 
     result = runtime_check.build_readiness()
 
@@ -34,16 +70,77 @@ def test_readiness_reports_fixed_config_location_and_missing_values(monkeypatch,
     assert result["config_file"] == str(tmp_path / ".env")
     assert "REPLICATE_API_TOKEN" not in result["missing"]
     assert "REPLICATE_API_TOKEN" not in result["required_environment"]
-    assert "SUBTRANS_DEEPSEEK_API_KEY 或 DEEPSEEK_API_KEY" in result["missing"]
+    assert any("本地翻译依赖缺失" in item for item in result["missing"])
     assert result["capabilities"]["download"] is False
     assert result["agent_action"] == "ask_user_to_configure"
-    assert result["restart_required"] is True
+    assert result["restart_required"] is False
+
+
+def test_app_health_starts_without_local_optional_dependencies_and_readiness_names_them(
+    monkeypatch, tmp_path
+):
+    """The API can start without CT2 packages, while readiness is explicit."""
+    monkeypatch.setattr(runtime_check, "settings", _settings(tmp_path))
+    monkeypatch.delenv("REPLICATE_API_TOKEN", raising=False)
+    # A legacy key is reported, but it cannot make the default local pipeline
+    # ready when the local optional dependencies are absent.
+    monkeypatch.setenv("SUBTRANS_DEEPSEEK_API_KEY", "legacy-deepseek-key")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(runtime_check.shutil, "which", lambda command: f"/usr/bin/{command}")
+    monkeypatch.setattr(runtime_check.importlib.util, "find_spec", lambda _: None)
+    monkeypatch.setattr(runtime_check, "has_subtitles_filter", lambda _: True)
+    _mock_local_engine(
+        monkeypatch,
+        model_ready=True,
+        dependencies_ready=False,
+        missing_dependencies=("ctranslate2", "transformers", "sentencepiece"),
+    )
+
+    result = runtime_check.build_readiness()
+    assert result["checks"]["local_translation_dependencies"] == "missing"
+    assert result["checks"]["local_translation_model"] == "available"
+    assert result["checks"]["translation_engine"] == "missing"
+    assert result["checks"]["deepseek_api_key"] == "available"
+    assert result["initialized"] is False
+    assert result["restart_required"] is False
+    assert any("本地翻译依赖缺失" in item for item in result["missing"])
+
+    # Health is a lightweight liveness endpoint and must not import optional
+    # model packages or fail merely because the local engine is not installed.
+    from fastapi.testclient import TestClient
+    from src.handler.app import app
+
+    with TestClient(app) as client:
+        assert client.get("/api/health").status_code == 200
+
+
+def test_deepseek_key_does_not_bypass_missing_local_model(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        runtime_check,
+        "settings",
+        _settings(tmp_path, deepseek_api_key="legacy-deepseek-key"),
+    )
+    monkeypatch.setattr(runtime_check, "_configured_replicate_token", lambda: None)
+    monkeypatch.setattr(runtime_check, "_check_binary", lambda _command: "available")
+    monkeypatch.setattr(runtime_check, "_check_writable_directory", lambda _path: "writable")
+    monkeypatch.setattr(runtime_check.importlib.util, "find_spec", lambda _module: object())
+    monkeypatch.setattr(runtime_check, "has_subtitles_filter", lambda _command: True)
+    _mock_local_engine(monkeypatch, model_ready=False, dependencies_ready=True)
+
+    result = runtime_check.build_readiness()
+
+    assert result["checks"]["deepseek_api_key"] == "available"
+    assert result["checks"]["translation_engine"] == "missing"
+    assert result["initialized"] is False
+    assert result["restart_required"] is False
+    assert any("本地翻译模型未就绪" in item for item in result["missing"])
 
 
 def test_readiness_reports_capabilities_without_exposing_keys(monkeypatch, tmp_path):
     monkeypatch.setattr(runtime_check, "settings", _settings(tmp_path))
     monkeypatch.setenv("REPLICATE_API_TOKEN", "replicate-secret")
     monkeypatch.setenv("SUBTRANS_DEEPSEEK_API_KEY", "deepseek-secret")
+    _mock_ready_local_engine(monkeypatch)
     monkeypatch.setattr(
         runtime_check.shutil,
         "which",
@@ -84,6 +181,7 @@ def test_readiness_guides_agent_to_soft_burn_when_libass_is_missing(monkeypatch,
     monkeypatch.setattr(runtime_check, "settings", _settings(tmp_path))
     monkeypatch.setenv("REPLICATE_API_TOKEN", "replicate-secret")
     monkeypatch.setenv("SUBTRANS_DEEPSEEK_API_KEY", "deepseek-secret")
+    _mock_ready_local_engine(monkeypatch)
     monkeypatch.setattr(
         runtime_check.shutil,
         "which",
@@ -110,6 +208,7 @@ def test_readiness_reports_invalid_replicate_token(monkeypatch, tmp_path):
     monkeypatch.setattr(runtime_check, "settings", _settings(tmp_path))
     monkeypatch.setenv("REPLICATE_API_TOKEN", "invalid-token")
     monkeypatch.setenv("SUBTRANS_DEEPSEEK_API_KEY", "deepseek-secret")
+    _mock_ready_local_engine(monkeypatch)
     monkeypatch.setattr(
         runtime_check.shutil,
         "which",
@@ -139,6 +238,7 @@ def test_readiness_reports_cached_replicate_check_metadata(monkeypatch, tmp_path
     monkeypatch.setattr(runtime_check, "settings", _settings(tmp_path))
     monkeypatch.setenv("REPLICATE_API_TOKEN", "replicate-secret")
     monkeypatch.setenv("SUBTRANS_DEEPSEEK_API_KEY", "deepseek-secret")
+    _mock_ready_local_engine(monkeypatch)
     monkeypatch.setattr(
         runtime_check.shutil,
         "which",
@@ -182,6 +282,7 @@ def test_readiness_handles_unavailable_replicate_check_gracefully(monkeypatch, t
     monkeypatch.setattr(runtime_check, "settings", _settings(tmp_path))
     monkeypatch.setenv("REPLICATE_API_TOKEN", "replicate-secret")
     monkeypatch.setenv("SUBTRANS_DEEPSEEK_API_KEY", "deepseek-secret")
+    _mock_ready_local_engine(monkeypatch)
     monkeypatch.setattr(
         runtime_check.shutil,
         "which",
@@ -212,6 +313,7 @@ def test_readiness_handles_replicate_query_exception_without_leaking_details(mon
     monkeypatch.setattr(runtime_check, "settings", _settings(tmp_path))
     monkeypatch.setenv("REPLICATE_API_TOKEN", "replicate-secret")
     monkeypatch.setenv("SUBTRANS_DEEPSEEK_API_KEY", "deepseek-secret")
+    _mock_ready_local_engine(monkeypatch)
     monkeypatch.setattr(runtime_check.shutil, "which", lambda command: f"/usr/bin/{command}")
     monkeypatch.setattr(runtime_check.importlib.util, "find_spec", lambda _: object())
     monkeypatch.setattr(runtime_check, "has_subtitles_filter", lambda _: True)
@@ -234,6 +336,7 @@ def test_readiness_normalizes_non_dict_replicate_result(monkeypatch, tmp_path):
     monkeypatch.setattr(runtime_check, "settings", _settings(tmp_path))
     monkeypatch.setenv("REPLICATE_API_TOKEN", "replicate-secret")
     monkeypatch.setenv("SUBTRANS_DEEPSEEK_API_KEY", "deepseek-secret")
+    _mock_ready_local_engine(monkeypatch)
     monkeypatch.setattr(runtime_check.shutil, "which", lambda command: f"/usr/bin/{command}")
     monkeypatch.setattr(runtime_check.importlib.util, "find_spec", lambda _: object())
     monkeypatch.setattr(runtime_check, "has_subtitles_filter", lambda _: True)

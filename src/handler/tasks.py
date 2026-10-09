@@ -54,11 +54,13 @@ from src.service.runner import _cleanup_partial_artifacts, cancel_pipeline, enqu
 from src.service.asset_resolver import AssetResolver, ResourceState
 from src.service.probe_batch import probe_batch_manager
 from src.service.model_manager import model_manager
+from src.service.translation_model_manager import get_translation_model_manager
 from src.store import (
     DOWNGRADE_REASON_DISK_FAILURE,
     DOWNGRADE_REASON_UNKNOWN,
     DOWNGRADE_REASON_USER_CLEANED,
     DOWNGRADE_REASON_VOLUME_MIGRATED,
+    DEFAULT_TRANSLATION_ENGINE_ID,
     RESOURCE_STATUS_AVAILABLE,
     RESOURCE_STATUS_MISSING,
     ProbeStore,
@@ -159,10 +161,51 @@ def _ensure_translation_engine(
         raise HTTPException(status_code=422, detail="翻译引擎配置不存在")
     if not rec.enabled:
         raise HTTPException(status_code=422, detail="翻译引擎已停用")
+    if rec.api_type == "local_ct2":
+        manager = get_translation_model_manager()
+        if not manager.is_ready():
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "LOCAL_TRANSLATION_MODEL_NOT_READY",
+                    "message": "本地英译中模型尚未安装，请先在翻译引擎设置中下载。",
+                },
+            )
+        dependency_status = getattr(manager, "dependency_status", None)
+        if dependency_status is not None:
+            status = dependency_status()
+            if not status.get("ready", False):
+                missing = ", ".join(status.get("missing", []))
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "LOCAL_TRANSLATION_DEPENDENCY_MISSING",
+                        "message": f"本地翻译依赖未安装：{missing}。请运行 uv sync --extra local-translation。",
+                    },
+                )
+        return
     if not (rec.api_key and rec.api_key.strip()):
         raise HTTPException(status_code=422, detail="翻译引擎尚未配置 API Key")
     if rec.availability != "AVAILABLE":
         raise HTTPException(status_code=422, detail="翻译引擎尚未通过可用性检测")
+
+
+def _ensure_supported_translation_languages(
+    engine: str,
+    need_subtitle: bool,
+    source_lang: str,
+    target_lang: str,
+) -> None:
+    if not need_subtitle or engine != "local-opus-en-zh":
+        return
+    if source_lang != "en" or target_lang not in {"zh-CN", "zh"}:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "UNSUPPORTED_TRANSLATION_LANGUAGE",
+                "message": "本地翻译模型只支持源语言 en 和目标语言 zh-CN/zh。",
+            },
+        )
 
 
 def scan_missing_terminal(
@@ -272,6 +315,7 @@ def create_task(
     engines: TranslationEngineStore = Depends(get_translation_engine_store),
     task_origin: str = Header("web", alias="X-Task-Origin"),
 ) -> TaskOut:
+    _ensure_supported_translation_languages(body.engine, body.needSubtitle, body.sourceLang, body.targetLang)
     _ensure_local_model_ready(body.model)
     _ensure_translation_engine(body.engine, body.needSubtitle, engines)
     rec, created = store.create_if_no_recent_active(
@@ -305,12 +349,12 @@ def create_task(
 @router.post("/upload", response_model=TaskOut, status_code=201, dependencies=[Depends(require_api_token)])
 def create_upload_task(
     file: UploadFile = File(..., description="本地视频文件"),
-    sourceLang: str = Form("auto", min_length=1),
+    sourceLang: str = Form("en", min_length=1),
     targetLang: str = Form("zh-CN", min_length=1),
     mode: Literal["mono", "bilingual"] = Form("mono"),
     burn: Literal["hard", "soft"] = Form("hard"),
     model: str = Form("local:tiny", min_length=1),
-    engine: str = Form("deepseek", min_length=1),
+    engine: str = Form(DEFAULT_TRANSLATION_ENGINE_ID, min_length=1),
     needSubtitle: bool = Form(True),
     ttsEnabled: bool = Form(False),
     ttsVoice: str = Form("auto"),
@@ -326,6 +370,7 @@ def create_upload_task(
     # 实际文件大小在写入过程中通过 written_bytes 流式校验。
     max_upload_bytes = settings.max_upload_mb * 1024 * 1024
     filename = (file.filename or "").strip()
+    _ensure_supported_translation_languages(engine, needSubtitle, sourceLang, targetLang)
     _ensure_translation_engine(engine, needSubtitle, engines)
     _ensure_local_model_ready(model)
     if ttsEnabled and not needSubtitle:

@@ -115,7 +115,7 @@ curl.exe http://127.0.0.1:8000/api/health/ready
 
 ```bash
 cp .env.example .env
-# .env में SUBTRANS_DEEPSEEK_API_KEY सेट करें
+# डिफ़ॉल्ट स्थानीय अनुवादक को API कुंजी की आवश्यकता नहीं है; क्लाउड कुंजी केवल आवश्यकता होने पर सेट करें।
 docker build -t translatedsubs:local . && docker run -d --name translatedsubs --restart unless-stopped -p 8000:8000 --env-file .env -e SUBTRANS_DATA_DIR=/data -e SUBTRANS_DB=/data/db/app.db -v translatedsubs-data:/data translatedsubs:local
 ```
 
@@ -142,11 +142,11 @@ docker build -t translatedsubs:local . && docker run -d --name translatedsubs --
 
 ## मुख्य कॉन्फ़िगरेशन और डेटा
 
-`.env.example` की प्रति बनाएँ और `.env` में `SUBTRANS_DEEPSEEK_API_KEY` भरें। सभी सेटिंग और उनके डिफ़ॉल्ट मान [पर्यावरण चर टेम्पलेट](../../.env.example) में हैं। सामान्य सेटिंग ये हैं:
+`.env.example` की प्रति बनाएँ और बिना API कुंजी के सेवा शुरू करें। डिफ़ॉल्ट अनुवादक CPU पर स्थानीय रूप से अंग्रेज़ी → सरलीकृत चीनी अनुवाद करता है; `uv sync --extra local-translation` से निर्भरताएँ इंस्टॉल करें और सेटिंग में मॉडल डाउनलोड करें। DeepSeek चुनने पर ही `SUBTRANS_DEEPSEEK_API_KEY` सेट करें। सभी सेटिंग और उनके डिफ़ॉल्ट मान [पर्यावरण चर टेम्पलेट](../../.env.example) में हैं। सामान्य सेटिंग ये हैं:
 
 | सेटिंग | उपयोग |
 | --- | --- |
-| `SUBTRANS_DEEPSEEK_API_KEY` | सबटाइटल अनुवाद के लिए DeepSeek कुंजी; इसके बिना पूरी प्रक्रिया तैयार नहीं होगी। |
+| `SUBTRANS_DEEPSEEK_API_KEY` | स्पष्ट क्लाउड संगत पथ के लिए वैकल्पिक DeepSeek कुंजी। |
 | `SUBTRANS_DATA_DIR`, `SUBTRANS_DB` | फ़ाइलों और SQLite कार्य डेटाबेस का स्थान; Docker उदाहरण दोनों को स्थायी वॉल्यूम में रखता है। |
 | `SUBTRANS_TRANSCRIBER_BACKEND` | डिफ़ॉल्ट `local_whisper`; आवश्यकता पर `replicate` या संगत HTTP सेवा चुनें। |
 | `SUBTRANS_COOKIES` | उन वेबसाइटों के लिए Cookie फ़ाइल जो लॉगिन या उम्र सत्यापन माँगती हैं। |

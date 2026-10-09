@@ -149,11 +149,11 @@ docker build -t translatedsubs:local . && docker run -d --name translatedsubs --
 
 ## 关键配置与数据
 
-先复制 `.env.example`，再在 `.env` 填写 `SUBTRANS_DEEPSEEK_API_KEY`。完整字段和默认值以[环境变量模板](../../.env.example)为准；日常最常调整的是：
+先复制 `.env.example` 即可启动服务；默认翻译引擎是本地 CPU 英语 → 简体中文。先执行 `uv sync --extra local-translation`，再在设置中下载并转换模型。只有显式选择 DeepSeek 时才需要配置 `SUBTRANS_DEEPSEEK_API_KEY`。完整字段和默认值以[环境变量模板](../../.env.example)为准；日常最常调整的是：
 
 | 配置                                            | 用途                                                                        |
 | ----------------------------------------------- | --------------------------------------------------------------------------- |
-| `SUBTRANS_DEEPSEEK_API_KEY`                     | 字幕翻译所需的 DeepSeek 密钥；缺失时完整字幕流水线不会就绪。                |
+| `SUBTRANS_DEEPSEEK_API_KEY`                     | 可选的 DeepSeek 密钥；默认本地翻译不需要它。                                |
 | `SUBTRANS_DATA_DIR`、`SUBTRANS_DB`              | 视频、字幕和 SQLite 任务数据库的位置；Docker 示例把两者放在持久化数据卷中。 |
 | `SUBTRANS_TRANSCRIBER_BACKEND`                  | 默认 `local_whisper`；可显式选择 `replicate` 或兼容 HTTP 服务。             |
 | `SUBTRANS_COOKIES`                              | 仅在目标网站要求登录或年龄验证时配置 Cookie 文件。                          |

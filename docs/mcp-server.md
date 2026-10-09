@@ -5,9 +5,10 @@ MCP Server 是业务 FastAPI 的独立适配层。它不直接访问 SQLite，�
 
 ## 启动业务服务
 
-先在项目根目录创建 `.env`：
+默认本地翻译不需要 API Key。需要使用云端兼容引擎时，再在项目根目录的 `.env` 配置对应密钥：
 
 ```ini
+# 可选：云端识别/翻译兼容配置
 REPLICATE_API_TOKEN=your-replicate-token
 SUBTRANS_DEEPSEEK_API_KEY=your-deepseek-key
 ```
@@ -17,6 +18,8 @@ SUBTRANS_DEEPSEEK_API_KEY=your-deepseek-key
 ```bash
 uv run uvicorn src.handler.app:app --port 8000
 ```
+
+业务服务可以在没有本地翻译可选依赖和模型文件时启动。要运行默认的本地英语 → 简体中文翻译，先执行 `uv sync --extra local-translation`，再在 Web 设置中点击“本地 CPU 英译中”的“下载并转换”；模型未就绪时，`check_subtitle_setup` 会报告缺少的安装条件。
 
 可以先检查业务服务是否就绪：
 
@@ -59,7 +62,7 @@ uv run python -m src.mcp_server.server
 
 ## MCP 工具
 
-- `check_subtitle_setup`：检查业务服务、密钥、FFmpeg 和存储目录。
+- `check_subtitle_setup`：检查业务服务、本地模型/可选依赖、兼容密钥、FFmpeg 和存储目录。
 - `probe_video`：预检测 URL，不下载文件。
 - `start_subtitle_pipeline`：异步启动完整流水线并返回 `task_id`。
 - `get_task_status`：查询任务状态和进度。
@@ -67,7 +70,7 @@ uv run python -m src.mcp_server.server
 - `list_tasks`：查看最近任务。
 - `retry_task`：在用户确认后重试失败任务。
 
-常见错误码及处理方式：`BUSINESS_UNAVAILABLE` 表示业务 API 未启动，`NOT_INITIALIZED` 表示业务 `.env` 缺少配置，`INVALID_URL`/`PROBE_FAILED` 表示需要修正视频地址，`HARD_BURN_UNAVAILABLE` 表示应改用软字幕或安装带 libass 的 FFmpeg，`TASK_NOT_READY` 表示继续轮询，`RESOURCE_MISSING` 表示重新运行任务。`TASK_ALREADY_RUNNING` 返回已有任务 ID 时应复用该任务，不要重复创建。
+常见错误码及处理方式：`BUSINESS_UNAVAILABLE` 表示业务 API 未启动，`NOT_INITIALIZED` 表示流水线条件尚未满足，`LOCAL_TRANSLATION_MODEL_NOT_READY` 表示先下载本地模型，`LOCAL_TRANSLATION_DEPENDENCY_MISSING` 表示先安装 `local-translation` 可选依赖，`INVALID_URL`/`PROBE_FAILED` 表示需要修正视频地址，`HARD_BURN_UNAVAILABLE` 表示应改用软字幕或安装带 libass 的 FFmpeg，`TASK_NOT_READY` 表示继续轮询，`RESOURCE_MISSING` 表示重新运行任务。`TASK_ALREADY_RUNNING` 返回已有任务 ID 时应复用该任务，不要重复创建。
 
 ## Agent 自主发现与执行
 
@@ -91,6 +94,6 @@ Agent 不应把 API Key 作为工具参数传递，也不应直接读写业务�
 
 ## 初始化失败时的行为
 
-MCP 不会要求模型传递 API Key，也不会把密钥写入 MCP 配置。业务配置缺失时，
-`check_subtitle_setup` 和 `start_subtitle_pipeline` 会返回项目根目录 `.env` 的
-固定位置和缺失项，填写后需要重启业务服务。
+MCP 不会要求模型传递 API Key，也不会把密钥写入 MCP 配置。本地模型条件缺失时，
+`check_subtitle_setup` 会返回缺失项和安装提示；安装或下载完成后无需重启业务服务。
+只有修改业务 `.env` 中的云端配置时，才按提示重启服务。

@@ -115,7 +115,7 @@ curl.exe http://127.0.0.1:8000/api/health/ready
 
 ```bash
 cp .env.example .env
-# Укажите SUBTRANS_DEEPSEEK_API_KEY в .env
+# Локальный переводчик по умолчанию не требует API-ключа; облачные ключи настраиваются только при необходимости.
 docker build -t translatedsubs:local . && docker run -d --name translatedsubs --restart unless-stopped -p 8000:8000 --env-file .env -e SUBTRANS_DATA_DIR=/data -e SUBTRANS_DB=/data/db/app.db -v translatedsubs-data:/data translatedsubs:local
 ```
 
@@ -142,11 +142,11 @@ docker build -t translatedsubs:local . && docker run -d --name translatedsubs --
 
 ## Основные настройки и данные
 
-Скопируйте `.env.example` и укажите `SUBTRANS_DEEPSEEK_API_KEY` в `.env`. Все параметры и значения по умолчанию перечислены в [шаблоне переменных окружения](../../.env.example). Основные параметры:
+Скопируйте `.env.example` и запустите сервис без API-ключа. Переводчик по умолчанию работает локально на CPU и переводит с английского на упрощённый китайский; установите зависимости через `uv sync --extra local-translation` и скачайте модель в настройках. Укажите `SUBTRANS_DEEPSEEK_API_KEY` только при явном выборе DeepSeek. Все параметры и значения по умолчанию перечислены в [шаблоне переменных окружения](../../.env.example). Основные параметры:
 
 | Параметр | Назначение |
 | --- | --- |
-| `SUBTRANS_DEEPSEEK_API_KEY` | Ключ DeepSeek для перевода субтитров; без него полный процесс не готов к работе. |
+| `SUBTRANS_DEEPSEEK_API_KEY` | Необязательный ключ DeepSeek для явного облачного совместимого пути. |
 | `SUBTRANS_DATA_DIR`, `SUBTRANS_DB` | Пути к файлам и базе задач SQLite; в примере Docker они находятся в постоянном томе. |
 | `SUBTRANS_TRANSCRIBER_BACKEND` | По умолчанию `local_whisper`; при необходимости выберите `replicate` или совместимый HTTP-сервис. |
 | `SUBTRANS_COOKIES` | Файл cookie для сайтов, требующих входа или подтверждения возраста. |

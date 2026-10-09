@@ -25,6 +25,10 @@ from typing import Callable, List, Optional
 from src.config import settings, ensure_task_dir, TRANSLATED_SRT
 from src.core.translation_engines import TranslationEngineError, make_engine_client
 from src.core.srt_utils import Subtitle, parse_srt, write_srt
+from src.service.translation_model_manager import (
+    TranslationModelError,
+    get_translation_model_manager,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +132,34 @@ def translate_texts(
     """
     if not texts:
         return []
+    api_type = (
+        getattr(engine_config, "api_type", None)
+        if engine_config is not None
+        else None
+    )
+    if isinstance(engine_config, dict):
+        api_type = engine_config.get("api_type", api_type)
+    if api_type == "local_ct2":
+        if source_lang != "en" or target_lang not in {"zh-CN", "zh"}:
+            raise TranslateError(
+                "本地翻译模型只支持 en 到 zh-CN/zh",
+                code="unsupported_language",
+            )
+        manager = get_translation_model_manager()
+        batch_size = max(1, getattr(settings, "local_translate_batch_size", 16))
+        translated: List[str] = []
+        for start in range(0, len(texts), batch_size):
+            if cancel_check is not None:
+                cancel_check()
+            batch = texts[start:start + batch_size]
+            try:
+                translated.extend(manager.translate_texts(batch, cancel_check=cancel_check))
+            except TranslationModelError as exc:
+                raise TranslateError(str(exc), code=exc.code) from exc
+            if on_batch is not None:
+                on_batch(len(translated), len(texts))
+        return translated
+
     key = api_key or settings.deepseek_api_key
     if engine_config is not None:
         key = getattr(engine_config, "api_key", None) or (engine_config.get("api_key") if isinstance(engine_config, dict) else None)

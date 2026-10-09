@@ -15,7 +15,9 @@ from typing import Any
 
 from src.config import settings
 from src.core.ffmpeg_utils import has_subtitles_filter
+from src.service.translation_model_manager import get_translation_model_manager
 from src.service.replicate_account import query_replicate_balance
+from src.store import DEFAULT_TRANSLATION_ENGINE_ID
 
 
 def _check_binary(command: str) -> str:
@@ -104,6 +106,40 @@ def build_readiness() -> dict[str, Any]:
         or os.getenv("DEEPSEEK_API_KEY")
         or settings.deepseek_api_key
     )
+    local_engine = None
+    local_engine_enabled = False
+    local_model_ready = False
+    local_dependency_ready = False
+    local_translation_ready = False
+    try:
+        from src.handler.deps import get_translation_engine_store
+
+        local_engine = get_translation_engine_store().get(DEFAULT_TRANSLATION_ENGINE_ID)
+        local_engine_enabled = bool(local_engine and local_engine.enabled)
+        manager = get_translation_model_manager()
+        check_dependencies = getattr(manager, "dependency_status", None)
+        local_dependencies = check_dependencies() if check_dependencies is not None else {"ready": True, "missing": []}
+        local_model_ready = bool(manager.is_ready())
+        local_dependency_ready = bool(local_dependencies.get("ready", False))
+        local_translation_ready = bool(
+            local_engine_enabled
+            and local_model_ready
+            and local_dependency_ready
+        )
+    except Exception:
+        # Readiness remains useful when the translation-engine database is
+        # temporarily unavailable; the legacy DeepSeek check is still reported.
+        local_translation_ready = False
+        local_dependencies = {"ready": False, "missing": []}
+        local_engine = None
+        local_engine_enabled = False
+        local_model_ready = False
+        local_dependency_ready = False
+
+    # The local engine is the default execution path.  A configured DeepSeek
+    # key remains visible for compatibility, but it must not make the default
+    # readiness check pass while the local model is absent or broken.
+    translation_ready = local_translation_ready
     ffmpeg_status = _check_binary(settings.ffmpeg_bin)
     ffprobe_status = _check_binary(settings.ffprobe_bin)
     yt_dlp_status = "available" if importlib.util.find_spec("yt_dlp") else "missing"
@@ -122,12 +158,24 @@ def build_readiness() -> dict[str, Any]:
         and data_dir_status == "writable"
         and db_dir_status == "writable"
     )
-    full_pipeline_ready = download_ready and deepseek_ready
+    full_pipeline_ready = download_ready and translation_ready
     hard_pipeline_ready = full_pipeline_ready and hard_burn_ready
 
     missing: list[str] = []
-    if not deepseek_ready:
-        missing.append("SUBTRANS_DEEPSEEK_API_KEY 或 DEEPSEEK_API_KEY")
+    if not translation_ready:
+        if local_engine is not None:
+            if not local_engine_enabled:
+                missing.append("本地翻译引擎已停用")
+            if not local_model_ready:
+                missing.append("本地翻译模型未就绪，请在翻译引擎设置中点击“下载并转换”")
+            if not local_dependency_ready:
+                dependency_names = local_dependencies.get("missing", [])
+                if dependency_names:
+                    missing.append("本地翻译依赖缺失：" + ", ".join(dependency_names))
+                else:
+                    missing.append("本地翻译依赖未就绪")
+        else:
+            missing.append("本地翻译引擎配置不可用")
     if ffmpeg_status != "available":
         missing.append("ffmpeg")
     if ffprobe_status != "available":
@@ -141,13 +189,26 @@ def build_readiness() -> dict[str, Any]:
     if ffmpeg_status == "available" and not hard_burn_ready:
         missing.append("FFmpeg subtitles 滤镜（通常由 libass 提供）")
 
+    local_install_actionable = bool(
+        local_engine is not None
+        and local_engine_enabled
+        and not local_translation_ready
+    )
     if not full_pipeline_ready:
-        message = (
-            "业务服务尚未完成初始化。请在项目根目录的 .env 中配置必要参数，"
-            "并确认 FFmpeg、FFprobe 和 yt-dlp 可用，然后重启业务服务。"
-        )
+        if local_install_actionable:
+            message = (
+                "本地翻译模型尚未就绪，请在翻译引擎设置中下载并转换；"
+                "同时确认 FFmpeg、FFprobe 和 yt-dlp 可用。"
+            )
+        else:
+            message = (
+                "业务服务尚未完成初始化。请配置可用的翻译引擎，"
+                "并确认 FFmpeg、FFprobe 和 yt-dlp 可用。"
+            )
         agent_action = "ask_user_to_configure"
-        restart_required = True
+        # Model downloads and optional Python dependencies are loaded lazily;
+        # fixing either does not require restarting the FastAPI process.
+        restart_required = not local_install_actionable
     elif not hard_burn_ready:
         message = (
             "基础流水线已就绪，但当前 FFmpeg 不支持硬字幕滤镜；"
@@ -165,9 +226,7 @@ def build_readiness() -> dict[str, Any]:
         "initialized": full_pipeline_ready,
         "config_file": str(env_file),
         "config_file_present": env_file.is_file(),
-        "required_environment": [
-            "SUBTRANS_DEEPSEEK_API_KEY 或 DEEPSEEK_API_KEY",
-        ],
+        "required_environment": [],
         "replicate_checked_at": replicate_checked_at,
         "replicate_cached": replicate_cached,
         "checks": {
@@ -176,6 +235,9 @@ def build_readiness() -> dict[str, Any]:
             "replicate_checked_at": replicate_checked_at,
             "replicate_cached": replicate_cached,
             "deepseek_api_key": "available" if deepseek_ready else "missing",
+            "translation_engine": "available" if translation_ready else "missing",
+            "local_translation_model": "available" if local_model_ready else "not_ready",
+            "local_translation_dependencies": "available" if local_dependencies.get("ready") else "missing",
             "ffmpeg": ffmpeg_status,
             "ffprobe": ffprobe_status,
             "yt_dlp": yt_dlp_status,

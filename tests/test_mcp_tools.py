@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 from src.mcp_server.tools import SubtitleMcpTools
+from src.store import DEFAULT_TRANSLATION_ENGINE_ID
 
 
 class FakeBusinessApi:
@@ -74,12 +75,12 @@ def test_start_pipeline_returns_task_id_and_uses_business_contract():
     assert result["task_id"] == "task_1"
     assert api.created_payload == {
         "url": "https://example.test/video",
-        "sourceLang": "auto",
+        "sourceLang": "en",
         "targetLang": "ja",
         "mode": "bilingual",
         "burn": "soft",
         "model": "local:tiny",
-        "engine": "deepseek",
+        "engine": DEFAULT_TRANSLATION_ENGINE_ID,
         "needSubtitle": True,
     }
 

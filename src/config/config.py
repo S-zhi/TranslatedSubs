@@ -302,6 +302,7 @@ _ALIAS_MAP = {
     "deepseek_base_url": "_deepseek_base_url",
     "deepseek_model": "_deepseek_model",
     "translate_batch_size": "_translate_batch_size",
+    "local_translate_batch_size": "_local_translate_batch_size",
     "translate_timeout": "_translate_timeout",
     "target_languages": "_target_languages",
     "lang_names": "_lang_names",
@@ -363,6 +364,7 @@ class Settings:
     _deepseek_base_url: Any = field(default=_UNSET, repr=False)
     _deepseek_model: Any = field(default=_UNSET, repr=False)
     _translate_batch_size: Any = field(default=_UNSET, repr=False)
+    _local_translate_batch_size: Any = field(default=_UNSET, repr=False)
     _translate_timeout: Any = field(default=_UNSET, repr=False)
     _target_languages: Any = field(default=_UNSET, repr=False)
     _lang_names: Any = field(default=_UNSET, repr=False)
@@ -419,6 +421,7 @@ class Settings:
         _deepseek_base_url: Any = _UNSET,
         _deepseek_model: Any = _UNSET,
         _translate_batch_size: Any = _UNSET,
+        _local_translate_batch_size: Any = _UNSET,
         _translate_timeout: Any = _UNSET,
         _target_languages: Any = _UNSET,
         _lang_names: Any = _UNSET,
@@ -475,6 +478,7 @@ class Settings:
             "_deepseek_base_url": _deepseek_base_url,
             "_deepseek_model": _deepseek_model,
             "_translate_batch_size": _translate_batch_size,
+            "_local_translate_batch_size": _local_translate_batch_size,
             "_translate_timeout": _translate_timeout,
             "_target_languages": _target_languages,
             "_lang_names": _lang_names,
@@ -1045,6 +1049,21 @@ class Settings:
             return int(val)
         except (ValueError, TypeError):
             return 8
+
+    # 每批本地 CPU 翻译多少条字幕；独立于云端批量，默认 16。
+    @property
+    def local_translate_batch_size(self) -> int:
+        if self._local_translate_batch_size is not _UNSET:
+            try:
+                return max(1, int(self._local_translate_batch_size))
+            except (ValueError, TypeError):
+                return 16
+        _sync_env_file()
+        val = os.getenv("SUBTRANS_LOCAL_TRANSLATE_BATCH", "16")
+        try:
+            return max(1, int(val))
+        except (ValueError, TypeError):
+            return 16
 
     @property
     def translate_timeout(self) -> int:

@@ -16,7 +16,11 @@ from .task_store import (
 )
 from .translation_engine_store import (
     AVAILABILITY,
+    DEFAULT_TRANSLATION_ENGINE_ID,
     ENGINE_TYPES,
+    LOCAL_TRANSLATION_ENGINE_ID,
+    LOCAL_TRANSLATION_ENGINE_NAME,
+    LOCAL_TRANSLATION_MODEL,
     TranslationEngine,
     TranslationEngineStore,
 )
@@ -36,7 +40,11 @@ __all__ = [
     "RESOURCE_STATUSES",
     "STATUSES",
     "AVAILABILITY",
+    "DEFAULT_TRANSLATION_ENGINE_ID",
     "ENGINE_TYPES",
+    "LOCAL_TRANSLATION_ENGINE_ID",
+    "LOCAL_TRANSLATION_ENGINE_NAME",
+    "LOCAL_TRANSLATION_MODEL",
     "TranslationEngine",
     "TranslationEngineStore",
 ]

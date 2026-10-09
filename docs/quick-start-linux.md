@@ -12,7 +12,7 @@
 curl -fsSL https://github.com/S-zhi/TranslatedSubs/releases/latest/download/install.sh | sudo bash
 ```
 
-脚本会静默询问 `SUBTRANS_DEEPSEEK_API_KEY`，输入内容不会显示在终端；随后会安装 FFmpeg、uv、Python 3.12 和锁定依赖，创建持久化目录、systemd 服务并执行健康检查。重复运行时，密钥输入留空会保留 `.env` 中的现有值。
+脚本会安装 FFmpeg、uv、Python 3.12 和锁定依赖，创建持久化目录、systemd 服务并执行健康检查。默认本地翻译不需要 API Key；需要显式使用 DeepSeek 时再配置 `.env`。
 
 如果希望执行前先检查脚本，可以下载后再运行：
 
@@ -25,9 +25,7 @@ sudo bash /tmp/translatedsubs-install.sh
 用于 CI 的非交互模式：
 
 ```bash
-sudo env \
-  SUBTRANS_DEEPSEEK_API_KEY='your-deepseek-key' \
-  bash /opt/subtitles-ai/install.sh --non-interactive
+sudo bash /opt/subtitles-ai/install.sh --non-interactive
 ```
 
 非交互方式可能把密钥留在 Shell 历史或 CI 配置中，日常部署优先使用交互模式。安装完成后：
@@ -43,7 +41,7 @@ curl http://127.0.0.1:8000/api/health
 - Python 3.10–3.12（推荐 3.12）
 - `uv`
 - FFmpeg、FFprobe；硬字幕还要求 FFmpeg 含 `subtitles`/libass 滤镜
-- 可访问 DeepSeek API 的网络；语音识别默认使用本地 faster-whisper tiny 模型
+- 首次下载本地翻译/识别模型时需要网络；服务启动本身不需要云端 API Key
 - 建议至少 2 核 CPU、4 GB 内存，并为视频产物预留足够磁盘空间
 
 安装系统依赖：
@@ -84,6 +82,14 @@ uv python install 3.12
 uv sync --frozen --no-dev
 ```
 
+这一步不会安装本地翻译可选依赖，服务可以直接启动。要使用默认的本地英语 → 简体中文翻译，再执行：
+
+```bash
+uv sync --frozen --no-dev --extra local-translation
+```
+
+启动后在设置 → 翻译引擎点击“本地 CPU 英译中”的“下载并转换”。
+
 项目要求 Python `>=3.10,<3.13`。`uv sync --frozen` 会严格使用仓库中的 `uv.lock`，适合服务器部署。
 
 ## 3. 配置服务
@@ -96,7 +102,7 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-编辑 `.env`，至少填写下面两个密钥：
+编辑 `.env`。默认本地翻译不需要密钥；下面的 DeepSeek 配置仅在显式选择云端兼容引擎时填写：
 
 ```ini
 SUBTRANS_DEEPSEEK_API_KEY=你的-deepseek-api-key
@@ -154,7 +160,7 @@ curl http://127.0.0.1:8000/api/health/ready
 
 第一条应返回 `{"ok":true}`。第二条中：
 
-- `initialized: true`：下载、识别和翻译主流程已就绪；
+- `initialized: true`：下载、识别和默认本地翻译主流程已就绪；模型或可选依赖未安装时服务仍可启动，`missing` 会给出安装提示；
 - `capabilities.hard_burn: true`：硬字幕可用；
 - `missing`：仍缺少的密钥、命令或目录权限。
 
