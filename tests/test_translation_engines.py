@@ -1,8 +1,9 @@
-"""可配置翻译引擎的存储与协议适配测试。"""
+"""可配置翻译引擎的存储、协议适配与 SSRF 安全测试。"""
 
 from __future__ import annotations
 
-from src.core.translation_engines import EngineClient
+import pytest
+from src.core.translation_engines import EngineClient, TranslationEngineError, validate_base_url
 from src.store.translation_engine_store import TranslationEngineStore
 
 
@@ -34,7 +35,7 @@ def test_translation_engine_store_seeds_deepseek_once(tmp_path):
 def test_api_key_rotation_audit_and_blank_update_is_noop(tmp_path):
     store = TranslationEngineStore(tmp_path / "engines.db")
     created = store.create(
-        name="Audited", api_type="openai_compatible", base_url="https://e.test",
+        name="Audited", api_type="openai_compatible", base_url="https://api.openai.com",
         model="m", api_key="first-key",
     )
     assert created.api_key_rotated_at == created.created_at
@@ -74,7 +75,7 @@ def test_translation_engine_schema_migrates_rotation_timestamp(tmp_path):
         """)
         conn.execute(
             "INSERT INTO translation_engines VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            ("legacy", "Legacy", "openai_compatible", "https://e.test", "m", "k",
+            ("legacy", "Legacy", "openai_compatible", "https://api.openai.com", "m", "k",
              1, "UNKNOWN", None, None, 1, 1),
         )
     loaded = TranslationEngineStore(db).get("legacy")
@@ -86,7 +87,7 @@ def test_translation_engine_schema_migrates_rotation_timestamp(tmp_path):
 def test_delete_clears_secret_before_removing_engine(tmp_path):
     store = TranslationEngineStore(tmp_path / "engines.db")
     created = store.create(
-        name="Disposable", api_type="openai_compatible", base_url="https://e.test",
+        name="Disposable", api_type="openai_compatible", base_url="https://api.openai.com",
         model="m", api_key="secret",
     )
     assert store.delete(created.id) is True
@@ -97,13 +98,13 @@ def test_translation_engine_store_persists_without_exposing_model(tmp_path):
     db = tmp_path / "engines.db"
     store = TranslationEngineStore(db)
     created = store.create(
-        name="本地 OpenAI 网关", api_type="openai_compatible",
-        base_url="http://localhost:9000/v1/", model="qwen-plus", api_key="secret",
+        name="OpenAI 网关", api_type="openai_compatible",
+        base_url="https://api.openai.com/v1/", model="qwen-plus", api_key="secret",
     )
     loaded = TranslationEngineStore(db).get(created.id)
     assert loaded is not None
-    assert loaded.name == "本地 OpenAI 网关"
-    assert loaded.base_url == "http://localhost:9000/v1"
+    assert loaded.name == "OpenAI 网关"
+    assert loaded.base_url == "https://api.openai.com/v1"
     assert loaded.has_api_key is True
 
 
@@ -120,7 +121,7 @@ def test_openai_compatible_payload(monkeypatch):
         return Response()
 
     monkeypatch.setattr("httpx.post", fake_post)
-    result = EngineClient("openai_compatible", "https://example.test/v1", "demo", "key").complete("sys", "user")
+    result = EngineClient("openai_compatible", "https://example.com/v1", "demo", "key").complete("sys", "user")
     assert result == "OK"
     assert seen["url"].endswith("/v1/chat/completions")
     assert seen["headers"]["Authorization"] == "Bearer key"
@@ -140,7 +141,7 @@ def test_anthropic_compatible_payload(monkeypatch):
         return Response()
 
     monkeypatch.setattr("httpx.post", fake_post)
-    result = EngineClient("anthropic_compatible", "https://example.test", "claude-demo", "key").complete("sys", "user")
+    result = EngineClient("anthropic_compatible", "https://example.com", "claude-demo", "key").complete("sys", "user")
     assert result == "OK"
     assert seen["url"].endswith("/v1/messages")
     assert seen["headers"]["x-api-key"] == "key"
@@ -151,7 +152,7 @@ def test_make_engine_client_custom_timeout():
     from src.core.translation_engines import make_engine_client
     config = {
         "api_type": "openai_compatible",
-        "base_url": "https://example.test",
+        "base_url": "https://example.com",
         "model": "demo",
         "api_key": "key",
     }
@@ -169,14 +170,14 @@ def test_reset_dangling_checking(tmp_path):
     # 1. 配置有 API key，被置为 CHECKING (如进程崩溃残留)
     c1 = store.create(
         name="Engine 1", api_type="openai_compatible",
-        base_url="https://e1.test", model="m1", api_key="k1",
+        base_url="https://api.openai.com", model="m1", api_key="k1",
     )
     store.update(c1.id, availability="CHECKING")
 
     # 2. 未配置 API key，被置为 CHECKING
     c2 = store.create(
         name="Engine 2", api_type="openai_compatible",
-        base_url="https://e2.test", model="m2", api_key=None,
+        base_url="https://api.deepseek.com", model="m2", api_key=None,
     )
     # 强制设置空 key 和 CHECKING
     with store._connect() as conn:
@@ -205,7 +206,7 @@ def test_validate_engine_uses_shorter_timeout(tmp_path, monkeypatch):
     store = TranslationEngineStore(db)
     rec = store.create(
         name="Gateway", api_type="openai_compatible",
-        base_url="https://gateway.test", model="m1", api_key="sk-test",
+        base_url="https://example.com", model="m1", api_key="sk-test",
     )
 
     reset_singletons()
@@ -244,7 +245,7 @@ def test_whitespace_api_key_store_handling(tmp_path):
     # 1. 传入空白串创建配置 -> 规范化为 None，UNCONFIGURED
     e1 = store.create(
         name="Engine WhiteSpace", api_type="openai_compatible",
-        base_url="https://e1.test", model="m1", api_key="   ",
+        base_url="https://api.openai.com", model="m1", api_key="   ",
     )
     assert e1.api_key is None
     assert e1.has_api_key is False
@@ -253,7 +254,7 @@ def test_whitespace_api_key_store_handling(tmp_path):
     # 2. 传入首尾含空格的 key 创建配置 -> 自动 strip
     e2 = store.create(
         name="Engine Padded", api_type="openai_compatible",
-        base_url="https://e2.test", model="m2", api_key="  sk-padded-key  ",
+        base_url="https://api.deepseek.com", model="m2", api_key="  sk-padded-key  ",
     )
     assert e2.api_key == "sk-padded-key"
     assert e2.has_api_key is True
@@ -276,14 +277,13 @@ def test_whitespace_api_key_store_handling(tmp_path):
 
 
 def test_whitespace_api_key_make_engine_client():
-    import pytest
     from src.core.translation_engines import TranslationEngineError, make_engine_client
 
     # 空白串报错 missing_api_key
     with pytest.raises(TranslationEngineError) as exc_info:
         make_engine_client({
             "api_type": "openai_compatible",
-            "base_url": "https://example.test",
+            "base_url": "https://example.com",
             "model": "m",
             "api_key": "   ",
         })
@@ -292,7 +292,7 @@ def test_whitespace_api_key_make_engine_client():
     # 首尾带空格的 key 被 strip
     client = make_engine_client({
         "api_type": "openai_compatible",
-        "base_url": "https://example.test",
+        "base_url": "https://example.com",
         "model": "m",
         "api_key": "  sk-padded  ",
     })
@@ -320,7 +320,7 @@ def test_whitespace_api_key_endpoints(tmp_path, monkeypatch):
         r = client.post("/api/settings/translation-engines", json={
             "name": "Blank Key Engine",
             "apiType": "openai_compatible",
-            "baseUrl": "https://blank.test",
+            "baseUrl": "https://example.com",
             "model": "m1",
             "apiKey": "   ",
         })
@@ -372,7 +372,7 @@ def test_create_engine_automatically_validates(tmp_path, monkeypatch):
     with TestClient(app) as client:
         response = client.post("/api/settings/translation-engines", json={
             "name": "Automatic Gateway", "apiType": "openai_compatible",
-            "baseUrl": "https://gateway.test", "model": "m1", "apiKey": "sk-test",
+            "baseUrl": "https://example.com", "model": "m1", "apiKey": "sk-test",
         })
 
     assert response.status_code == 201
@@ -389,7 +389,6 @@ def test_create_engine_records_automatic_validation_failure(tmp_path, monkeypatc
     from fastapi.testclient import TestClient
     from src.handler.app import app
     from src.handler.deps import get_translation_engine_store, reset_singletons
-    from src.core.translation_engines import TranslationEngineError
 
     store = TranslationEngineStore(tmp_path / "engines.db")
     reset_singletons()
@@ -402,12 +401,203 @@ def test_create_engine_records_automatic_validation_failure(tmp_path, monkeypatc
     with TestClient(app) as client:
         response = client.post("/api/settings/translation-engines", json={
             "name": "Invalid Gateway", "apiType": "openai_compatible",
-            "baseUrl": "https://gateway.test", "model": "m1", "apiKey": "sk-test",
+            "baseUrl": "https://example.com", "model": "m1", "apiKey": "sk-test",
         })
 
     assert response.status_code == 201
     checked = store.get(response.json()["id"])
     assert checked.availability == "UNAVAILABLE"
     assert checked.last_error == "bad credentials"
+    app.dependency_overrides.clear()
+    reset_singletons()
+
+
+# ---------- SSRF & API KEY LEAKAGE TESTS ----------
+
+def test_validate_base_url_ssrf_and_protocols(monkeypatch):
+    """测试 validate_base_url 对回环/私网/链路本地/云元数据/非法协议/非法主机的拦截。"""
+    # 有效公共 URL
+    assert validate_base_url("https://api.deepseek.com/") == "https://api.deepseek.com"
+    assert validate_base_url("https://example.com/v1") == "https://example.com/v1"
+
+    # 非法协议
+    for bad_scheme in ["ftp://example.com", "file:///etc/passwd", "gopher://example.com", "httpx://example.com"]:
+        with pytest.raises(TranslationEngineError) as exc_info:
+            validate_base_url(bad_scheme)
+        assert exc_info.value.code == "invalid_base_url"
+
+    # 空或无效 host
+    for bad_url in ["", "  ", "http://", "https://:8080"]:
+        with pytest.raises(TranslationEngineError) as exc_info:
+            validate_base_url(bad_url)
+        assert exc_info.value.code == "invalid_base_url"
+
+    # 私网 / 回环 / 链路本地 / 云元数据 IP 拦截
+    ssrf_ips = [
+        "http://127.0.0.1:8000",
+        "http://127.0.0.2:8000",
+        "http://10.0.0.1",
+        "http://172.16.0.1",
+        "http://192.168.1.1",
+        "http://169.254.169.254/latest/meta-data",  # 云元数据地址
+        "http://0.0.0.0",
+        "http://[::1]:8000",
+        "http://[fc00::1]",
+        "http://[fe80::1]",
+    ]
+    for ssrf_url in ssrf_ips:
+        with pytest.raises(TranslationEngineError) as exc_info:
+            validate_base_url(ssrf_url)
+        assert exc_info.value.code == "ssrf_blocked"
+
+    # 内部域名拦截
+    forbidden_hosts = [
+        "http://localhost:8000",
+        "http://service.local",
+        "http://internal.lan",
+        "http://dev.home.arpa",
+    ]
+    for fhost in forbidden_hosts:
+        with pytest.raises(TranslationEngineError) as exc_info:
+            validate_base_url(fhost)
+        assert exc_info.value.code == "ssrf_blocked"
+
+    # 域名解析到内网 IP 拦截
+    def fake_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        if host == "ssrf-domain.test":
+            return [(2, 1, 6, "", ("127.0.0.1", 0))]
+        if host == "cloud-metadata.test":
+            return [(2, 1, 6, "", ("169.254.169.254", 0))]
+        import socket
+        return socket.getaddrinfo("example.com", None)
+
+    monkeypatch.setattr("socket.getaddrinfo", fake_getaddrinfo)
+
+    with pytest.raises(TranslationEngineError) as exc_info:
+        validate_base_url("https://ssrf-domain.test")
+    assert exc_info.value.code == "ssrf_blocked"
+
+    with pytest.raises(TranslationEngineError) as exc_info:
+        validate_base_url("https://cloud-metadata.test")
+    assert exc_info.value.code == "ssrf_blocked"
+
+
+def test_update_engine_base_url_host_change_clears_api_key(tmp_path, monkeypatch):
+    """测试 PUT 修改 baseUrl 主机/域名时，未提供新 apiKey 会自动清空原密钥，防止 API Key 泄露到新服务器。"""
+    from fastapi.testclient import TestClient
+    from src.handler.app import app
+    from src.handler.deps import get_translation_engine_store, reset_singletons
+
+    db = tmp_path / "engines.db"
+    store = TranslationEngineStore(db)
+
+    # 创建一个正常配置了 deepseek 和密钥的引擎
+    rec = store.create(
+        name="DeepSeek Engine",
+        api_type="openai_compatible",
+        base_url="https://api.deepseek.com",
+        model="deepseek-chat",
+        api_key="sk-real-secret-key-12345",
+    )
+    assert rec.has_api_key is True
+
+    reset_singletons()
+    app.dependency_overrides[get_translation_engine_store] = lambda: store
+
+    post_calls = []
+
+    def fake_post(url, **kwargs):
+        post_calls.append({"url": url, "headers": kwargs.get("headers")})
+        class Response:
+            def raise_for_status(self): pass
+            def json(self): return {"choices": [{"message": {"content": "OK"}}]}
+        return Response()
+
+    monkeypatch.setattr("httpx.post", fake_post)
+
+    with TestClient(app) as client:
+        # 攻击场景：将 baseUrl 改为外部第三方服务器 https://example.com，同时不传 apiKey（apiKey 为 None 或未填）
+        put_resp = client.put(f"/api/settings/translation-engines/{rec.id}", json={
+            "name": "Changed Engine",
+            "apiType": "openai_compatible",
+            "baseUrl": "https://example.com",
+            "model": "m1",
+            "enabled": True,
+        })
+        assert put_resp.status_code == 200
+        put_data = put_resp.json()
+        assert put_data["baseUrl"] == "https://example.com"
+        assert put_data["hasApiKey"] is False  # 密码已被自动清空，防止外泄
+        assert put_data["availability"] == "UNCONFIGURED"
+
+        # 再次触发 validate 检测
+        val_resp = client.post(f"/api/settings/translation-engines/{rec.id}/validate")
+        assert val_resp.status_code == 200
+        val_data = val_resp.json()
+        assert val_data["available"] is False
+        assert val_data["availability"] == "UNCONFIGURED"
+        assert val_data["errorCode"] == "missing_api_key"
+
+        # 校验：没有向新的 baseUrl 发起任何带有真实 sk-real-secret-key-12345 的 HTTP 请求
+        for call in post_calls:
+            headers = call.get("headers") or {}
+            auth_hdr = headers.get("Authorization", "") + headers.get("x-api-key", "")
+            assert "sk-real-secret-key-12345" not in auth_hdr
+
+    app.dependency_overrides.clear()
+    reset_singletons()
+
+
+def test_api_rejects_ssrf_url_on_create_and_update(tmp_path):
+    """测试 API 层在 POST 和 PUT baseUrl 时遇到 SSRF / 内网地址直接返回 422。"""
+    from fastapi.testclient import TestClient
+    from src.handler.app import app
+    from src.handler.deps import get_translation_engine_store, reset_singletons
+
+    db = tmp_path / "engines.db"
+    store = TranslationEngineStore(db)
+
+    reset_singletons()
+    app.dependency_overrides[get_translation_engine_store] = lambda: store
+
+    with TestClient(app) as client:
+        # 1. 尝试 POST 内网地址 127.0.0.1
+        r1 = client.post("/api/settings/translation-engines", json={
+            "name": "SSRF Engine",
+            "apiType": "openai_compatible",
+            "baseUrl": "http://127.0.0.1:8000",
+            "model": "m1",
+            "apiKey": "sk-test",
+        })
+        assert r1.status_code == 422
+        assert "禁止访问私有/回环/链路本地 IP 地址" in r1.json()["detail"]
+
+        # 2. 尝试 POST 云元数据地址 169.254.169.254
+        r2 = client.post("/api/settings/translation-engines", json={
+            "name": "SSRF Engine 2",
+            "apiType": "openai_compatible",
+            "baseUrl": "http://169.254.169.254/latest/meta-data",
+            "model": "m1",
+            "apiKey": "sk-test",
+        })
+        assert r2.status_code == 422
+        assert "禁止访问私有/回环/链路本地 IP 地址" in r2.json()["detail"]
+
+        # 先建一个正常配置
+        valid_rec = store.create(
+            name="Valid Engine", api_type="openai_compatible",
+            base_url="https://api.deepseek.com", model="m1", api_key="sk-test",
+        )
+
+        # 3. 尝试 PUT 修改为内网地址
+        r3 = client.put(f"/api/settings/translation-engines/{valid_rec.id}", json={
+            "name": "Valid Engine",
+            "apiType": "openai_compatible",
+            "baseUrl": "http://10.0.0.1/v1",
+            "model": "m1",
+        })
+        assert r3.status_code == 422
+        assert "禁止访问私有/回环/链路本地 IP 地址" in r3.json()["detail"]
+
     app.dependency_overrides.clear()
     reset_singletons()

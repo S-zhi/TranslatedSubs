@@ -8,7 +8,7 @@ from typing import List, Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from src.core.translation_engines import TranslationEngineError, make_engine_client
+from src.core.translation_engines import TranslationEngineError, make_engine_client, validate_base_url
 from src.handler.deps import get_translation_engine_store, require_api_token
 from src.store import AVAILABILITY, ENGINE_TYPES, TranslationEngine, TranslationEngineStore
 
@@ -91,11 +91,20 @@ def create_engine(
     store: TranslationEngineStore = Depends(get_translation_engine_store),
 ) -> EngineOut:
     _validate_type(body.apiType)
+    try:
+        validated_url = validate_base_url(body.baseUrl)
+    except (TranslationEngineError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     key = body.apiKey.strip() if body.apiKey and body.apiKey.strip() else None
-    rec = store.create(
-        name=body.name, api_type=body.apiType, base_url=body.baseUrl,
-        model=body.model, api_key=key, enabled=body.enabled,
-    )
+    try:
+        rec = store.create(
+            name=body.name, api_type=body.apiType, base_url=validated_url,
+            model=body.model, api_key=key, enabled=body.enabled,
+        )
+    except (TranslationEngineError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     background_tasks.add_task(_validate_engine, rec.id, store)
     return _out(rec)
 
@@ -108,11 +117,21 @@ def update_engine(
 ) -> EngineOut:
     _validate_type(body.apiType)
     rec = _require(store, engine_id)
-    fields = dict(name=body.name, api_type=body.apiType, base_url=body.baseUrl, model=body.model, enabled=body.enabled)
+    try:
+        validated_url = validate_base_url(body.baseUrl)
+    except (TranslationEngineError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    fields = dict(name=body.name, api_type=body.apiType, base_url=validated_url, model=body.model, enabled=body.enabled)
     # 空值表示保持原密钥不变；创建配置时则自然表示未配置。
     if body.apiKey is not None:
         fields["api_key"] = body.apiKey.strip() if body.apiKey.strip() else ""
-    updated = store.update(engine_id, **fields)
+
+    try:
+        updated = store.update(engine_id, **fields)
+    except (TranslationEngineError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     return _out(updated or rec)
 
 

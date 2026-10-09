@@ -13,6 +13,9 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
+from urllib.parse import urlparse
+
+from src.core.translation_engines import validate_base_url
 
 
 ENGINE_TYPES = ("openai_compatible", "anthropic_compatible")
@@ -163,9 +166,10 @@ class TranslationEngineStore:
     ) -> TranslationEngine:
         now = _now_ms()
         normalized_key = api_key.strip() if api_key and api_key.strip() else None
+        validated_url = validate_base_url(base_url)
         rec = TranslationEngine(
             id="engine_" + uuid.uuid4().hex[:10],
-            name=name.strip(), api_type=api_type, base_url=base_url.strip().rstrip("/"),
+            name=name.strip(), api_type=api_type, base_url=validated_url,
             model=model.strip(), api_key=normalized_key, enabled=int(enabled),
             availability="UNKNOWN" if normalized_key else "UNCONFIGURED",
             created_at=now, updated_at=now,
@@ -192,21 +196,37 @@ class TranslationEngineStore:
             "availability", "last_checked_at", "last_error",
         }}
         if "base_url" in allowed:
-            allowed["base_url"] = str(allowed["base_url"]).strip().rstrip("/")
+            validated_url = validate_base_url(str(allowed["base_url"]))
+            allowed["base_url"] = validated_url
+
+            old_p = urlparse(rec.base_url)
+            new_p = urlparse(validated_url)
+            old_origin = (old_p.scheme.lower(), old_p.netloc.lower())
+            new_origin = (new_p.scheme.lower(), new_p.netloc.lower())
+
+            if old_origin != new_origin:
+                new_key = fields.get("api_key")
+                raw_new_key = str(new_key).strip() if new_key else ""
+                if not raw_new_key:
+                    allowed["api_key"] = None
+                    allowed["api_key_rotated_at"] = None
+                    allowed["availability"] = "UNCONFIGURED"
+
         if "api_key" in allowed:
             raw_key = allowed["api_key"].strip() if allowed["api_key"] else ""
             if not raw_key:
                 # Blank values mean "not supplied" for update. Keep the old
                 # secret and avoid changing updated_at for a key-only update.
-                del allowed["api_key"]
+                if allowed.get("api_key") is not None:
+                    del allowed["api_key"]
             else:
                 allowed["api_key"] = raw_key
-            if raw_key and allowed["api_key"] != rec.api_key:
-                allowed["api_key_rotated_at"] = _now_ms()
-                allowed.setdefault("availability", "UNKNOWN")
-            elif raw_key:
-                # Re-sending the same key is a no-op unless other fields change.
-                del allowed["api_key"]
+                if raw_key != rec.api_key:
+                    allowed["api_key_rotated_at"] = _now_ms()
+                    allowed.setdefault("availability", "UNKNOWN")
+                else:
+                    # Re-sending the same key is a no-op unless other fields change.
+                    del allowed["api_key"]
         if not allowed:
             return rec
         allowed["updated_at"] = _now_ms()
