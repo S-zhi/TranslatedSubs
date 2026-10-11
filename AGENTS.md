@@ -14,6 +14,8 @@
 
 - 使用 Python 3.10–3.12、`uv` 和 FFmpeg。硬字幕需要 FFmpeg 的 `subtitles`（libass）滤镜；环境说明见 `docs/local-quick-start.md`。
 - `uv sync` 安装 Python 依赖；`uv run uvicorn src.handler.app:app --port 8000` 启动业务 API。
+- **`reopen` 快捷约定**：用户说 `reopen` 时，表示重新打开前端工作台。先检查 `8000` 端口并终止占用它的进程，再运行 `uv run python -m src.cli --debug --host 127.0.0.1 --port 8000`，最后打开 `http://127.0.0.1:8000/`；如果用户指定了页面路径，则打开对应路径。
+- `uv run pytest -q` 运行 Python 测试；前端测试在 `web/` 目录运行 `npm test`。修改某一模块时先跑相关测试，改动跨模块行为时再跑完整测试。
 - 测试遵循“最小必要范围”原则：每次修改后只运行覆盖本次改动的相关测试，不要默认执行全量测试。Python 测试使用 `uv run pytest -q tests/<相关测试>.py` 或指定测试节点；前端测试在 `web/` 目录使用 `npm test -- <相关测试>`。只有改动跨越多个模块、影响公共接口/配置/构建流程，或用户明确要求时，才扩大到多个测试文件或全量测试。
 - 报告验证结果时说明实际运行的测试范围；未运行全量测试时无需补跑，只需明确剩余风险来自哪些未覆盖模块。
 - `tests/test_live_pipeline.py` 涉及真实云服务和视频下载，只有配置好环境后才通过 `SUBTRANS_LIVE_TEST=1 uv run pytest tests/test_live_pipeline.py -v -s` 显式运行。
