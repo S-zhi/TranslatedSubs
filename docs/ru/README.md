@@ -130,7 +130,6 @@ docker build -t translatedsubs:local . && docker run -d --name translatedsubs --
 - **Многоязычный интерфейс**: Переключайте в боковой панели китайский (упрощённый), английский, хинди, испанский, арабский, французский, португальский и русский языки. Выбор сохраняется в браузере; при первом посещении используется язык браузера, если для развёртывания не задан язык по умолчанию. Язык по умолчанию задаётся через `UI_LOCALE` в `web/config.js`.
 - **Интеграция MCP**: Codex, Claude Desktop и другие ИИ-клиенты могут создавать задачи и отслеживать их с помощью естественного языка.
 - **Расширение Google Drive**: Загрузка, скачивание и организация файлов по задачам для обмена результатами в команде.
-- **Сменные средства распознавания**: Локальный faster-whisper, Replicate или совместимый HTTP-сервис на выбор с учётом стоимости, скорости и конфиденциальности.
 
 ## От видео к субтитрам
 
@@ -148,7 +147,6 @@ docker build -t translatedsubs:local . && docker run -d --name translatedsubs --
 | --- | --- |
 | `SUBTRANS_DEEPSEEK_API_KEY` | Необязательный ключ DeepSeek для явного облачного совместимого пути. |
 | `SUBTRANS_DATA_DIR`, `SUBTRANS_DB` | Пути к файлам и базе задач SQLite; в примере Docker они находятся в постоянном томе. |
-| `SUBTRANS_TRANSCRIBER_BACKEND` | По умолчанию `local_whisper`; при необходимости выберите `replicate` или совместимый HTTP-сервис. |
 | `SUBTRANS_COOKIES` | Файл cookie для сайтов, требующих входа или подтверждения возраста. |
 | `SUBTRANS_WORKERS`, `SUBTRANS_DOWNLOAD_WORKERS` | Число параллельных задач обработки и скачивания. |
 
@@ -170,7 +168,6 @@ docker build -t translatedsubs:local . && docker run -d --name translatedsubs --
 - [Развёртывание в Linux](../quick-start-linux.md): установка в Ubuntu/Debian, systemd, обратный прокси и устранение неполадок.
 - [Сервер MCP](../mcp-server.md): stdio, Streamable HTTP и инструменты.
 - [Руководство по MCP-агентам](../mcp-agent-guide.md): порядок вызовов, состояния и ошибки.
-- [Протокол сервиса транскрибации (на английском языке)](../transcriber-service.md): локальный, Replicate и HTTP-сервисы.
 - [Google Drive sidecar](../../drive-service/README.md): API и настройка синхронизации файлов.
 
 ## Разработка

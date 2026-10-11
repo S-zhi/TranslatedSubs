@@ -549,6 +549,15 @@ def cancel_task_route(task_id: str, store: TaskStore = Depends(get_store)) -> Ta
 def retry_task_route(task_id: str, store: TaskStore = Depends(get_store)) -> TaskOut:
     from src.handler import tasks as compat
 
+    rec = compat._task_lifecycle.require(store, task_id)
+    if str(rec.model or "").partition(":")[0].strip().lower() == "replicate":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "REPLICATE_BACKEND_REMOVED",
+                "message": "该历史任务使用已移除的 Replicate 转写，请新建任务并选择本地 Whisper 模型",
+            },
+        )
     return compat._task_lifecycle.retry_task(
         store=store,
         task_id=task_id,

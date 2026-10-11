@@ -24,8 +24,6 @@ from src.config import settings
 from src.handler import (
     audio_settings,
     health,
-    replicate,
-    replicate_settings,
     srt,
     subtitle_editor,
     tasks,
@@ -73,8 +71,6 @@ def create_app(debug: bool | None = None) -> FastAPI:
     app.include_router(storage.router)
     app.include_router(subtitle_editor.router)
     app.include_router(health.router)
-    app.include_router(replicate.router)
-    app.include_router(replicate_settings.router)
     app.include_router(translation_engines.router)
     app.include_router(audio_settings.router)
 
@@ -83,7 +79,7 @@ def create_app(debug: bool | None = None) -> FastAPI:
     if _WEB_DIR.is_dir():
         spa_routes = (
             "/tasks", "/preview", "/editor", "/probe", "/storage",
-            "/drive", "/replicate", "/settings",
+            "/drive", "/settings",
         )
         for route_path in spa_routes:
             app.add_api_route(

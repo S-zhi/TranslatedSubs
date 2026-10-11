@@ -130,7 +130,6 @@ docker build -t translatedsubs:local . && docker run -d --name translatedsubs --
 - **बहुभाषी इंटरफ़ेस**: साइडबार से सरल चीनी, अंग्रेज़ी, हिंदी, स्पेनिश, अरबी, फ़्रेंच, पुर्तगाली और रूसी के बीच स्विच करें। आपकी पसंद ब्राउज़र में सहेजी जाती है; पहली बार आने पर ब्राउज़र की भाषा इस्तेमाल होती है, जब तक डिप्लॉयमेंट में कोई डिफ़ॉल्ट भाषा तय न की गई हो। डिफ़ॉल्ट भाषा `web/config.js` में `UI_LOCALE` से तय करें।
 - **MCP एकीकरण**: Codex, Claude Desktop और अन्य AI क्लाइंट स्वाभाविक भाषा से कार्य बना और उनकी प्रगति देख सकते हैं।
 - **Google Drive विस्तार**: टीम के साथ नतीजे साझा करने के लिए हर कार्य की फ़ाइलें अपलोड, डाउनलोड और व्यवस्थित करना।
-- **बदले जा सकने वाले प्रतिलेखन बैकएंड**: लागत, गति और गोपनीयता के अनुसार स्थानीय faster-whisper, Replicate या संगत HTTP सेवा चुनना।
 
 ## वीडियो से सबटाइटल तक
 
@@ -148,7 +147,6 @@ docker build -t translatedsubs:local . && docker run -d --name translatedsubs --
 | --- | --- |
 | `SUBTRANS_DEEPSEEK_API_KEY` | स्पष्ट क्लाउड संगत पथ के लिए वैकल्पिक DeepSeek कुंजी। |
 | `SUBTRANS_DATA_DIR`, `SUBTRANS_DB` | फ़ाइलों और SQLite कार्य डेटाबेस का स्थान; Docker उदाहरण दोनों को स्थायी वॉल्यूम में रखता है। |
-| `SUBTRANS_TRANSCRIBER_BACKEND` | डिफ़ॉल्ट `local_whisper`; आवश्यकता पर `replicate` या संगत HTTP सेवा चुनें। |
 | `SUBTRANS_COOKIES` | उन वेबसाइटों के लिए Cookie फ़ाइल जो लॉगिन या उम्र सत्यापन माँगती हैं। |
 | `SUBTRANS_WORKERS`, `SUBTRANS_DOWNLOAD_WORKERS` | प्रक्रिया और डाउनलोड के समानांतर चलने वाले कामों की सीमा। |
 
@@ -170,7 +168,6 @@ docker build -t translatedsubs:local . && docker run -d --name translatedsubs --
 - [Linux पर तैनाती](../quick-start-linux.md): Ubuntu/Debian स्थापना, systemd, रिवर्स प्रॉक्सी और समस्या निवारण।
 - [MCP Server](../mcp-server.md): stdio, Streamable HTTP और उपलब्ध टूल।
 - [MCP Agent गाइड](../mcp-agent-guide.md): कॉल क्रम, कार्य स्थिति और त्रुटियाँ।
-- [प्रतिलेखन सेवा प्रोटोकॉल (अंग्रेज़ी में)](../transcriber-service.md): स्थानीय, Replicate और HTTP बैकएंड।
 - [Google Drive sidecar](../../drive-service/README.md): क्लाउड फ़ाइल सिंक का API और कॉन्फ़िगरेशन।
 
 ## विकास

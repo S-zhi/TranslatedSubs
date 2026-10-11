@@ -8,7 +8,7 @@ test("the requested interface locales have bundled translations", () => {
   assert.deepEqual(Object.keys(LOCALIZED_TEXT), ["en", "hi", "es", "ar", "fr", "pt", "ru"]);
   assert.deepEqual(Object.keys(LOCALIZED_TEMPLATES), ["en", "hi", "es", "ar", "fr", "pt", "ru"]);
   for (const locale of Object.keys(UI_LOCALES).filter((item) => item !== "zh-CN")) {
-    assert.equal(Object.keys(LOCALIZED_TEXT[locale]).length, 658, locale);
+    assert.equal(Object.keys(LOCALIZED_TEXT[locale]).length, 635, locale);
     assert.notEqual(translate("开始处理", locale), "开始处理", locale);
     assert.notEqual(translate("目标语言", locale), "目标语言", locale);
     for (const [source, target] of Object.entries(LOCALIZED_TEMPLATES[locale])) {

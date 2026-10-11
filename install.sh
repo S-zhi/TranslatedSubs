@@ -6,7 +6,7 @@
 #   sudo bash install.sh
 #
 # 非交互模式（适合 CI；注意避免把密钥写入 Shell 历史）：
-#   sudo env REPLICATE_API_TOKEN=... SUBTRANS_DEEPSEEK_API_KEY=... \
+#   sudo env SUBTRANS_DEEPSEEK_API_KEY=... \
 #     bash install.sh --non-interactive
 #
 # 脚本负责：安装系统依赖、拉取仓库、交互写入密钥、安装 Python/项目依赖、
@@ -50,7 +50,6 @@ usage() {
   -h, --help         显示帮助
 
 可用环境变量：
-  REPLICATE_API_TOKEN             Optional Replicate compatibility backend token
   SUBTRANS_DEEPSEEK_API_KEY       DeepSeek API Key
   SUBTRANS_INSTALL_DIR            安装目录，默认 /opt/subtitles-ai
   SUBTRANS_DATA_DIR               产物目录，默认 /var/lib/subtitles-ai/data
@@ -257,13 +256,10 @@ fi
 assert_safe_managed_dir "${DATA_DIR}"
 assert_safe_managed_dir "$(dirname "${DB_PATH}")"
 
-if [[ -n "${REPLICATE_API_TOKEN:-}" ]]; then
-  update_env_key REPLICATE_API_TOKEN "${REPLICATE_API_TOKEN}"
-fi
 update_env_key SUBTRANS_DEEPSEEK_API_KEY "${SUBTRANS_DEEPSEEK_API_KEY}"
 update_env_key SUBTRANS_DATA_DIR "${DATA_DIR}"
 update_env_key SUBTRANS_DB "${DB_PATH}"
-unset REPLICATE_API_TOKEN SUBTRANS_DEEPSEEK_API_KEY
+unset SUBTRANS_DEEPSEEK_API_KEY
 
 log "安装 Python 3.12 和锁定依赖"
 PYTHON_INSTALL_DIR="${PROJECT_DIR}/.uv-python"

@@ -66,11 +66,6 @@ _DEFAULT_CORS_ORIGINS = (
     "http://localhost:5273", "http://127.0.0.1:5273",
     "http://localhost:8000", "http://127.0.0.1:8000",
 )
-_DEFAULT_REPLICATE_MODEL = (
-    "stayallive/whisper-subtitles:"
-    "b97ba81004e7132181864c885a76cae0e56bc61caa4190a395f6d8ba45b7a969"
-)
-
 
 def _bootstrap_env() -> None:
     """在读取任何环境变量前，先把项目根 .env 加载进来。
@@ -98,7 +93,7 @@ _bootstrap_env()
 _last_env_mtime: float = -1.0
 
 # Settings are normally sourced from environment variables.  The web UI also
-# needs safe, persistent runtime overrides so changing an audio or Replicate
+# needs safe, persistent runtime overrides so changing an audio
 # option does not require restarting the process (and does not get lost when
 # the process has already loaded .env into os.environ).
 _RUNTIME_SETTINGS_LOCK = threading.RLock()
@@ -112,14 +107,8 @@ _RUNTIME_SETTING_KEYS = {
     "vocal_separation_threads",
     "vocal_separation_command",
     "vocal_separation_timeout",
-    "replicate_api_token",
-    "replicate_whisper_model",
-    "replicate_timeout",
-    "replicate_retries",
-    "replicate_retry_interval",
-    "replicate_poll_interval",
 }
-_RUNTIME_SECRET_KEYS = {"replicate_api_token"}
+_RUNTIME_SECRET_KEYS = set()
 
 
 def _runtime_settings_path() -> Path:
@@ -284,12 +273,6 @@ _ALIAS_MAP = {
     "vocal_separation_threads": "_vocal_separation_threads",
     "vocal_separation_command": "_vocal_separation_command",
     "vocal_separation_timeout": "_vocal_separation_timeout",
-    "replicate_whisper_model": "_replicate_whisper_model",
-    "replicate_api_token": "_replicate_api_token",
-    "replicate_timeout": "_replicate_timeout",
-    "replicate_retries": "_replicate_retries",
-    "replicate_retry_interval": "_replicate_retry_interval",
-    "replicate_poll_interval": "_replicate_poll_interval",
     "transcriber_backend": "_transcriber_backend",
     "transcriber_url": "_transcriber_url",
     "transcriber_api_key": "_transcriber_api_key",
@@ -347,12 +330,6 @@ class Settings:
     _vocal_separation_threads: Any = field(default=_UNSET, repr=False)
     _vocal_separation_command: Any = field(default=_UNSET, repr=False)
     _vocal_separation_timeout: Any = field(default=_UNSET, repr=False)
-    _replicate_whisper_model: Any = field(default=_UNSET, repr=False)
-    _replicate_api_token: Any = field(default=_UNSET, repr=False)
-    _replicate_timeout: Any = field(default=_UNSET, repr=False)
-    _replicate_retries: Any = field(default=_UNSET, repr=False)
-    _replicate_retry_interval: Any = field(default=_UNSET, repr=False)
-    _replicate_poll_interval: Any = field(default=_UNSET, repr=False)
     _transcriber_backend: Any = field(default=_UNSET, repr=False)
     _transcriber_url: Any = field(default=_UNSET, repr=False)
     _transcriber_api_key: Any = field(default=_UNSET, repr=False)
@@ -405,12 +382,6 @@ class Settings:
         _vocal_separation_threads: Any = _UNSET,
         _vocal_separation_command: Any = _UNSET,
         _vocal_separation_timeout: Any = _UNSET,
-        _replicate_whisper_model: Any = _UNSET,
-        _replicate_api_token: Any = _UNSET,
-        _replicate_timeout: Any = _UNSET,
-        _replicate_retries: Any = _UNSET,
-        _replicate_retry_interval: Any = _UNSET,
-        _replicate_poll_interval: Any = _UNSET,
         _transcriber_backend: Any = _UNSET,
         _transcriber_url: Any = _UNSET,
         _transcriber_api_key: Any = _UNSET,
@@ -463,12 +434,6 @@ class Settings:
             "_vocal_separation_threads": _vocal_separation_threads,
             "_vocal_separation_command": _vocal_separation_command,
             "_vocal_separation_timeout": _vocal_separation_timeout,
-            "_replicate_whisper_model": _replicate_whisper_model,
-            "_replicate_api_token": _replicate_api_token,
-            "_replicate_timeout": _replicate_timeout,
-            "_replicate_retries": _replicate_retries,
-            "_replicate_retry_interval": _replicate_retry_interval,
-            "_replicate_poll_interval": _replicate_poll_interval,
             "_transcriber_backend": _transcriber_backend,
             "_transcriber_url": _transcriber_url,
             "_transcriber_api_key": _transcriber_api_key,
@@ -568,7 +533,6 @@ class Settings:
         except (ValueError, TypeError):
             return 7200
 
-    # Readiness / Replicate 余额检查 TTL 缓存时长（秒），默认 60 秒
     @property
     def readiness_ttl_sec(self) -> int:
         if self._readiness_ttl_sec is not _UNSET:
@@ -843,110 +807,10 @@ class Settings:
         except (ValueError, TypeError):
             return 1800
 
-    # --- ③ 语音识别（Replicate-hosted Whisper）---
-    @property
-    def replicate_api_token(self) -> Optional[str]:
-        """Replicate Token，运行时页面配置优先于环境变量。"""
-        if self._replicate_api_token is not _UNSET:
-            value = self._replicate_api_token
-            return str(value).strip() or None
-        runtime = _runtime_value("replicate_api_token")
-        if runtime is not _UNSET:
-            return str(runtime).strip() or None
-        _sync_env_file()
-        value = (os.getenv("REPLICATE_API_TOKEN") or "").strip()
-        return value or None
-
-    # Replicate 模型标识（版本锁定）
-    @property
-    def replicate_whisper_model(self) -> str:
-        if self._replicate_whisper_model is not _UNSET:
-            return str(self._replicate_whisper_model).strip() or _DEFAULT_REPLICATE_MODEL
-        runtime = _runtime_value("replicate_whisper_model")
-        if runtime is not _UNSET:
-            return str(runtime).strip() or _DEFAULT_REPLICATE_MODEL
-        _sync_env_file()
-        return os.getenv(
-            "SUBTRANS_WHISPER_MODEL",
-            _DEFAULT_REPLICATE_MODEL,
-        )
-
-    # Replicate 单次 HTTP 请求超时；prediction 的排队/运行通过短轮询跟踪
-    @property
-    def replicate_timeout(self) -> int:
-        if self._replicate_timeout is not _UNSET:
-            return int(self._replicate_timeout)
-        runtime = _runtime_value("replicate_timeout")
-        if runtime is not _UNSET:
-            try:
-                return int(runtime)
-            except (ValueError, TypeError):
-                pass
-        _sync_env_file()
-        val = os.getenv("SUBTRANS_REPLICATE_TIMEOUT", "1800")
-        try:
-            return int(val)
-        except (ValueError, TypeError):
-            return 1800
-
-    # Replicate 创建/状态查询发生网络错误时的总尝试次数
-    @property
-    def replicate_retries(self) -> int:
-        if self._replicate_retries is not _UNSET:
-            return int(self._replicate_retries)
-        runtime = _runtime_value("replicate_retries")
-        if runtime is not _UNSET:
-            try:
-                return int(runtime)
-            except (ValueError, TypeError):
-                pass
-        _sync_env_file()
-        val = os.getenv("SUBTRANS_REPLICATE_RETRIES", "3")
-        try:
-            return int(val)
-        except (ValueError, TypeError):
-            return 3
-
-    # 网络错误后再次请求的间隔；默认 1 小时，避免重复创建长时间排队的任务
-    @property
-    def replicate_retry_interval(self) -> float:
-        if self._replicate_retry_interval is not _UNSET:
-            return float(self._replicate_retry_interval)
-        runtime = _runtime_value("replicate_retry_interval")
-        if runtime is not _UNSET:
-            try:
-                return float(runtime)
-            except (ValueError, TypeError):
-                pass
-        _sync_env_file()
-        val = os.getenv("SUBTRANS_REPLICATE_RETRY_INTERVAL", "3600")
-        try:
-            return float(val)
-        except (ValueError, TypeError):
-            return 3600.0
-
-    # 已取得 prediction ID 后的状态轮询间隔；轮询不会创建新任务
-    @property
-    def replicate_poll_interval(self) -> float:
-        if self._replicate_poll_interval is not _UNSET:
-            return float(self._replicate_poll_interval)
-        runtime = _runtime_value("replicate_poll_interval")
-        if runtime is not _UNSET:
-            try:
-                return float(runtime)
-            except (ValueError, TypeError):
-                pass
-        _sync_env_file()
-        val = os.getenv("SUBTRANS_REPLICATE_POLL_INTERVAL", "30")
-        try:
-            return float(val)
-        except (ValueError, TypeError):
-            return 30.0
-
     # --- ③ 语音识别服务选择 ---
     @property
     def transcriber_backend(self) -> str:
-        """识别服务标识：local_whisper（默认）或 replicate/http。"""
+        """识别服务标识：local_whisper（默认）或 http。"""
         if self._transcriber_backend is not _UNSET:
             return str(self._transcriber_backend).strip().lower() or "local_whisper"
         _sync_env_file()

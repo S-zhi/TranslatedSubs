@@ -120,6 +120,14 @@ def _mark_resource_missing(
 def _ensure_local_model_ready(model: str) -> None:
     value = str(model or "")
     backend, separator, name = value.partition(":")
+    if separator and backend.strip().lower() == "replicate":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "REPLICATE_BACKEND_REMOVED",
+                "message": "Replicate 云端转写已移除，请选择已就绪的本地 Whisper 模型",
+            },
+        )
     if separator and backend.strip().lower() in {
         "local", "local_whisper", "whisper", "faster_whisper"
     }:
