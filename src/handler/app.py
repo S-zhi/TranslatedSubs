@@ -83,7 +83,7 @@ def create_app(debug: bool | None = None) -> FastAPI:
     if _WEB_DIR.is_dir():
         spa_routes = (
             "/tasks", "/preview", "/editor", "/probe", "/storage",
-            "/drive", "/replicate", "/settings",
+            "/drive", "/replicate", "/settings", "/model-settings",
         )
         for route_path in spa_routes:
             app.add_api_route(

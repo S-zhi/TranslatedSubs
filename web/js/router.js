@@ -8,6 +8,7 @@ export const ROUTES = Object.freeze({
   preview: { path: "/preview", title: "视频预览" },
   editor: { path: "/editor", title: "字幕编辑" },
   storage: { path: "/storage", title: "本地资源" },
+  "model-settings": { path: "/model-settings", title: "模型设置" },
   "other-settings": { path: "/settings", title: "其他设置" },
 });
 
