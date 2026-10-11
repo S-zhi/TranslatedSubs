@@ -10,7 +10,12 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
+
+from src.handler.deps import get_store, require_api_token
 from src.service.asset_resolver import AssetResolver, ResourceState
+from src.store import TaskStore
 from src.store import (
     DOWNGRADE_REASON_DISK_FAILURE,
     DOWNGRADE_REASON_UNKNOWN,
@@ -22,6 +27,7 @@ from src.store import (
 logger = logging.getLogger(__name__)
 TERMINAL = {"SUCCESS", "FAILED", "CANCELLED"}
 DELETED_MESSAGE = "资源已删除"
+router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
 
 def mark_resource_missing(
@@ -274,3 +280,17 @@ def progress_events(
             yield 'event: timeout\ndata: {"error":"stream timeout"}\n\n'
             return
         (sleep or time.sleep)(1)
+
+
+@router.get("/{task_id}/stream", dependencies=[Depends(require_api_token)])
+def stream_progress_route(task_id: str, store: TaskStore = Depends(get_store)):
+    from src.handler import tasks as compat
+
+    compat._require(store, task_id)
+    events = compat._task_runtime.progress_events(
+        task_id,
+        store=store,
+        settings=compat.settings,
+        to_out=compat.to_out,
+    )
+    return StreamingResponse(events, media_type="text/event-stream")

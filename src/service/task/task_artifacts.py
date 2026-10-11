@@ -12,7 +12,19 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse, Response
+
+from src.handler.deps import get_store, require_api_token
+from src.store import (
+    DOWNGRADE_REASON_DISK_FAILURE,
+    RESOURCE_STATUS_AVAILABLE,
+    TaskStore,
+)
 from src.service.asset_resolver import AssetResolver, ResourceState
+from src.service.task.task import task_error_boundary
+
+router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
 BROWSER_PREVIEW_EXTENSIONS = {
     ".txt", ".srt", ".vtt", ".json", ".md", ".log", ".csv",
@@ -238,3 +250,137 @@ def download_subtitle(*, task_id: str, store: Any, task_dir: Callable[[str], Pat
     if rec.status == "SUCCESS" and rec.resource_status == available_status:
         mark_missing(store, task_id, "资源已删除")
     raise RuntimeError("资源已删除" if rec.status == "SUCCESS" else "译文字幕尚未生成")
+
+
+@router.head("/{task_id}/source", status_code=204, dependencies=[Depends(require_api_token)])
+def check_source_video_route(task_id: str, store: TaskStore = Depends(get_store)):
+    from src.handler import tasks as compat
+
+    compat.download_source_video(task_id, store)
+    return Response(status_code=204)
+
+
+@router.get("/{task_id}/source", dependencies=[Depends(require_api_token)])
+@task_error_boundary
+def download_source_video_route(task_id: str, store: TaskStore = Depends(get_store)):
+    from src.handler import tasks as compat
+
+    path = compat._task_artifacts.download_source(task_id=task_id, store=store, task_dir=compat.task_dir)
+    return FileResponse(path, filename=f"{task_id}-source{path.suffix}")
+
+
+@router.head("/{task_id}/download", status_code=204, dependencies=[Depends(require_api_token)])
+def check_download_video_route(task_id: str, store: TaskStore = Depends(get_store)):
+    from src.handler import tasks as compat
+
+    compat.download_video(task_id, store)
+    return Response(status_code=204)
+
+
+@router.get("/{task_id}/download", dependencies=[Depends(require_api_token)])
+@task_error_boundary
+def download_video_route(task_id: str, store: TaskStore = Depends(get_store)):
+    from src.handler import tasks as compat
+
+    path = compat._task_artifacts.download_video(
+        task_id=task_id,
+        store=store,
+        resolve_video_fn=compat._resolve_video,
+        mark_missing=compat._mark_resource_missing,
+        available_status=RESOURCE_STATUS_AVAILABLE,
+        missing_downgrade_reason=DOWNGRADE_REASON_DISK_FAILURE,
+    )
+    return FileResponse(path, media_type="video/mp4", filename=path.name)
+
+
+@router.head("/{task_id}/dubbed", status_code=204, dependencies=[Depends(require_api_token)])
+def check_dubbed_video_route(task_id: str, store: TaskStore = Depends(get_store)):
+    from src.handler import tasks as compat
+
+    compat.download_dubbed_video(task_id, store)
+    return Response(status_code=204)
+
+
+@router.get("/{task_id}/dubbed", dependencies=[Depends(require_api_token)])
+@task_error_boundary
+def download_dubbed_video_route(task_id: str, store: TaskStore = Depends(get_store)):
+    from src.handler import tasks as compat
+
+    path = compat._task_artifacts.download_dubbed(task_id=task_id, store=store, task_dir=compat.task_dir)
+    return FileResponse(path, media_type="video/mp4", filename=path.name)
+
+
+@router.get("/{task_id}/subtitle", dependencies=[Depends(require_api_token)])
+@task_error_boundary
+def download_subtitle_route(task_id: str, store: TaskStore = Depends(get_store)):
+    from src.handler import tasks as compat
+
+    path = compat._task_artifacts.download_subtitle(
+        task_id=task_id,
+        store=store,
+        task_dir=compat.task_dir,
+        mark_missing=compat._mark_resource_missing,
+        available_status=RESOURCE_STATUS_AVAILABLE,
+        missing_downgrade_reason=DOWNGRADE_REASON_DISK_FAILURE,
+    )
+    return FileResponse(path, media_type="application/x-subrip", filename=f"{task_id}.srt")
+
+
+@router.post("/{task_id}/folder", summary="打开任务文件夹", dependencies=[Depends(require_api_token)])
+def open_task_folder_route(task_id: str, store: TaskStore = Depends(get_store)) -> dict:
+    from src.handler import tasks as compat
+
+    try:
+        compat._task_artifacts.validate_task_id(task_id)
+    except compat._task_artifacts.TaskFolderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    compat._require(store, task_id)
+    try:
+        path = compat._task_artifacts.prepare_task_folder(task_id, task_dir=compat.task_dir, data_dir=compat.settings.data_dir)
+    except compat._task_artifacts.TaskFolderMissingError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except compat._task_artifacts.TaskFolderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        compat._task_artifacts.open_folder(path, platform=compat.sys.platform, popen=compat.subprocess.Popen)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@router.get("/{task_id}/folder-capability", summary="查询文件夹预览能力", dependencies=[Depends(require_api_token)])
+def folder_capability_route(task_id: str, store: TaskStore = Depends(get_store)) -> dict:
+    from src.handler import tasks as compat
+
+    compat._require(store, task_id)
+    return compat._task_artifacts.folder_capability(platform=compat.sys.platform)
+
+
+@router.get("/{task_id}/files", summary="浏览任务文件", dependencies=[Depends(require_api_token)])
+def list_task_files_route(task_id: str, path: str = "", store: TaskStore = Depends(get_store)) -> dict:
+    from src.handler import tasks as compat
+
+    compat._require(store, task_id)
+    try:
+        entries = compat._task_artifacts.list_files(task_id, path, task_dir=compat.task_dir)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"path": path, "entries": entries}
+
+
+@router.get("/{task_id}/file", summary="读取任务文件", dependencies=[Depends(require_api_token)])
+def get_task_file_route(task_id: str, path: str, store: TaskStore = Depends(get_store)):
+    from src.handler import tasks as compat
+
+    compat._require(store, task_id)
+    try:
+        file_path = compat._task_artifacts.preview_file(task_id, path, task_dir=compat.task_dir)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except compat._task_artifacts.PathSafetyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except compat._task_artifacts.UnsupportedPreviewError as exc:
+        raise HTTPException(status_code=415, detail=str(exc)) from exc
+    return FileResponse(file_path)

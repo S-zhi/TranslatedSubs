@@ -8,9 +8,34 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, List, Literal, Optional
 
+from fastapi import Depends, File, Form, Header, HTTPException, Query, UploadFile
+
+from src.config import SOURCE_VIDEO_STEM
+from src.handler.deps import get_probe_store, get_store, get_translation_engine_store, require_api_token
+from src.handler.schemas import (
+    ErrorDetail,
+    ProbeBatchStatusOut,
+    ProbeRecordOut,
+    ProbeRecordsClearOut,
+    TaskCreate,
+    TaskOut,
+    TaskProbeIn,
+    TaskProbeOut,
+    YtDlpEnvInfo,
+    _probe_record_to_out,
+    to_out,
+)
+from src.service.probe_batch import probe_batch_manager
+from src.store import DEFAULT_TRANSLATION_ENGINE_ID, ProbeStore, TaskStore, TranslationEngineStore
 from src.service.asset_resolver import AssetResolver
+from src.service.task.task import task_error_boundary
+
+
+from fastapi import APIRouter
+
+router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
 
 class UploadTaskError(RuntimeError):
@@ -284,3 +309,249 @@ def retry_task(
     )
     enqueue_pipeline(task_id)
     return to_out(updated)
+
+
+# HTTP endpoints are kept in this module so the lifecycle router owns the
+# complete route registration.  Mutable application dependencies are resolved
+# through handler.tasks at call time for backwards compatible monkeypatching.
+
+
+@router.post("", response_model=TaskOut, status_code=201, dependencies=[Depends(require_api_token)])
+def create_task_route(
+    body: TaskCreate,
+    store: TaskStore = Depends(get_store),
+    engines: TranslationEngineStore = Depends(get_translation_engine_store),
+    task_origin: str = Header("web", alias="X-Task-Origin"),
+) -> TaskOut:
+    from src.handler import tasks as compat
+
+    rec, created = compat._task_lifecycle.create_url_task(
+        body=body,
+        store=store,
+        engines=engines,
+        ensure_supported_translation_languages=compat._ensure_supported_translation_languages,
+        ensure_local_model_ready=compat._ensure_local_model_ready,
+        ensure_translation_engine=compat._ensure_translation_engine,
+        task_origin=task_origin,
+    )
+    if not created:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "TASK_ALREADY_RUNNING",
+                "message": "该 URL 已有任务正在处理，请复用现有 task_id",
+                "taskId": rec.id,
+            },
+        )
+    compat.enqueue_pipeline(rec.id)
+    return compat.to_out(rec)
+
+
+@router.post("/upload", response_model=TaskOut, status_code=201, dependencies=[Depends(require_api_token)])
+def create_upload_task_route(
+    file: UploadFile = File(..., description="本地视频文件"),
+    sourceLang: str = Form("en", min_length=1),
+    targetLang: str = Form("zh-CN", min_length=1),
+    mode: Literal["mono", "bilingual"] = Form("mono"),
+    burn: Literal["hard", "soft"] = Form("hard"),
+    model: str = Form("local:tiny", min_length=1),
+    engine: str = Form(DEFAULT_TRANSLATION_ENGINE_ID, min_length=1),
+    needSubtitle: bool = Form(True),
+    ttsEnabled: bool = Form(False),
+    ttsVoice: str = Form("auto"),
+    originalVoiceMode: Literal["keep", "lower", "replace"] = Form("keep"),
+    store: TaskStore = Depends(get_store),
+    engines: TranslationEngineStore = Depends(get_translation_engine_store),
+) -> TaskOut:
+    from src.handler import tasks as compat
+
+    try:
+        rec = compat._task_lifecycle.create_upload_task(
+            file=file,
+            source_lang=sourceLang,
+            target_lang=targetLang,
+            mode=mode,
+            burn=burn,
+            model=model,
+            engine=engine,
+            need_subtitle=needSubtitle,
+            tts_enabled=ttsEnabled,
+            tts_voice=ttsVoice,
+            original_voice_mode=originalVoiceMode,
+            store=store,
+            engines=engines,
+            settings=compat.settings,
+            task_dir=compat.task_dir,
+            probe_duration=compat.probe_duration,
+            enqueue_pipeline=compat.enqueue_pipeline,
+            release_lock=compat.release_lock,
+            ensure_supported_translation_languages=compat._ensure_supported_translation_languages,
+            ensure_local_model_ready=compat._ensure_local_model_ready,
+            ensure_translation_engine=compat._ensure_translation_engine,
+            upload_error=compat._upload_error,
+            http_exception_type=HTTPException,
+            source_video_stem=SOURCE_VIDEO_STEM,
+            upload_video_extensions=compat._UPLOAD_VIDEO_EXTS,
+        )
+    except compat._task_lifecycle.UploadTaskError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    return compat.to_out(rec)
+
+
+@router.get("", response_model=List[TaskOut], dependencies=[Depends(require_api_token)])
+def list_tasks_route(
+    offset: int = Query(0, ge=0, description="跳过前 N 条记录"),
+    limit: int = Query(50, ge=1, le=200, description="单页最大记录数，取值范围 1 到 200，默认 50"),
+    before_id: Optional[str] = Query(None, description="游标：仅返回 ID 早于该任务的记录"),
+    after_id: Optional[str] = Query(None, description="游标：仅返回 ID 晚于该任务的记录"),
+    origin: Optional[Literal["web", "mcp"]] = Query(None, description="任务来源"),
+    store: TaskStore = Depends(get_store),
+) -> List[TaskOut]:
+    from src.handler import tasks as compat
+
+    return compat._task_lifecycle.list_tasks(
+        store=store,
+        to_out=compat.to_out,
+        offset=offset,
+        limit=limit,
+        before_id=before_id,
+        after_id=after_id,
+        origin=origin,
+    )
+
+
+@router.get("/{task_id}", response_model=TaskOut, dependencies=[Depends(require_api_token)])
+def get_task_route(task_id: str, store: TaskStore = Depends(get_store)) -> TaskOut:
+    from src.handler import tasks as compat
+
+    try:
+        return compat._task_lifecycle.get_task(store=store, task_id=task_id, to_out=compat.to_out)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="任务不存在") from exc
+
+
+@router.post("/probe", response_model=TaskProbeOut, dependencies=[Depends(require_api_token)])
+def probe_task_route(
+    body: TaskProbeIn,
+    probes: ProbeStore = Depends(get_probe_store),
+) -> TaskProbeOut:
+    from src.handler import tasks as compat
+
+    if body.cookiesFromBrowser and not compat.settings.allow_cookies_from_browser:
+        raise HTTPException(
+            status_code=409,
+            detail=ErrorDetail(
+                code="BROWSER_COOKIES_DISABLED",
+                message="浏览器 Cookie 探测未启用",
+                suggestion="请在后端同一台可信机器上设置 SUBTRANS_ALLOW_COOKIES_FROM_BROWSER=1 后重试。",
+            ).model_dump(exclude_none=True),
+        )
+    result, _record = compat._task_runtime.probe_and_record(
+        url=body.url,
+        cookies_from_browser=body.cookiesFromBrowser,
+        probes=probes,
+        probe_video=compat.probe_video,
+        probe_batch_manager=compat.probe_batch_manager,
+    )
+    return TaskProbeOut(
+        ok=result.ok,
+        title=result.title,
+        extractor=result.extractor,
+        duration=result.duration,
+        formatsCount=result.formats_count,
+        webpageUrl=result.webpage_url,
+        reason=result.reason,
+        detail=result.detail,
+        cached=result.cached,
+        language=result.language,
+        availableQualities=result.available_qualities,
+        formats=result.formats,
+        thumbnail=result.thumbnail,
+        uploader=result.uploader,
+    )
+
+
+@router.get("/probe/startup-status", response_model=ProbeBatchStatusOut, dependencies=[Depends(require_api_token)])
+def get_probe_startup_status_route() -> ProbeBatchStatusOut:
+    from src.handler import tasks as compat
+
+    return ProbeBatchStatusOut.model_validate(compat.probe_batch_manager.status())
+
+
+@router.get("/probe/records", response_model=List[ProbeRecordOut], dependencies=[Depends(require_api_token)])
+def list_probe_records_route(
+    limit: int = Query(50, ge=1, le=500),
+    probes: ProbeStore = Depends(get_probe_store),
+) -> List[ProbeRecordOut]:
+    from src.handler import tasks as compat
+
+    return [
+        _probe_record_to_out(r)
+        for r in compat._task_runtime.list_probe_records(limit=limit, probes=probes)
+    ]
+
+
+@router.delete("/probe/records", response_model=ProbeRecordsClearOut, dependencies=[Depends(require_api_token)])
+def clear_probe_records_route(
+    probes: ProbeStore = Depends(get_probe_store),
+) -> ProbeRecordsClearOut:
+    from src.handler import tasks as compat
+
+    return ProbeRecordsClearOut(deleted=compat._task_runtime.clear_probe_records(probes=probes))
+
+
+@router.delete("/probe/records/{record_id}", status_code=204, dependencies=[Depends(require_api_token)])
+def delete_probe_record_route(
+    record_id: str,
+    probes: ProbeStore = Depends(get_probe_store),
+) -> None:
+    from src.handler import tasks as compat
+
+    if not compat._task_runtime.delete_probe_record(record_id=record_id, probes=probes):
+        raise HTTPException(status_code=404, detail="测试记录不存在")
+
+
+@router.get("/probe/ytdlp-info", response_model=YtDlpEnvInfo, dependencies=[Depends(require_api_token)])
+def get_ytdlp_info_route() -> YtDlpEnvInfo:
+    from src.handler import tasks as compat
+    return YtDlpEnvInfo.model_validate(compat._task_runtime.ytdlp_info(compat.settings))
+
+
+@router.delete("/{task_id}", status_code=204, dependencies=[Depends(require_api_token)])
+@task_error_boundary
+def delete_task_route(task_id: str, store: TaskStore = Depends(get_store)) -> None:
+    from src.handler import tasks as compat
+
+    compat._task_lifecycle.delete_task(
+        store=store,
+        task_id=task_id,
+        task_dir=compat.task_dir,
+        cleanup_partial_artifacts=compat._cleanup_partial_artifacts,
+        release_lock=compat.release_lock,
+    )
+
+
+@router.post("/{task_id}/cancel", response_model=TaskOut, dependencies=[Depends(require_api_token)])
+@task_error_boundary
+def cancel_task_route(task_id: str, store: TaskStore = Depends(get_store)) -> TaskOut:
+    from src.handler import tasks as compat
+
+    return compat._task_lifecycle.cancel_task(
+        store=store,
+        task_id=task_id,
+        cancel_pipeline=compat.cancel_pipeline,
+        to_out=compat.to_out,
+    )
+
+
+@router.post("/{task_id}/retry", response_model=TaskOut, dependencies=[Depends(require_api_token)])
+@task_error_boundary
+def retry_task_route(task_id: str, store: TaskStore = Depends(get_store)) -> TaskOut:
+    from src.handler import tasks as compat
+
+    return compat._task_lifecycle.retry_task(
+        store=store,
+        task_id=task_id,
+        enqueue_pipeline=compat.enqueue_pipeline,
+        to_out=compat.to_out,
+    )
