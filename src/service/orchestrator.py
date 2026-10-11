@@ -39,6 +39,7 @@ _cancel_events_lock = threading.Lock()
 
 
 def register_cancellation_signal(task_id: str, is_cancelled: bool = False) -> threading.Event:
+    """注册任务取消事件，并按初始状态设置其标记。"""
     with _cancel_events_lock:
         ev = _cancel_events.setdefault(task_id, threading.Event())
         if is_cancelled:
@@ -49,17 +50,20 @@ def register_cancellation_signal(task_id: str, is_cancelled: bool = False) -> th
 
 
 def unregister_cancellation_signal(task_id: str) -> None:
+    """移除任务取消事件，释放全局注册表中的任务引用。"""
     with _cancel_events_lock:
         _cancel_events.pop(task_id, None)
 
 
 def set_cancelled_signal(task_id: str) -> None:
+    """将任务标记为已取消；任务尚未注册时先创建对应事件。"""
     with _cancel_events_lock:
         ev = _cancel_events.setdefault(task_id, threading.Event())
         ev.set()
 
 
 def is_cancelled_signal(task_id: str) -> bool:
+    """读取任务取消标记；未注册的任务视为尚未取消。"""
     with _cancel_events_lock:
         ev = _cancel_events.get(task_id)
         return ev.is_set() if ev is not None else False
@@ -139,12 +143,14 @@ def _error_code_for_exception(exc: Exception) -> str:
 
 
 def _scale(lo: int, hi: int, pct: Optional[float]) -> int:
+    """将阶段百分比限制在 0 到 100，并映射到整体进度区间。"""
     if pct is None:
         return lo
     return int(lo + max(0.0, min(100.0, pct)) / 100.0 * (hi - lo))
 
 
 def _check_cancelled(task_id: str) -> None:
+    """在继续执行前检查任务取消标记，已取消时抛出统一异常。"""
     if is_cancelled_signal(task_id):
         raise PipelineCancelledError("任务已被用户取消")
 
@@ -185,9 +191,11 @@ class PipelineContext:
 
     @property
     def task_id(self) -> str:
+        """返回上下文关联任务的唯一标识。"""
         return self.params.task_id
 
     def emit(self, status: str, progress: int, **extra) -> None:
+        """发布阶段事件，并单调更新上下文中的整体进度。"""
         _check_cancelled(self.task_id)
         self.progress = max(self.progress, progress)
         self.current_step = status if status in _BANDS else None
@@ -199,17 +207,20 @@ class PipelineContext:
         ))
 
     def step_callback(self, status: str):
+        """创建把底层阶段进度换算到整体区间的回调函数。"""
         if status == "DOWNLOADING" and not self.params.need_subtitle:
             lo, hi = (0, 100)
         else:
             lo, hi = _BANDS[status]
 
         def callback(progress) -> None:
+            """接收底层进度对象，并转发为当前阶段事件。"""
             self.emit(status, _scale(lo, hi, getattr(progress, "percent", None)))
 
         return callback
 
     def emit_smooth(self, status: str, target: int) -> None:
+        """通过少量中间事件平滑推进到目标进度。"""
         start = self.progress
         if target > start:
             step_size = max(1, (target - start) // 4)
@@ -220,10 +231,12 @@ class PipelineContext:
         self.emit(status, target)
 
     def artifact_available(self, resolver) -> bool:
+        """调用资源解析器，判断对应产物是否可以复用。"""
         resource_state, path, _ = resolver(self.task_id)
         return resource_state == ResourceState.AVAILABLE and path is not None
 
     def complete(self, *, outputs: dict, title: Optional[str] = None) -> PipelineEvent:
+        """记录并发布包含输出路径的成功终态事件。"""
         event = PipelineEvent("SUCCESS", 100, None, title=title, outputs=outputs)
         self.terminal_event = event
         self.on_event(event)
@@ -234,13 +247,16 @@ class PipelineHandler:
     """责任链节点：处理当前阶段，然后将共享上下文交给下一节点。"""
 
     def __init__(self) -> None:
+        """初始化责任链节点的后继引用。"""
         self._next_handler: Optional[PipelineHandler] = None
 
     def set_next(self, handler: "PipelineHandler") -> "PipelineHandler":
+        """设置后继节点并返回它，以便连续组装责任链。"""
         self._next_handler = handler
         return handler
 
     def handle(self, context: PipelineContext) -> PipelineEvent:
+        """执行当前节点，并将上下文交给后继节点直到得到终态事件。"""
         self.process(context)
         if context.terminal_event is not None:
             return context.terminal_event
@@ -249,6 +265,7 @@ class PipelineHandler:
         return self._next_handler.handle(context)
 
     def process(self, context: PipelineContext) -> None:
+        """处理当前阶段；具体责任链节点必须实现此方法。"""
         raise NotImplementedError
 
 
@@ -256,6 +273,7 @@ class DownloadHandler(PipelineHandler):
     """准备源视频；上传、断点续跑和仅下载分支均在本节点处理。"""
 
     def process(self, context: PipelineContext) -> None:
+        """按上传、缓存或下载路径准备源视频，并处理仅下载分支。"""
         params = context.params
         tid = context.task_id
         context.emit("DOWNLOADING", 0)
@@ -293,6 +311,7 @@ class AudioExtractionHandler(PipelineHandler):
     """获取可识别音频，优先复用已完成的音频产物。"""
 
     def process(self, context: PipelineContext) -> None:
+        """按音频格式配置复用或重新生成可识别音频产物。"""
         tid = context.task_id
         context.emit("EXTRACTING", 20)
         context.resources.video_path = AssetResolver.require_source(tid)
@@ -359,6 +378,7 @@ class VocalSeparationHandler(PipelineHandler):
     """可选的人声抽取阶段；关闭时零成本透传原始音频。"""
 
     def process(self, context: PipelineContext) -> None:
+        """按配置复用或生成分离后的人声音频，关闭时直接透传。"""
         enabled = (
             context.vocal_separation_enabled
             if context.vocal_separation_enabled is not None
@@ -398,6 +418,7 @@ class TranscriptionHandler(PipelineHandler):
     """把音频转成原文 SRT，优先复用已有字幕产物。"""
 
     def process(self, context: PipelineContext) -> None:
+        """复用或生成原文 SRT，并把识别进度映射到流水线。"""
         params = context.params
         tid = context.task_id
         context.emit("TRANSCRIBING", 35)
@@ -431,6 +452,7 @@ class TranslationHandler(PipelineHandler):
     """翻译原文字幕，并在恢复时复用现有翻译产物。"""
 
     def process(self, context: PipelineContext) -> None:
+        """复用或生成目标语言字幕，并把翻译进度映射到流水线。"""
         params = context.params
         tid = context.task_id
         context.emit("TRANSLATING", 65)
@@ -456,6 +478,7 @@ class SubtitleBurningHandler(PipelineHandler):
     """将翻译字幕烧录到源视频并生成最终结果事件。"""
 
     def process(self, context: PipelineContext) -> None:
+        """复用或生成烧录视频，必要时追加配音并发布完成事件。"""
         params = context.params
         tid = context.task_id
         context.emit("BURNING", 85)
@@ -663,6 +686,7 @@ def _locate_uploaded_source(task_id: str) -> Path:
 
 
 def _audio_metadata_json(*, sample_rate: int, channels: int, source_path: Optional[Path]) -> str:
+    """构造音频缓存 sidecar JSON，记录格式及源文件信息。"""
     import json
     payload = {"sample_rate": int(sample_rate), "channels": int(channels)}
     if source_path is not None:

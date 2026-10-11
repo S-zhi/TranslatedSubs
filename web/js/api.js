@@ -296,6 +296,43 @@ const RealApi = {
     if (!res.ok) throw new Error(await readError(res, "删除翻译引擎失败"));
   },
 
+  // 统一模型设置：后端返回的 API Key 应为脱敏值或仅 hasApiKey 标志。
+  async getModelSettings() {
+    const res = await request(this.base, "/api/settings/models");
+    if (!res.ok) throw new Error(await readError(res, "读取模型设置失败"));
+    return res.json();
+  },
+
+  async updateModelSettings(payload) {
+    const res = await request(this.base, "/api/settings/models", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(await readError(res, "保存模型设置失败"));
+    return res.json();
+  },
+
+  async createModelSettings(kind, payload) {
+    const res = await request(this.base, `/api/settings/models/${encodeURIComponent(kind)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(await readError(res, "新增模型失败"));
+    return res.json();
+  },
+
+  async validateModelSettings(kind, payload) {
+    const res = await request(this.base, `/api/settings/models/${encodeURIComponent(kind)}/validate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(await readError(res, "模型连接检查失败"));
+    return res.json();
+  },
+
   async deleteTask(id) {
     const res = await request(this.base, `/api/tasks/${id}`, { method: "DELETE" });
     if (!res.ok) throw new Error(await readError(res, "删除失败"));
@@ -837,6 +874,62 @@ const MockApi = (() => {
       return defaults;
     },
     async deleteTranslationEngine(id) { const list = (await this.listTranslationEngines()).filter((e) => e.id !== id); localStorage.setItem("subtrans_mock_engines_v1", JSON.stringify(list)); },
+    async getModelSettings() {
+      await delay(50);
+      const defaults = {
+        llm: { enabled: true, provider: "deepseek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat", hasApiKey: false, temperature: 0.3, maxTokens: 4096, timeout: 120, concurrency: 2 },
+        whisper: { enabled: true, provider: "local", model: "local:small", language: "auto", device: "cpu", threads: 4, wordTimestamps: true, status: "ready" },
+        tts: { enabled: false, provider: "kokoro", baseUrl: "", model: "kokoro-v1", hasApiKey: false, voice: "af_heart", speed: 1, format: "wav" },
+      };
+      try {
+        const saved = JSON.parse(localStorage.getItem("subtrans_mock_model_settings_v1") || "null");
+        return saved ? { ...defaults, ...saved, llm: { ...defaults.llm, ...saved.llm }, whisper: { ...defaults.whisper, ...saved.whisper }, tts: { ...defaults.tts, ...saved.tts } } : defaults;
+      } catch (_) { return defaults; }
+    },
+    async updateModelSettings(payload) {
+      await delay(90);
+      const current = await this.getModelSettings();
+      const next = {
+        ...current,
+        ...payload,
+        llm: { ...current.llm, ...(payload.llm || {}) },
+        whisper: { ...current.whisper, ...(payload.whisper || {}) },
+        tts: { ...current.tts, ...(payload.tts || {}) },
+      };
+      for (const kind of ["llm", "tts"]) {
+        const key = next[kind].apiKey;
+        if (key === "") next[kind].hasApiKey = false;
+        else if (key) next[kind].hasApiKey = true;
+        delete next[kind].apiKey;
+      }
+      localStorage.setItem("subtrans_mock_model_settings_v1", JSON.stringify(next));
+      return next;
+    },
+    async createModelSettings(kind, payload) {
+      await delay(90);
+      if (!["llm", "whisper", "tts"].includes(kind)) throw new Error("未知模型类型");
+      const current = await this.getModelSettings();
+      const model = {
+        ...payload,
+        id: `${kind}-${uid().replace("task_", "model_")}`,
+        name: payload.name || payload.model || `${kind.toUpperCase()} 模型`,
+        hasApiKey: Boolean(payload.apiKey),
+        createdAt: Date.now(),
+        isCurrent: true,
+      };
+      delete model.apiKey;
+      const existingModels = current[kind].models || [{ ...current[kind], id: `${kind}-default`, name: current[kind].model || `${kind.toUpperCase()} 默认模型`, isCurrent: false }];
+      const models = [...existingModels, model];
+      const next = { ...current, [kind]: { ...current[kind], ...model, models: models.map((item) => ({ ...item, isCurrent: item.id === model.id })) } };
+      localStorage.setItem("subtrans_mock_model_settings_v1", JSON.stringify(next));
+      return { model, config: next[kind] };
+    },
+    async validateModelSettings(kind, payload) {
+      await delay(120);
+      if (kind === "whisper") return { ok: true, message: payload.provider === "local" ? "本地模型可用" : "Replicate 配置可用", latencyMs: 42 };
+      if (!payload.model) return { ok: false, message: "请先填写模型名称" };
+      return { ok: true, message: "连接成功（示例模式）", latencyMs: 86 };
+    },
     async deleteTask(id) { tasks = tasks.filter((t) => t.id !== id); persist(); await delay(80); },
     async cancelTask(id) {
       const t = find(id);

@@ -150,7 +150,7 @@ def _ensure_translation_engine(
     # compat.get_translation_model_manager dynamically.
     return _task._ensure_translation_engine(engine, need_subtitle, engines)
 
-
+# 确保支持的语言翻译
 def _ensure_supported_translation_languages(
     engine: str,
     need_subtitle: bool,
