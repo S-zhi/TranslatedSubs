@@ -17,7 +17,7 @@ const VIEW_BY_PATH = Object.freeze(
 
 export function viewFromPath(pathname = window.location.pathname) {
   const path = pathname.replace(/\/$/, "") || "/tasks";
-  if (["/probe", "/drive", "/replicate", "/settings"].includes(path)) return "other-settings";
+  if (["/probe", "/drive", "/settings"].includes(path)) return "other-settings";
   return VIEW_BY_PATH[path] || "tasks";
 }
 
@@ -39,7 +39,6 @@ export function initRouter() {
   }
   if (originalPath === "/probe") setSettingsTab("probe");
   if (originalPath === "/drive") setSettingsTab("drive");
-  if (originalPath === "/replicate") setSettingsTab("replicate");
   setView(initialView, { history: false });
   updateDocument(initialView);
 
@@ -47,7 +46,6 @@ export function initRouter() {
     const path = window.location.pathname;
     if (path === "/probe") setSettingsTab("probe");
     if (path === "/drive") setSettingsTab("drive");
-    if (path === "/replicate") setSettingsTab("replicate");
     setView(viewFromPath(), { history: false });
   });
 

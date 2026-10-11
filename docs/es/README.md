@@ -130,7 +130,6 @@ Abre <http://localhost:8000/>. Ejecuta `curl http://127.0.0.1:8000/api/health` p
 - **Interfaz multilingüe**: Cambia desde la barra lateral entre chino simplificado, inglés, hindi, español, árabe, francés, portugués y ruso. La selección se guarda en el navegador; en la primera visita se usa el idioma del navegador, salvo que el despliegue haya definido otro idioma predeterminado. Este se configura con `UI_LOCALE` en `web/config.js`.
 - **Integración MCP**: Permite que Codex, Claude Desktop y otros clientes de IA creen y sigan tareas mediante lenguaje natural.
 - **Extensión de Google Drive**: Sube, descarga y organiza archivos por tarea para compartir los resultados con un equipo.
-- **Motores de transcripción intercambiables**: Elige entre faster-whisper local, Replicate o un servicio HTTP compatible según tus necesidades de coste, velocidad y privacidad.
 
 ## Del vídeo a los subtítulos
 
@@ -148,7 +147,6 @@ Copia `.env.example` y inicia sin una clave API. El traductor predeterminado es 
 | --- | --- |
 | `SUBTRANS_DEEPSEEK_API_KEY` | Clave opcional de DeepSeek para la ruta explícita de compatibilidad en la nube. |
 | `SUBTRANS_DATA_DIR`, `SUBTRANS_DB` | Ubicación de los archivos y la base SQLite de tareas; el ejemplo con Docker guarda ambos en un volumen persistente. |
-| `SUBTRANS_TRANSCRIBER_BACKEND` | Usa `local_whisper` por defecto; también admite `replicate` o un servicio HTTP compatible. |
 | `SUBTRANS_COOKIES` | Archivo de cookies para sitios que requieren inicio de sesión o verificación de edad. |
 | `SUBTRANS_WORKERS`, `SUBTRANS_DOWNLOAD_WORKERS` | Límites de concurrencia del procesamiento y las descargas. |
 
@@ -170,7 +168,6 @@ La mayoría de las guías siguientes están en chino; el protocolo del servicio 
 - [Implementación en Linux](../quick-start-linux.md): instalación en Ubuntu/Debian, systemd, proxy inverso y resolución de problemas.
 - [Servidor MCP](../mcp-server.md): stdio, Streamable HTTP y herramientas.
 - [Guía de agentes MCP](../mcp-agent-guide.md): secuencia de llamadas, estados y errores.
-- [Protocolo del servicio de transcripción (en inglés)](../transcriber-service.md): motores local, Replicate y HTTP.
 - [Google Drive sidecar](../../drive-service/README.md): API y configuración para sincronizar archivos en la nube.
 
 ## Desarrollo

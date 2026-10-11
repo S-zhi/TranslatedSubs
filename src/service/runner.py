@@ -215,6 +215,15 @@ def recover_interrupted_tasks() -> list[str]:
     for rec in _store.list():
         if rec.status not in _RECOVERABLE_STATUSES:
             continue
+        if str(rec.model or "").partition(":")[0].strip().lower() == "replicate":
+            _store.update(
+                rec.id,
+                status="FAILED",
+                error="该任务使用已移除的 Replicate 云端转写，请新建任务并选择本地 Whisper 模型",
+                error_code="REPLICATE_BACKEND_REMOVED",
+            )
+            logger.warning("恢复中断任务时发现已移除的 Replicate 模型，标记为 FAILED: task=%s", rec.id)
+            continue
         if rec.source_type == "upload":
             state, _, msg = AssetResolver.resolve_source(rec.id)
             if state != ResourceState.AVAILABLE:

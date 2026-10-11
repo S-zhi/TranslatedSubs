@@ -443,9 +443,6 @@
               <button class="advanced-tab" id="settings-tab-audio" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-audio" data-settings-tab="audio" tabindex="-1">
                 <i class="ph ph-waveform" aria-hidden="true"></i><span>音频增强</span>
               </button>
-              <button class="advanced-tab" id="settings-tab-replicate" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-replicate" data-settings-tab="replicate" tabindex="-1">
-                <i class="ph ph-cloud" aria-hidden="true"></i><span>Replicate</span>
-              </button>
               <button class="advanced-tab" id="settings-tab-models" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-models" data-settings-tab="models" tabindex="-1">
                 <i class="ph ph-cpu" aria-hidden="true"></i><span>模型商店（本地）</span>
               </button>
@@ -518,43 +515,6 @@
                     <label class="engine-field"><span>单任务超时 <em>秒</em></span><input id="audioSeparationTimeout" type="number" min="60" max="86400" step="60" value="1800" /></label>
                   </div>
                   <div class="audio-settings__foot"><span id="audioSettingsMeta">—</span><button class="btn btn--primary" id="audioSettingsSave" type="submit"><i class="ph ph-floppy-disk"></i><span>保存设置</span></button></div>
-                </form>
-              </div>
-            </div>
-
-            <div class="advanced-tab-panel" id="settings-panel-replicate" role="tabpanel" aria-labelledby="settings-tab-replicate" data-settings-panel="replicate" hidden>
-              <div class="replicate-settings" id="replicateSettings">
-                <header class="replicate-settings__head">
-                  <div>
-                    <span class="eyebrow">REPLICATE / WHISPER</span>
-                    <h2>Replicate 用户配置</h2>
-                    <p>在此配置 Replicate Token 和 Whisper 参数。页面保存的配置优先于环境变量。</p>
-                  </div>
-                  <div class="replicate-settings__status" aria-live="polite">
-                    <span class="replicate-settings__status-label">配置状态</span>
-                    <span class="engine-status engine-status--checking" id="replicateSettingsStatus">正在读取</span>
-                  </div>
-                </header>
-                <div class="replicate-settings__notice">
-                  <i class="ph ph-shield-check" aria-hidden="true"></i>
-                  <span>Token 仅用于后端请求，页面不会回显已保存的明文。Token 输入框留空表示保持当前值。</span>
-                </div>
-                <form class="replicate-settings__form" id="replicateSettingsForm">
-                  <div class="replicate-settings__token-row">
-                    <label class="engine-field">
-                      <span>Replicate API Token</span>
-                      <input id="replicateApiToken" type="password" autocomplete="new-password" placeholder="输入新的 Token（可留空）" />
-                    </label>
-                    <div class="replicate-settings__token-actions"><span class="engine-status engine-status--unconfigured" id="replicateTokenStatus">未配置 Token</span><button class="btn btn--ghost btn--sm" id="replicateApiTokenClear" type="button">清除页面 Token</button></div>
-                  </div>
-                  <div class="replicate-settings__fields">
-                    <label class="engine-field replicate-settings__model"><span>Whisper 模型版本</span><input id="replicateWhisperModel" type="text" required /></label>
-                    <label class="engine-field"><span>请求超时 <em>秒</em></span><input id="replicateTimeout" type="number" min="1" max="86400" step="1" required /></label>
-                    <label class="engine-field"><span>网络重试次数</span><input id="replicateRetries" type="number" min="1" max="10" step="1" required /></label>
-                    <label class="engine-field"><span>重试间隔 <em>秒</em></span><input id="replicateRetryInterval" type="number" min="0" max="86400" step="1" required /></label>
-                    <label class="engine-field"><span>轮询间隔 <em>秒</em></span><input id="replicatePollInterval" type="number" min="1" max="3600" step="1" required /></label>
-                  </div>
-                  <div class="replicate-settings__foot"><span id="replicateSettingsMeta">—</span><button class="btn btn--primary" id="replicateSettingsSave" type="submit"><i class="ph ph-floppy-disk"></i><span>保存设置</span></button></div>
                 </form>
               </div>
             </div>

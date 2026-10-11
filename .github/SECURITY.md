@@ -45,7 +45,7 @@ Currently, TranslatedSubs is an open-source project maintained on a voluntary ba
 - Analysis of API endpoints under a safe sandbox environment.
 
 #### Prohibited (Forbidden Testing):
-- Do NOT perform Denial of Service (DoS/DDoS) attacks against third-party APIs used by this project (such as Replicate or DeepSeek).
+- Do NOT perform Denial of Service (DoS/DDoS) attacks against third-party APIs used by this project.
 - Do NOT leak or abuse API Keys, credentials, or user-uploaded media from production environments.
 
 ---
@@ -91,5 +91,5 @@ Currently, TranslatedSubs is an open-source project maintained on a voluntary ba
 - 在隔离的沙箱或测试环境内对后端 API 进行合规的安全测试。
 
 #### 禁止的行为（黑名单）:
-- 严禁对本项目集成的第三方云服务 API（如 Replicate、DeepSeek 等）进行任何形式的拒绝服务（DoS/DDoS）测试或滥用；
+- 严禁对本项目集成的第三方云服务 API（如第三方翻译服务等）进行任何形式的拒绝服务（DoS/DDoS）测试或滥用；
 - 严禁泄露、盗用或恶意消耗他人的 API Key 及凭据。

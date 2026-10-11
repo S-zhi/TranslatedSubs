@@ -8,7 +8,7 @@ export const state = {
   tasks: [],
   filter: "all",       // all | active | done | failed
   view: "tasks",       // tasks | preview | editor | storage | other-settings
-  settingsTab: "engines", // engines | audio | replicate | probe | drive
+  settingsTab: "engines", // engines | audio | probe | drive
   previewId: null,
   loading: true,
   loadError: null,

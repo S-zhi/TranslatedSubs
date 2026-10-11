@@ -107,7 +107,7 @@ test("task payload reads selected values even while language selects are disable
   const fields = {
     "#sourceLang": { value: "en", disabled: true },
     "#targetLang": { value: "zh-CN", disabled: true },
-    "#model": { value: "replicate:small.en" },
+    "#model": { value: "local:small" },
     "#engine": { value: "local-opus-en-zh" },
     "#quality": { value: "720p" },
   };
@@ -126,7 +126,7 @@ test("task payload reads selected values even while language selects are disable
     targetLang: "zh-CN",
     mode: "hard",
     burn: "hard",
-    model: "replicate:small.en",
+    model: "local:small",
     engine: "local-opus-en-zh",
     needSubtitle: true,
     quality: "720p",

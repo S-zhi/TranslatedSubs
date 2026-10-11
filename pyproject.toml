@@ -9,7 +9,6 @@ dependencies = [
     "httpx>=0.28.1",
     "mcp[cli]>=2.0.0,<3",
     "python-multipart>=0.0.9",
-    "replicate>=1.0.7",
     "uvicorn[standard]>=0.49.0",
     "yt-dlp>=2024.0.0",
     # 后续阶段再加：fastapi, uvicorn, rq, redis ...

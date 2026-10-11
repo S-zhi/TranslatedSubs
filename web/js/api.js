@@ -239,12 +239,6 @@ const RealApi = {
     return res.json();
   },
 
-  async getReplicateBalance() {
-    const res = await request(this.base, "/api/replicate/balance");
-    if (!res.ok) throw new Error(await readError(res, "获取 Replicate 账户状态失败"));
-    return res.json();
-  },
-
   async listTranslationEngines() {
     const res = await request(this.base, "/api/settings/translation-engines");
     if (!res.ok) throw new Error(await readError(res, "获取翻译引擎失败"));
@@ -262,20 +256,6 @@ const RealApi = {
       method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
     });
     if (!res.ok) throw new Error(await readError(res, "保存音频设置失败"));
-    return res.json();
-  },
-
-  async getReplicateSettings() {
-    const res = await request(this.base, "/api/settings/replicate");
-    if (!res.ok) throw new Error(await readError(res, "读取 Replicate 设置失败"));
-    return res.json();
-  },
-
-  async updateReplicateSettings(payload) {
-    const res = await request(this.base, "/api/settings/replicate", {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
-    });
-    if (!res.ok) throw new Error(await readError(res, "保存 Replicate 设置失败"));
     return res.json();
   },
 
@@ -617,7 +597,7 @@ const MockApi = (() => {
         id: uid(), url: "https://example.com/watch?v=demo-failed", title: null,
         sourceLang: "auto", targetLang: "ja", mode: "mono", burn: "soft", model: "medium",
         engine: "deepseek", status: "FAILED", progress: 22,
-        error: "未设置 REPLICATE_API_TOKEN（请在 .env 中配置）",
+        error: "本地 Whisper 模型尚未就绪，请先下载模型",
         createdAt: now - 1000 * 60 * 8, outputs: null, _sim: false,
       },
     ];
@@ -765,8 +745,8 @@ const MockApi = (() => {
         Object.keys(LANG_LABEL).filter((k) => k !== "auto" && k !== "zh")
       ).filter((k) => k !== "bn" && k !== "ur");
     },
-    // 示例模式下返回带后端标识的 Whisper 模型权重选项。
-    async listModelWeights() { await delay(80); return ["local:tiny", "local:base", "local:small", "local:medium", "local:large-v3", "local:large-v3-turbo", "replicate:tiny.en", "replicate:tiny", "replicate:base.en", "replicate:base", "replicate:small.en", "replicate:small", "replicate:medium.en", "replicate:medium", "replicate:large-v1", "replicate:large-v2"]; },
+    // 示例模式下返回本地 Whisper 模型权重选项。
+    async listModelWeights() { await delay(80); return ["local:tiny", "local:base", "local:small", "local:medium", "local:large-v3", "local:large-v3-turbo"]; },
     async listLocalModels() {
       await delay(40);
       let downloaded = [];
@@ -825,35 +805,6 @@ const MockApi = (() => {
       const next = { ...current, ...payload };
       localStorage.setItem("subtrans_mock_audio_settings_v1", JSON.stringify(next));
       return next;
-    },
-    async getReplicateSettings() {
-      await delay(40);
-      try {
-        return JSON.parse(localStorage.getItem("subtrans_mock_replicate_settings_v1")) || {
-          hasApiToken: false,
-          whisperModel: "stayallive/whisper-subtitles:b97ba81004e7132181864c885a76cae0e56bc61caa4190a395f6d8ba45b7a969",
-          timeout: 1800, retries: 3, retryInterval: 3600, pollInterval: 30,
-        };
-      } catch (_) {
-        return { hasApiToken: false, whisperModel: "stayallive/whisper-subtitles:b97ba81004e7132181864c885a76cae0e56bc61caa4190a395f6d8ba45b7a969", timeout: 1800, retries: 3, retryInterval: 3600, pollInterval: 30 };
-      }
-    },
-    async updateReplicateSettings(payload) {
-      const current = await this.getReplicateSettings();
-      const next = { ...current, ...payload, hasApiToken: payload.apiToken === "" ? false : (payload.apiToken ? true : current.hasApiToken) };
-      delete next.apiToken;
-      localStorage.setItem("subtrans_mock_replicate_settings_v1", JSON.stringify(next));
-      return next;
-    },
-    async getReplicateBalance() {
-      await delay(80);
-      return {
-        status: "unsupported", authenticated: false, account: null, balance: null,
-        currency: "USD", balanceSupported: false, source: "mock",
-        billingUrl: "https://replicate.com/account/billing", checkedAt: Date.now(),
-        errorCode: "mock_mode",
-        message: "示例模式不会访问真实 Replicate 账户；切换真实 API 后可检测 Token 状态。",
-      };
     },
     async listTranslationEngines() {
       const fallbackLocal = { id: "local-opus-en-zh", name: "本地 CPU 英译中", apiType: "local_ct2", model: "Helsinki-NLP/opus-mt-en-zh", baseUrl: "", enabled: true, hasApiKey: false, availability: "UNAVAILABLE", modelStatus: "NOT_INSTALLED", installedBytes: 0 };

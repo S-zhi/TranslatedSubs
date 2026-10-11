@@ -8,8 +8,7 @@ MCP Server 是业务 FastAPI 的独立适配层。它不直接访问 SQLite，�
 默认本地翻译不需要 API Key。需要使用云端兼容引擎时，再在项目根目录的 `.env` 配置对应密钥：
 
 ```ini
-# 可选：云端识别/翻译兼容配置
-REPLICATE_API_TOKEN=your-replicate-token
+# 可选：云端翻译兼容配置
 SUBTRANS_DEEPSEEK_API_KEY=your-deepseek-key
 ```
 

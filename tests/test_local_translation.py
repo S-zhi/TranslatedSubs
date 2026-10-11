@@ -607,7 +607,7 @@ def test_local_engine_creates_url_and_upload_tasks_without_api_key(monkeypatch, 
     url_result = task_routes.create_task(
         TaskCreate(
             url="https://example.com/video.mp4", sourceLang="en", targetLang="zh-CN",
-            model="replicate:tiny", engine=ENGINE_ID,
+            model="local:tiny", engine=ENGINE_ID,
         ),
         store=task_store,
         engines=engine_store,
@@ -620,7 +620,7 @@ def test_local_engine_creates_url_and_upload_tasks_without_api_key(monkeypatch, 
     upload_result = task_routes.create_upload_task(
         file=UploadFile(filename="clip.mp4", file=io.BytesIO(b"video")),
         sourceLang="en", targetLang="zh", mode="bilingual", burn="soft",
-        model="replicate:tiny", engine=ENGINE_ID, needSubtitle=True,
+        model="local:tiny", engine=ENGINE_ID, needSubtitle=True,
         ttsEnabled=False, ttsVoice="auto", originalVoiceMode="keep",
         store=task_store, engines=engine_store,
     )
@@ -783,7 +783,6 @@ def test_readiness_accepts_enabled_ready_local_engine_without_deepseek_key(monke
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     from dataclasses import replace
     monkeypatch.setattr(runtime_check, "settings", replace(runtime_check.settings, deepseek_api_key=""))
-    monkeypatch.setattr(runtime_check, "_configured_replicate_token", lambda: None)
     monkeypatch.setattr(runtime_check, "_check_binary", lambda _command: "available")
     monkeypatch.setattr(runtime_check, "_check_writable_directory", lambda _path: "writable")
     monkeypatch.setattr(runtime_check.importlib.util, "find_spec", lambda _module: object())
