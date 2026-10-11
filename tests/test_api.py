@@ -1212,30 +1212,6 @@ def test_probe_failure_response(client, monkeypatch):
     assert records[0].detail == "Unsupported URL"
 
 
-def test_manual_probe_still_runs_in_debug_mode(client, monkeypatch):
-    import dataclasses
-
-    called = []
-    fake = ProbeResult(ok=False, reason="网络不可用", detail="offline")
-    monkeypatch.setattr(
-        tasks_routes,
-        "settings",
-        dataclasses.replace(tasks_routes.settings, _debug=True),
-    )
-
-    def fake_probe(url, **_kwargs):
-        called.append(url)
-        return fake
-
-    monkeypatch.setattr(tasks_routes, "probe_video", fake_probe)
-
-    response = client.post("/api/tasks/probe", json={"url": "https://example.com/offline"})
-
-    assert response.status_code == 200
-    assert called == ["https://example.com/offline"]
-    assert response.json()["reason"] == "网络不可用"
-
-
 def test_probe_rejects_empty_url_422(client):
     """url 字段 min_length=1：空串应被 422 拒绝。"""
     assert client.post("/api/tasks/probe", json={"url": ""}).status_code == 422

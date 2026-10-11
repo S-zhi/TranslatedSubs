@@ -13,8 +13,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from .loader import ConfigError
-
 DEFAULT_LANG_NAMES: dict[str, str] = {
     "auto": "the source language",
     "zh-CN": "Simplified Chinese (简体中文)",
@@ -72,122 +70,6 @@ _DEFAULT_REPLICATE_MODEL = (
     "stayallive/whisper-subtitles:"
     "b97ba81004e7132181864c885a76cae0e56bc61caa4190a395f6d8ba45b7a969"
 )
-
-# The main service configuration is moving from environment variables to the
-# validated TOML loader. Secrets and settings owned by auxiliary processes stay
-# in the environment during that transition.
-_SECRET_ENV_KEYS = frozenset(
-    {
-        "SUBTRANS_DEEPSEEK_API_KEY",
-        "DEEPSEEK_API_KEY",
-        "REPLICATE_API_TOKEN",
-        "SUBTRANS_TRANSCRIBER_API_KEY",
-        "SUBTRANS_API_TOKEN",
-    }
-)
-_AUXILIARY_ENV_KEYS = frozenset(
-    {
-        "SUBTRANS_API_BASE_URL",
-        "SUBTRANS_DRIVE_API_BASE_URL",
-        "SUBTRANS_DRIVE_TIMEOUT",
-        "SUBTRANS_DRIVE_TRANSFER_TIMEOUT",
-        "SUBTRANS_LIVE_TEST",
-        "SUBTRANS_RUNTIME_SETTINGS_FILE",
-        "SUBTRANS_CONFIG_FILE",
-    }
-)
-_LEGACY_APPLICATION_ENV_KEYS = frozenset(
-    {
-        "SUBTRANS_DATA_DIR",
-        "SUBTRANS_DB",
-        "SUBTRANS_WORKERS",
-        "SUBTRANS_DOWNLOAD_WORKERS",
-        "SUBTRANS_DL_CONCURRENT_FRAGMENTS",
-        "SUBTRANS_DL_QUALITY",
-        "SUBTRANS_DL_FORMAT",
-        "SUBTRANS_DL_SOCKET_TIMEOUT",
-        "SUBTRANS_PROXY",
-        "SUBTRANS_DL_CONTAINER",
-        "SUBTRANS_COOKIES",
-        "SUBTRANS_ALLOW_COOKIES_FROM_BROWSER",
-        "SUBTRANS_DL_RETRIES",
-        "SUBTRANS_FFMPEG",
-        "SUBTRANS_FFPROBE",
-        "SUBTRANS_AUDIO_SR",
-        "SUBTRANS_AUDIO_CH",
-        "SUBTRANS_VOCAL_SEPARATION",
-        "SUBTRANS_VOCAL_SEPARATION_BACKEND",
-        "SUBTRANS_VOCAL_SEPARATION_MODEL",
-        "SUBTRANS_VOCAL_SEPARATION_THREADS",
-        "SUBTRANS_VOCAL_SEPARATION_COMMAND",
-        "SUBTRANS_VOCAL_SEPARATION_TIMEOUT",
-        "SUBTRANS_TRANSCRIBER_BACKEND",
-        "SUBTRANS_TRANSCRIBER_URL",
-        "SUBTRANS_TRANSCRIBER_TIMEOUT",
-        "SUBTRANS_LOCAL_WHISPER_MODEL",
-        "SUBTRANS_LOCAL_WHISPER_DEVICE",
-        "SUBTRANS_LOCAL_WHISPER_COMPUTE_TYPE",
-        "SUBTRANS_LOCAL_WHISPER_DOWNLOAD_ROOT",
-        "SUBTRANS_LOCAL_WHISPER_BEAM_SIZE",
-        "SUBTRANS_WHISPER_MODEL",
-        "SUBTRANS_REPLICATE_TIMEOUT",
-        "SUBTRANS_REPLICATE_RETRIES",
-        "SUBTRANS_REPLICATE_RETRY_INTERVAL",
-        "SUBTRANS_REPLICATE_POLL_INTERVAL",
-        "SUBTRANS_STREAM_TIMEOUT_SEC",
-        "SUBTRANS_READINESS_TTL_SEC",
-        "SUBTRANS_PROBE_CACHE_TTL_SEC",
-        "SUBTRANS_CORS_ORIGINS",
-        "SUBTRANS_MAX_UPLOAD_MB",
-        "SUBTRANS_MAX_VIDEO_MINUTES",
-        "SUBTRANS_DEEPSEEK_BASE_URL",
-        "SUBTRANS_DEEPSEEK_MODEL",
-        "SUBTRANS_TRANSLATE_BATCH",
-        "SUBTRANS_LOCAL_TRANSLATE_BATCH",
-        "SUBTRANS_TRANSLATE_TIMEOUT",
-        "SUBTRANS_TARGET_LANGUAGES",
-        "SUBTRANS_LANG_NAMES",
-    }
-)
-
-
-def _parse_env_lines(path: Path) -> dict[str, str]:
-    """Read a secret-only ``.env`` file for the new config layout."""
-    values: dict[str, str] = {}
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError as exc:
-        raise ConfigError(f"无法读取环境文件 {path}: {exc}") from exc
-
-    for line_number, raw_line in enumerate(lines, 1):
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" not in line:
-            raise ConfigError(f"{path}:{line_number} 缺少 '='")
-        key, _, value = line.partition("=")
-        key = key.strip()
-        if not key:
-            raise ConfigError(f"{path}:{line_number} 缺少配置键")
-        if key not in _SECRET_ENV_KEYS:
-            raise ConfigError(f"不允许的配置键: {key}")
-        values[key] = value.strip().strip('"').strip("'")
-    return values
-
-
-def _validate_process_environment() -> None:
-    """Reject migrated main-service settings passed through the environment."""
-    invalid = sorted(
-        key
-        for key in os.environ
-        if key in _LEGACY_APPLICATION_ENV_KEYS
-        and key not in _SECRET_ENV_KEYS
-        and key not in _AUXILIARY_ENV_KEYS
-    )
-    if invalid:
-        raise ConfigError(
-            "进程环境包含已迁移的配置键: " + ", ".join(invalid)
-        )
 
 
 def _bootstrap_env() -> None:
@@ -387,7 +269,6 @@ _ALIAS_MAP = {
     "merge_output_format": "_merge_output_format",
     "cookies_file": "_cookies_file",
     "allow_cookies_from_browser": "_allow_cookies_from_browser",
-    "debug": "_debug",
     "startup_probe_enabled": "_startup_probe_enabled",
     "download_retries": "_download_retries",
     "max_upload_mb": "_max_upload_mb",
@@ -450,7 +331,6 @@ class Settings:
     _merge_output_format: Any = field(default=_UNSET, repr=False)
     _cookies_file: Any = field(default=_UNSET, repr=False)
     _allow_cookies_from_browser: Any = field(default=_UNSET, repr=False)
-    _debug: Any = field(default=_UNSET, repr=False)
     _startup_probe_enabled: Any = field(default=_UNSET, repr=False)
     _download_retries: Any = field(default=_UNSET, repr=False)
     _max_upload_mb: Any = field(default=_UNSET, repr=False)
@@ -508,7 +388,6 @@ class Settings:
         _merge_output_format: Any = _UNSET,
         _cookies_file: Any = _UNSET,
         _allow_cookies_from_browser: Any = _UNSET,
-        _debug: Any = _UNSET,
         _startup_probe_enabled: Any = _UNSET,
         _download_retries: Any = _UNSET,
         _max_upload_mb: Any = _UNSET,
@@ -566,7 +445,6 @@ class Settings:
             "_merge_output_format": _merge_output_format,
             "_cookies_file": _cookies_file,
             "_allow_cookies_from_browser": _allow_cookies_from_browser,
-            "_debug": _debug,
             "_startup_probe_enabled": _startup_probe_enabled,
             "_download_retries": _download_retries,
             "_max_upload_mb": _max_upload_mb,
@@ -791,13 +669,6 @@ class Settings:
         return (os.getenv("SUBTRANS_ALLOW_COOKIES_FROM_BROWSER", "0") or "0").strip().lower() in {
             "1", "true", "yes", "on"
         }
-
-    # 进程启动调试模式；仅由显式启动入口传递，默认关闭。
-    @property
-    def debug(self) -> bool:
-        if self._debug is not _UNSET:
-            return bool(self._debug)
-        return False
 
     # 启动时自动探测固定站点目录，默认开启；测试和受限部署可关闭
     @property

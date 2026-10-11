@@ -48,14 +48,6 @@ def test_startup_probe_setting_defaults_on_and_can_be_disabled(monkeypatch):
     assert replaced.startup_probe_enabled is True
 
 
-def test_debug_setting_defaults_off_and_supports_explicit_override():
-    settings = config.Settings()
-    assert settings.debug is False
-    assert config.Settings(debug=True).debug is True
-    assert dataclasses.replace(settings, _debug=True).debug is True
-    assert dataclasses.replace(settings, _debug=False).debug is False
-
-
 def test_download_format_defaults_to_480p_cap():
     assert (
         config.Settings().download_format

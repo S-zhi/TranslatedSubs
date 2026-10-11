@@ -43,23 +43,3 @@ def test_startup_batch_runs_sites_with_bounded_background_workers(monkeypatch, t
     assert status["failed"] == 9
     assert len(calls) == 10
     assert len(store.list(limit=0)) == 10
-
-
-def test_startup_batch_skips_all_probes_in_debug_mode(monkeypatch, tmp_path):
-    calls = []
-
-    def fake_probe(url):
-        calls.append(url)
-        return ProbeResult(ok=True)
-
-    monkeypatch.setattr(probe_batch, "probe_video", fake_probe)
-    store = ProbeStore(tmp_path / "probes.db")
-    manager = ProbeBatchManager()
-    manager.start(store, debug=True)
-
-    status = manager.status()
-    assert status["state"] == "disabled"
-    assert status["completed"] == 0
-    assert manager._thread is None
-    assert calls == []
-    assert store.list(limit=10) == []
