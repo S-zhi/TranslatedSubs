@@ -349,6 +349,42 @@ def test_app_startup_submits_warmup_without_blocking_health(monkeypatch):
     assert calls == ["start", "cancel"]
 
 
+def test_app_startup_debug_skips_website_probe(monkeypatch, caplog):
+    app_module = importlib.import_module("src.handler.app")
+    probe_calls = []
+    probe_store = object()
+
+    class FakeManager:
+        def start_warmup(self):
+            return False
+
+        def cancel_warmup(self):
+            return True
+
+    monkeypatch.setattr(app_module, "get_translation_model_manager", lambda: FakeManager())
+    monkeypatch.setattr(app_module, "get_store", lambda: object())
+    monkeypatch.setattr(app_module.tasks, "scan_missing_terminal", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(app_module, "recover_interrupted_tasks", lambda: [])
+    monkeypatch.setattr(app_module, "start_retention_scheduler", lambda: None)
+    monkeypatch.setattr(app_module, "get_probe_store", lambda: probe_store)
+    monkeypatch.setattr(
+        app_module,
+        "start_startup_probe",
+        lambda *args, **kwargs: probe_calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr(app_module, "stop_startup_probe", lambda: None)
+    monkeypatch.setattr(app_module, "shutdown_executor", lambda **_kwargs: None)
+
+    from fastapi.testclient import TestClient
+
+    with caplog.at_level("INFO", logger="src.handler.app"):
+        with TestClient(app_module.create_app(debug=True)) as client:
+            assert client.get("/api/health").status_code == 200
+
+    assert probe_calls == [((probe_store,), {"enabled": False, "debug": True})]
+    assert "debug 模式：已跳过网站连通性检查" in caplog.text
+
+
 def test_model_status_downgrades_when_files_disappear_or_smoke_fails(tmp_path):
     model_dir = tmp_path / "model"
     model_dir.mkdir()

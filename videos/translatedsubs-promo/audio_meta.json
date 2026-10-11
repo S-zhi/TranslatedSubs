@@ -1,0 +1,89 @@
+{
+  "bgm": {
+    "path": "assets/bgm/promo-bed.mp3",
+    "volume": 1,
+    "duration_s": 40
+  },
+  "voices": [
+    {
+      "frame": 1,
+      "path": "assets/audio/voice/frame-01.wav",
+      "duration_s": 5,
+      "text": "Every video has a voice. Help more people understand it."
+    },
+    {
+      "frame": 2,
+      "path": "assets/audio/voice/frame-02.wav",
+      "duration_s": 6,
+      "text": "Meet TranslatedSubs. Add a video link or a local file, then choose a target language."
+    },
+    {
+      "frame": 3,
+      "path": "assets/audio/voice/frame-03.wav",
+      "duration_s": 8,
+      "text": "Watch speech become a transcript, then translated subtitles, with progress you can follow."
+    },
+    {
+      "frame": 4,
+      "path": "assets/audio/voice/frame-04.wav",
+      "duration_s": 8,
+      "text": "Preview the video. Refine the words and timing right beside the picture."
+    },
+    {
+      "frame": 5,
+      "path": "assets/audio/voice/frame-05.wav",
+      "duration_s": 8,
+      "text": "Download subtitles, choose soft or burned-in captions, and connect the same workflow to your tools through MCP."
+    },
+    {
+      "frame": 6,
+      "path": "assets/audio/voice/frame-06.wav",
+      "duration_s": 5,
+      "text": "TranslatedSubs. Take your story further. Start translating."
+    }
+  ],
+  "sfx": [
+    {
+      "frame": 2,
+      "file": "assets/sfx/prepared/frame-02-ui-click.wav",
+      "offset_s": 5.19,
+      "duration_s": 0.576,
+      "volume": 0.12
+    },
+    {
+      "frame": 3,
+      "file": "assets/sfx/prepared/frame-03-process-tick-a.wav",
+      "offset_s": 2.02,
+      "duration_s": 0.34,
+      "volume": 0.11
+    },
+    {
+      "frame": 3,
+      "file": "assets/sfx/prepared/frame-03-process-tick-b.wav",
+      "offset_s": 4.52,
+      "duration_s": 0.32,
+      "volume": 0.11
+    },
+    {
+      "frame": 4,
+      "file": "assets/sfx/prepared/frame-04-edit-confirmation.wav",
+      "offset_s": 2.02,
+      "duration_s": 0.24,
+      "volume": 0.1
+    },
+    {
+      "frame": 5,
+      "file": "assets/sfx/prepared/frame-05-export-handoff.wav",
+      "offset_s": 4.4,
+      "duration_s": 0.9,
+      "volume": 0.11
+    },
+    {
+      "frame": 6,
+      "file": "assets/sfx/prepared/frame-06-brand-resolve.wav",
+      "offset_s": 3.24,
+      "duration_s": 1,
+      "volume": 0.1
+    }
+  ]
+}

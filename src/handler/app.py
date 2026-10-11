@@ -55,7 +55,8 @@ _WEB_DIR = Path(__file__).resolve().parents[2] / "web"
 
 
 
-def create_app() -> FastAPI:
+def create_app(debug: bool | None = None) -> FastAPI:
+    debug_mode = settings.debug if debug is None else bool(debug)
     app = FastAPI(title="TranslatedSubs API", version="0.1.0")
 
     # 本机工作台：只允许配置中的前端来源访问 API。
@@ -80,9 +81,15 @@ def create_app() -> FastAPI:
     # SPA 路由需要在静态目录挂载前显式回退到 index.html，否则直接打开
     # /tasks、/preview 等深链接时 StaticFiles 会按目录查找并返回 404。
     if _WEB_DIR.is_dir():
+        app.add_api_route(
+            "/",
+            lambda: FileResponse(_WEB_DIR / "showcase.html"),
+            methods=["GET"],
+            include_in_schema=False,
+        )
         spa_routes = (
             "/tasks", "/preview", "/editor", "/probe", "/storage",
-            "/drive", "/replicate", "/settings",
+            "/drive", "/replicate", "/settings", "/mcp",
         )
         for route_path in spa_routes:
             app.add_api_route(
@@ -143,7 +150,13 @@ def create_app() -> FastAPI:
             logger.warning("启动恢复：以下未完成任务已重新入队: %s", recovered)
 
         start_retention_scheduler()
-        start_startup_probe(get_probe_store(), enabled=settings.startup_probe_enabled)
+        start_startup_probe(
+            get_probe_store(),
+            enabled=settings.startup_probe_enabled,
+            debug=debug_mode,
+        )
+        if debug_mode:
+            logger.info("debug 模式：已跳过网站连通性检查")
     @app.on_event("shutdown")
     def _shutdown_runner() -> None:
         """关闭应用时通知 runner 线程池退出。"""
@@ -155,3 +168,8 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+
+def create_debug_app() -> FastAPI:
+    """Uvicorn factory used by the explicit ``--debug`` launcher."""
+    return create_app(debug=True)

@@ -1,0 +1,211 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+  </head>
+  <body>
+    <template>
+      <style>
+        @font-face {
+          font-family: Sora;
+          src: url("assets/fonts/sora-400.woff2") format("woff2");
+          font-style: normal;
+          font-weight: 400;
+        }
+        @font-face {
+          font-family: Sora;
+          src: url("assets/fonts/sora-700.woff2") format("woff2");
+          font-style: normal;
+          font-weight: 700;
+        }
+        #root {
+          position: absolute;
+          inset: 0;
+          width: 1920px;
+          height: 1080px;
+          overflow: hidden;
+          color: #f5f7ff;
+          font-family: Sora, sans-serif;
+          background: transparent;
+        }
+        .ground {
+          position: absolute;
+          inset: 0;
+          background:
+            radial-gradient(ellipse at 50% 29%, rgba(124, 92, 252, 0.12), transparent 38%),
+            radial-gradient(ellipse at 22% 47%, rgba(81, 230, 241, 0.1), transparent 31%),
+            radial-gradient(ellipse at 82% 50%, rgba(124, 92, 252, 0.09), transparent 32%);
+          background-color: #080b17;
+        }
+        .top-rule,
+        .bottom-rule {
+          position: absolute;
+          left: 145px;
+          right: 145px;
+          height: 1px;
+          background: rgba(245, 247, 255, 0.08);
+        }
+        .top-rule { top: 82px; }
+        .bottom-rule { top: 894px; }
+        .brand-mark {
+          position: absolute;
+          left: 602px;
+          top: 218px;
+          width: 104px;
+          height: 104px;
+          opacity: 0;
+          object-fit: contain;
+        }
+        .wordmark {
+          position: absolute;
+          left: 738px;
+          top: 229px;
+          display: flex;
+          align-items: baseline;
+          white-space: nowrap;
+          color: #f5f7ff;
+          font-size: 70px;
+          font-weight: 700;
+          letter-spacing: -0.055em;
+          line-height: 1.2;
+        }
+        .letter {
+          display: inline-block;
+          opacity: 0;
+          will-change: transform, opacity;
+        }
+        .rails {
+          position: absolute;
+          top: 365px;
+          left: 0;
+          width: 1920px;
+          height: 88px;
+          overflow: visible;
+        }
+        .rail-underlay {
+          fill: none;
+          stroke: rgba(245, 247, 255, 0.09);
+          stroke-width: 2;
+          stroke-linecap: round;
+        }
+        .rail-cyan,
+        .rail-violet {
+          fill: none;
+          stroke-width: 3;
+          stroke-linecap: round;
+        }
+        .rail-cyan { stroke: #51e6f1; }
+        .rail-violet { stroke: #7c5cfc; }
+        .convergence {
+          position: absolute;
+          top: 406px;
+          left: 951px;
+          width: 18px;
+          height: 18px;
+          border-radius: 50%;
+          background: #f5f7ff;
+          box-shadow: 0 0 22px rgba(245, 247, 255, 0.4);
+          opacity: 0;
+        }
+        .tagline {
+          position: absolute;
+          top: 510px;
+          left: 0;
+          right: 0;
+          color: rgba(245, 247, 255, 0.78);
+          font-size: 38px;
+          font-weight: 400;
+          letter-spacing: -0.04em;
+          line-height: 1.3;
+          text-align: center;
+          opacity: 0;
+        }
+        .cta {
+          position: absolute;
+          top: 660px;
+          left: 50%;
+          width: 344px;
+          height: 82px;
+          margin-left: -172px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          box-sizing: border-box;
+          border-radius: 13px;
+          color: #080b17;
+          background: #51e6f1;
+          box-shadow: 0 14px 55px rgba(81, 230, 241, 0.19);
+          font-size: 22px;
+          font-weight: 700;
+          letter-spacing: -0.02em;
+          opacity: 0;
+          will-change: transform, opacity;
+        }
+        .cta-accent {
+          position: absolute;
+          right: 22px;
+          top: 34px;
+          width: 12px;
+          height: 12px;
+          border-radius: 50%;
+          background: #ff927a;
+          box-shadow: 0 0 0 rgba(255, 146, 122, 0);
+          opacity: 0;
+          will-change: transform, opacity;
+        }
+      </style>
+
+      <div id="root" data-composition-id="06-close" data-width="1920" data-height="1080">
+        <div class="ground"></div>
+        <div class="top-rule"></div>
+        <div class="bottom-rule"></div>
+
+        <img id="f06-close-logo" class="brand-mark" src="assets/translatedsubs-logo.svg" alt="TranslatedSubs logo" />
+        <div id="f06-close-wordmark" class="wordmark" aria-label="TranslatedSubs">
+          <span class="letter">T</span><span class="letter">r</span><span class="letter">a</span><span class="letter">n</span><span class="letter">s</span><span class="letter">l</span><span class="letter">a</span><span class="letter">t</span><span class="letter">e</span><span class="letter">d</span><span class="letter">S</span><span class="letter">u</span><span class="letter">b</span><span class="letter">s</span>
+        </div>
+
+        <svg class="rails" viewBox="0 0 1920 88" aria-hidden="true">
+          <path class="rail-underlay" d="M160 44 C390 44 610 44 950 44" />
+          <path class="rail-underlay" d="M1760 44 C1530 44 1310 44 970 44" />
+          <path id="f06-close-rail-cyan" class="rail-cyan" d="M160 44 C390 44 610 44 950 44" />
+          <path id="f06-close-rail-violet" class="rail-violet" d="M1760 44 C1530 44 1310 44 970 44" />
+        </svg>
+        <div id="f06-close-convergence" class="convergence"></div>
+        <div id="f06-close-tagline" class="tagline">Take your story further.</div>
+        <div id="f06-close-cta" class="cta">Start translating<span id="f06-close-coral" class="cta-accent"></span></div>
+      </div>
+
+      <script src="assets/vendor/gsap.min.js"></script>
+      <script>
+        window.__timelines = window.__timelines || {};
+        const tl = gsap.timeline({ paused: true });
+        const cyanRail = document.querySelector("#f06-close-rail-cyan");
+        const violetRail = document.querySelector("#f06-close-rail-violet");
+        const cyanLength = cyanRail.getTotalLength();
+        const violetLength = violetRail.getTotalLength();
+        cyanRail.style.strokeDasharray = cyanLength;
+        cyanRail.style.strokeDashoffset = cyanLength;
+        violetRail.style.strokeDasharray = violetLength;
+        violetRail.style.strokeDashoffset = violetLength;
+
+        // The unchanged mark lands early; two subtitle rails draw toward one meeting point.
+        tl.fromTo("#f06-close-logo", { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.38, ease: "power2.out" }, 0.04);
+        tl.fromTo(cyanRail, { strokeDashoffset: cyanLength }, { strokeDashoffset: 0, duration: 1.0, ease: "power2.out" }, 0.12);
+        tl.fromTo(violetRail, { strokeDashoffset: violetLength }, { strokeDashoffset: 0, duration: 1.0, ease: "power2.out" }, 0.12);
+        tl.fromTo("#f06-close-convergence", { autoAlpha: 0, scale: 0.65 }, { autoAlpha: 1, scale: 1, duration: 0.3, ease: "power3.out" }, 1.08);
+
+        const letters = document.querySelectorAll("#f06-close-wordmark .letter");
+        letters.forEach((letter, index) => {
+          tl.fromTo(letter, { autoAlpha: 0, x: 12 }, { autoAlpha: 1, x: 0, duration: 0.24, ease: "power2.out" }, 1.5 + index * 0.045);
+        });
+        tl.fromTo("#f06-close-tagline", { autoAlpha: 0, y: 12 }, { autoAlpha: 1, y: 0, duration: 0.52, ease: "power2.out" }, 2.47);
+        tl.fromTo("#f06-close-cta", { autoAlpha: 0, scale: 0.9, y: 12 }, { autoAlpha: 1, scale: 1, y: 0, duration: 0.58, ease: "power3.out" }, 3.24);
+        tl.fromTo("#f06-close-coral", { autoAlpha: 0, scale: 0.5, boxShadow: "0 0 0 rgba(255,146,122,0)" }, { autoAlpha: 1, scale: 1, boxShadow: "0 0 18px rgba(255,146,122,0.52)", duration: 0.3, ease: "power2.out" }, 3.86);
+        tl.to("#f06-close-coral", { boxShadow: "0 0 8px rgba(255,146,122,0.28)", duration: 0.25, ease: "power1.out" }, 4.16);
+
+        window.__timelines["06-close"] = tl;
+      </script>
+    </template>
+  </body>
+</html>

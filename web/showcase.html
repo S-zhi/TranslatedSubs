@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#080B17" />
+    <meta name="description" content="Turn video and audio into subtitles people can understand, refine, and share with TranslatedSubs." />
+    <title>TranslatedSubs — Make every word travel further</title>
+    <link rel="icon" href="assets/eye-subtitles-logo.svg" type="image/svg+xml" />
+    <link rel="preload" href="assets/showcase/sora-400.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="assets/showcase/sora-700.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="styles/showcase.css" />
+    <script type="module" src="js/showcase.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header" id="top">
+      <div class="shell header-inner">
+        <a class="brand" href="/" aria-label="TranslatedSubs home">
+          <img src="assets/eye-subtitles-logo.svg" alt="" width="40" height="40" />
+          <span>Translated<span class="brand-light">Subs</span></span>
+        </a>
+        <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="primary-nav" aria-label="Open navigation">
+          <span></span><span></span>
+        </button>
+        <nav class="primary-nav" id="primary-nav" aria-label="Main navigation">
+          <a href="#workflow">Workflow</a>
+          <a href="#outputs">Outputs</a>
+          <a class="nav-workspace" href="/tasks">Open workspace <span aria-hidden="true">↗</span></a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero shell" aria-labelledby="hero-title">
+        <div class="hero-copy reveal">
+          <p class="eyebrow"><span class="eyebrow-mark" aria-hidden="true"></span>Video &amp; audio workbench</p>
+          <h1 id="hero-title">Make every word<br /><span>travel further.</span></h1>
+          <p class="hero-description">Import video or audio, transcribe speech, translate and refine subtitles, then export a result ready to share.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="/tasks">Open workspace <span aria-hidden="true">↗</span></a>
+            <button class="button button-quiet" type="button" id="watch-film"><span class="play-icon" aria-hidden="true">▶</span> Watch the film</button>
+          </div>
+        </div>
+        <div class="hero-orbit" aria-hidden="true">
+          <div class="orbit-ring orbit-ring-one"></div>
+          <div class="orbit-ring orbit-ring-two"></div>
+          <div class="orbit-core"><span>VO</span><i></i><i></i><i></i><i></i></div>
+          <span class="orbit-caption orbit-caption-top">VOICE</span>
+          <span class="orbit-caption orbit-caption-bottom">SUBTITLES</span>
+        </div>
+
+        <figure class="film-frame reveal" id="film" data-reveal-delay="1">
+          <video id="promo-video" controls playsinline preload="metadata" poster="assets/showcase/promo-poster.jpg" aria-label="TranslatedSubs product film, 40 seconds">
+            <source src="assets/showcase/translatedsubs-promo.mp4" type="video/mp4" />
+            <track kind="captions" src="assets/showcase/narration.vtt" srclang="en" label="English" default />
+            Your browser does not support embedded video.
+          </video>
+          <figcaption class="film-caption">
+            <span class="film-caption-title">One voice. A wider audience.</span>
+            <span class="film-caption-meta"><span class="live-dot"></span> 40-second product film</span>
+          </figcaption>
+        </figure>
+      </section>
+
+      <section class="workflow-section section-shell" id="workflow" aria-labelledby="workflow-title">
+        <div class="section-heading reveal">
+          <p class="eyebrow">A clearer path from source to share</p>
+          <h2 id="workflow-title">One thoughtful workflow.<br /><span>Room to get it right.</span></h2>
+        </div>
+
+        <div class="workflow-pane reveal" data-reveal-delay="1">
+          <div class="workflow-tabs" role="tablist" aria-label="Workflow steps">
+            <button class="workflow-tab is-active" id="tab-import" type="button" role="tab" aria-selected="true" aria-controls="panel-import" tabindex="0" data-tab="import"><span class="tab-number">01</span><span>Import</span><span class="tab-line" aria-hidden="true"></span></button>
+            <button class="workflow-tab" id="tab-refine" type="button" role="tab" aria-selected="false" aria-controls="panel-refine" tabindex="-1" data-tab="refine"><span class="tab-number">02</span><span>Refine</span><span class="tab-line" aria-hidden="true"></span></button>
+            <button class="workflow-tab" id="tab-export" type="button" role="tab" aria-selected="false" aria-controls="panel-export" tabindex="-1" data-tab="export"><span class="tab-number">03</span><span>Export</span><span class="tab-line" aria-hidden="true"></span></button>
+          </div>
+
+          <section class="workflow-panel" id="panel-import" role="tabpanel" aria-labelledby="tab-import" tabindex="0" data-panel="import">
+            <div class="panel-copy">
+              <p class="panel-kicker"><span class="mini-dot"></span> Begin anywhere</p>
+              <h3>Start with<br />your source.</h3>
+              <p>Add a supported video URL or local file, then follow each task from intake through processing.</p>
+            </div>
+            <div class="illustration import-illustration" aria-label="Interface illustration of source selection and a video preview">
+              <div class="illustration-bar"><span class="window-dots"><i></i><i></i><i></i></span><span class="illustration-label">Interface illustration</span><span class="illustration-lock">01 / 03</span></div>
+              <div class="import-ui">
+                <div class="import-options">
+                  <span class="ui-label">Source</span>
+                  <div class="source-option"><span class="option-icon link-icon" aria-hidden="true">↗</span><span>Supported video URL</span><span class="option-arrow" aria-hidden="true">↗</span></div>
+                  <div class="source-option selected"><span class="option-icon file-icon" aria-hidden="true">↑</span><span>Local file</span><span class="option-check" aria-hidden="true">✓</span></div>
+                  <div class="language-option"><span><small>Target language</small><b>English</b></span><span aria-hidden="true">⌄</span></div>
+                </div>
+                <div class="import-preview"><img src="assets/showcase/landscape.webp" alt="Illustrative landscape preview" loading="lazy" /><span class="preview-chip"><i></i> Video preview</span><div class="preview-wash"></div><span class="preview-time">16:9</span></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="workflow-panel" id="panel-refine" role="tabpanel" aria-labelledby="tab-refine" tabindex="0" data-panel="refine" hidden>
+            <div class="panel-copy">
+              <p class="panel-kicker violet-kicker"><span class="mini-dot"></span> Keep the human in it</p>
+              <h3>Translate, then<br />make it yours.</h3>
+              <p>Review subtitles beside the video. Edit the words and timing before packaging again.</p>
+            </div>
+            <div class="illustration refine-illustration" aria-label="Interface illustration of subtitle review and timing fields">
+              <div class="illustration-bar"><span class="window-dots"><i></i><i></i><i></i></span><span class="illustration-label">Interface illustration</span><span class="illustration-lock">02 / 03</span></div>
+              <div class="refine-ui">
+                <div class="refine-preview"><img src="assets/showcase/landscape.webp" alt="Illustrative video preview" loading="lazy" /><span class="refine-caption">We begin at first light.</span><span class="play-scrub" aria-hidden="true">▶</span></div>
+                <div class="subtitle-editor"><span class="ui-label">Subtitle editor</span><div class="edit-line"><span>We begin at <b>first light.</b><i></i></span></div><div class="time-fields"><span><small>Start</small><b>00:02.3</b></span><span><small>End</small><b>00:04.9</b></span></div><div class="timing-track"><i></i><i></i><span></span></div></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="workflow-panel" id="panel-export" role="tabpanel" aria-labelledby="tab-export" tabindex="0" data-panel="export" hidden>
+            <div class="panel-copy">
+              <p class="panel-kicker"><span class="mini-dot"></span> Ready for the next step</p>
+              <h3>Deliver the<br />right result.</h3>
+              <p>Download SRT, or package a video with switchable soft subtitles or burned-in captions.</p>
+            </div>
+            <div class="illustration export-illustration" aria-label="Interface illustration of subtitle and video output choices">
+              <div class="illustration-bar"><span class="window-dots"><i></i><i></i><i></i></span><span class="illustration-label">Interface illustration</span><span class="illustration-lock">03 / 03</span></div>
+              <div class="export-ui">
+                <div class="export-source"><img src="assets/showcase/landscape.webp" alt="Illustrative source preview" loading="lazy" /><span class="source-glow"></span><span class="source-caption-mini">We begin at first light.</span></div>
+                <div class="export-branches" aria-hidden="true"><i></i><i></i><i></i><span></span></div>
+                <div class="export-results"><div class="result-file"><span class="file-mark">SRT</span><b>Subtitle file</b></div><div class="result-soft"><span class="soft-mark"><i></i><i></i><i></i></span><b>Soft subtitles</b><small>Separate text track</small></div><div class="result-burn"><span class="burn-mark"><i>Caption in picture</i></span><b>Burned-in captions</b></div></div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section class="outputs-section section-shell" id="outputs" aria-labelledby="outputs-title">
+        <div class="outputs-intro reveal">
+          <p class="eyebrow">Flexible delivery</p>
+          <h2 id="outputs-title">From subtitles to<br /><span>shareable video.</span></h2>
+          <p>Choose the format that fits the way your audience watches.</p>
+        </div>
+        <div class="output-list reveal" data-reveal-delay="1">
+          <article class="output-row output-srt">
+            <div class="output-art"><div class="document-art"><i></i><i></i><i></i><span>.SRT</span></div></div>
+            <div class="output-copy"><p class="output-label">Subtitle file</p><p>A clean subtitle file, ready to use wherever you need it.</p></div>
+            <span class="output-index">01</span>
+          </article>
+          <article class="output-row output-soft">
+            <div class="output-art"><div class="soft-art"><img src="assets/showcase/landscape.webp" alt="" loading="lazy" /><div class="soft-art-track"><span>TEXT</span><i></i><b>✓</b></div></div></div>
+            <div class="output-copy"><p class="output-label">Soft subtitles</p><p>A separate, switchable text track stays with the video.</p></div>
+            <span class="output-index">02</span>
+          </article>
+          <article class="output-row output-burned">
+            <div class="output-art"><div class="burned-art"><img src="assets/showcase/landscape.webp" alt="" loading="lazy" /><span>We begin at first light.</span></div></div>
+            <div class="output-copy"><p class="output-label">Burned-in captions</p><p>Captions sit directly in the picture.</p></div>
+            <span class="output-index">03</span>
+          </article>
+        </div>
+        <aside class="mcp-card reveal" aria-labelledby="mcp-title" data-reveal-delay="2">
+          <div class="mcp-glyph" aria-hidden="true"><svg viewBox="0 0 48 48" fill="none"><circle cx="24" cy="24" r="5"/><circle cx="10" cy="12" r="3"/><circle cx="38" cy="12" r="3"/><circle cx="10" cy="36" r="3"/><circle cx="38" cy="36" r="3"/><path d="m20 21-8-7m16 7 8-7m-16 13-8 7m16-7 8 7"/></svg></div>
+          <div><p class="mcp-eyebrow">Tool access</p><h3 id="mcp-title">Works with your AI tools</h3><p>Use MCP to create and track tasks from supported AI clients.</p></div>
+          <a class="mcp-action" href="/mcp">Explore MCP <span aria-hidden="true">↗</span></a>
+        </aside>
+      </section>
+
+      <section class="final-cta section-shell reveal" aria-labelledby="cta-title">
+        <div class="cta-rail" aria-hidden="true"><span></span><i></i></div>
+        <p class="eyebrow">Your next story starts here</p>
+        <h2 id="cta-title">Ready to put every word<br /><span>to work?</span></h2>
+        <p>Bring your next video or audio file into the workspace.</p>
+        <a class="button button-primary" href="/tasks">Open workspace <span aria-hidden="true">↗</span></a>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="shell footer-inner">
+        <a class="brand footer-brand" href="/" aria-label="TranslatedSubs home"><img src="assets/eye-subtitles-logo.svg" alt="" width="32" height="32" /><span>Translated<span class="brand-light">Subs</span></span></a>
+        <span class="footer-note">A clearer way to work with spoken media.</span>
+        <div class="footer-links"><a href="/tasks">Workspace</a><a href="/docs">API docs</a><a href="#top">Back to top ↑</a></div>
+      </div>
+    </footer>
+    <p class="sr-only" id="video-status" aria-live="polite"></p>
+  </body>
+</html>

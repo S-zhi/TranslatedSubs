@@ -1,0 +1,583 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+  </head>
+  <body>
+    <template>
+      <style>
+        @font-face {
+          font-family: "Sora";
+          src: url("assets/fonts/sora-400.woff2") format("woff2");
+          font-weight: 400;
+          font-style: normal;
+        }
+        @font-face {
+          font-family: "Sora";
+          src: url("assets/fonts/sora-700.woff2") format("woff2");
+          font-weight: 700;
+          font-style: normal;
+        }
+        #root {
+          position: absolute;
+          inset: 0;
+          width: 1920px;
+          height: 1080px;
+          overflow: hidden;
+          color: #F5F7FF;
+          font-family: "Sora", sans-serif;
+        }
+        .ground {
+          position: absolute;
+          inset: 0;
+          background: #080B17;
+        }
+        .bloom {
+          position: absolute;
+          left: 180px;
+          top: 100px;
+          width: 1350px;
+          height: 760px;
+          background: radial-gradient(ellipse, rgba(81,230,241,0.07) 0%, rgba(124,92,252,0.035) 43%, rgba(8,11,23,0) 73%);
+          pointer-events: none;
+        }
+        .top-rule {
+          position: absolute;
+          left: 98px;
+          right: 98px;
+          top: 128px;
+          height: 1px;
+          background: rgba(245,247,255,0.09);
+        }
+        .interface-tag {
+          position: absolute;
+          left: 100px;
+          top: 72px;
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          color: rgba(245,247,255,0.66);
+          font-size: 17px;
+          font-weight: 700;
+          letter-spacing: 0.12em;
+          text-transform: uppercase;
+        }
+        .interface-tag::before {
+          content: "";
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+          background: #51E6F1;
+          box-shadow: 0 0 16px rgba(81,230,241,0.65);
+        }
+        .world {
+          position: absolute;
+          inset: 0;
+          transform-origin: 50% 50%;
+          will-change: transform;
+        }
+        .origin {
+          position: absolute;
+          left: 100px;
+          top: 260px;
+          width: 500px;
+          height: 360px;
+          box-sizing: border-box;
+          padding: 10px;
+          border: 1px solid rgba(245,247,255,0.24);
+          border-radius: 20px;
+          background: #11182A;
+          box-shadow: 0 34px 86px rgba(0,0,0,0.44), 0 0 55px rgba(81,230,241,0.075);
+          opacity: 0;
+          transform-origin: 50% 50%;
+          will-change: transform;
+          z-index: 2;
+        }
+        .origin-image {
+          position: relative;
+          width: 100%;
+          height: 100%;
+          border-radius: 13px;
+          overflow: hidden;
+          background: #152031;
+        }
+        .origin-image img {
+          display: block;
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        }
+        .source-caption {
+          position: absolute;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          min-height: 70px;
+          box-sizing: border-box;
+          display: flex;
+          align-items: center;
+          padding: 12px 20px;
+          background: rgba(8,11,23,0.74);
+          border-top: 1px solid rgba(245,247,255,0.18);
+          color: #F5F7FF;
+          font-size: 21px;
+          font-weight: 700;
+          letter-spacing: -0.018em;
+        }
+        .source-caption::before {
+          content: "";
+          width: 3px;
+          height: 27px;
+          margin-right: 14px;
+          border-radius: 3px;
+          background: #51E6F1;
+        }
+        .branch-svg {
+          position: absolute;
+          inset: 0;
+          width: 1920px;
+          height: 1080px;
+          overflow: visible;
+          pointer-events: none;
+          z-index: 1;
+        }
+        .branch-svg path {
+          fill: none;
+          stroke-linecap: round;
+          stroke-linejoin: round;
+        }
+        .main-rail {
+          stroke: #51E6F1;
+          stroke-width: 3;
+          opacity: 0.92;
+        }
+        .out-rail {
+          stroke: #51E6F1;
+          stroke-width: 2.5;
+          opacity: 0.9;
+        }
+        .mcp-rail {
+          stroke: rgba(124,92,252,0.86);
+          stroke-width: 2;
+          opacity: 0.9;
+        }
+        .junction {
+          position: absolute;
+          left: 691px;
+          top: 435px;
+          width: 18px;
+          height: 18px;
+          border-radius: 50%;
+          background: #51E6F1;
+          box-shadow: 0 0 0 8px rgba(81,230,241,0.09), 0 0 24px rgba(81,230,241,0.62);
+          opacity: 0;
+          z-index: 3;
+        }
+        .output {
+          position: absolute;
+          opacity: 0;
+          transform-origin: 50% 50%;
+          will-change: transform;
+          z-index: 4;
+        }
+        .file-output {
+          left: 760px;
+          top: 205px;
+          width: 470px;
+          height: 160px;
+          display: flex;
+          align-items: center;
+          gap: 35px;
+        }
+        .document-glyph {
+          position: relative;
+          width: 114px;
+          height: 148px;
+          flex: none;
+          box-sizing: border-box;
+          padding: 27px 20px 17px;
+          border: 1px solid rgba(245,247,255,0.26);
+          border-radius: 12px;
+          background: rgba(245,247,255,0.095);
+          box-shadow: 0 18px 48px rgba(0,0,0,0.32);
+        }
+        .document-glyph::before {
+          content: "";
+          position: absolute;
+          right: -1px;
+          top: -1px;
+          width: 31px;
+          height: 31px;
+          border-left: 1px solid rgba(245,247,255,0.22);
+          border-bottom: 1px solid rgba(245,247,255,0.22);
+          border-radius: 0 11px 0 8px;
+          background: #20283D;
+          clip-path: polygon(0 0,100% 100%,0 100%);
+        }
+        .doc-lines {
+          display: flex;
+          flex-direction: column;
+          gap: 11px;
+          margin-top: 6px;
+        }
+        .doc-lines i {
+          display: block;
+          width: 64px;
+          height: 3px;
+          border-radius: 3px;
+          background: rgba(245,247,255,0.65);
+        }
+        .doc-lines i:nth-child(2) { width: 52px; }
+        .doc-lines i:nth-child(3) { width: 68px; }
+        .file-ext {
+          position: absolute;
+          left: 17px;
+          bottom: 16px;
+          color: #51E6F1;
+          font-size: 16px;
+          font-weight: 700;
+          letter-spacing: 0.1em;
+        }
+        .output-label {
+          color: #F5F7FF;
+          font-size: 34px;
+          line-height: 1.14;
+          font-weight: 700;
+          letter-spacing: -0.04em;
+          white-space: nowrap;
+        }
+        .soft-output {
+          left: 770px;
+          top: 394px;
+          width: 820px;
+          height: 190px;
+          display: flex;
+          align-items: center;
+          gap: 30px;
+        }
+        .video-stack {
+          width: 322px;
+          flex: none;
+        }
+        .video-still {
+          position: relative;
+          height: 140px;
+          border: 1px solid rgba(245,247,255,0.2);
+          border-radius: 13px;
+          overflow: hidden;
+          background: #172234;
+          box-shadow: 0 18px 46px rgba(0,0,0,0.34);
+        }
+        .video-still img {
+          display: block;
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        }
+        .play-mark {
+          position: absolute;
+          left: 17px;
+          top: 16px;
+          width: 31px;
+          height: 31px;
+          display: grid;
+          place-items: center;
+          border: 1px solid rgba(245,247,255,0.45);
+          border-radius: 50%;
+          background: rgba(8,11,23,0.5);
+        }
+        .play-mark::after {
+          content: "";
+          margin-left: 3px;
+          border-top: 6px solid transparent;
+          border-bottom: 6px solid transparent;
+          border-left: 8px solid #F5F7FF;
+        }
+        .text-track {
+          height: 40px;
+          margin-top: 8px;
+          box-sizing: border-box;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 0 11px;
+          border: 1px solid rgba(124,92,252,0.58);
+          border-radius: 7px;
+          background: rgba(124,92,252,0.13);
+          color: rgba(245,247,255,0.83);
+          font-size: 14px;
+          font-weight: 700;
+          letter-spacing: 0.025em;
+        }
+        .track-dot {
+          width: 8px;
+          height: 8px;
+          flex: none;
+          border-radius: 50%;
+          background: #7C5CFC;
+          box-shadow: 0 0 11px rgba(124,92,252,0.65);
+        }
+        .track-line {
+          height: 5px;
+          flex: 1;
+          border-radius: 5px;
+          background: rgba(124,92,252,0.75);
+        }
+        .track-toggle {
+          display: grid;
+          place-items: center;
+          width: 17px;
+          height: 17px;
+          border: 1px solid rgba(245,247,255,0.7);
+          border-radius: 4px;
+          color: #F5F7FF;
+          font-size: 12px;
+          line-height: 1;
+        }
+        .soft-label {
+          padding-left: 1px;
+        }
+        .burned-output {
+          left: 770px;
+          top: 598px;
+          width: 820px;
+          height: 174px;
+          display: flex;
+          align-items: center;
+          gap: 30px;
+        }
+        .burned-still {
+          position: relative;
+          width: 322px;
+          height: 164px;
+          flex: none;
+          border: 1px solid rgba(245,247,255,0.2);
+          border-radius: 13px;
+          overflow: hidden;
+          background: #172234;
+          box-shadow: 0 18px 46px rgba(0,0,0,0.34);
+        }
+        .burned-still img {
+          display: block;
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        }
+        .embedded-caption {
+          position: absolute;
+          left: 13px;
+          right: 13px;
+          bottom: 12px;
+          min-height: 31px;
+          box-sizing: border-box;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 5px 10px;
+          border-radius: 5px;
+          background: rgba(8,11,23,0.83);
+          color: #F5F7FF;
+          font-size: 13px;
+          line-height: 1.1;
+          font-weight: 700;
+          letter-spacing: -0.015em;
+          white-space: nowrap;
+        }
+        .burned-label {
+          max-width: 400px;
+          white-space: normal;
+        }
+        .mcp-output {
+          left: 805px;
+          top: 786px;
+          width: 570px;
+          height: 72px;
+          display: flex;
+          align-items: center;
+          gap: 24px;
+        }
+        .mcp-divider {
+          position: absolute;
+          left: 760px;
+          top: 780px;
+          width: 760px;
+          height: 1px;
+          background: rgba(124,92,252,0.18);
+        }
+        .connector-glyph {
+          position: relative;
+          width: 68px;
+          height: 68px;
+          flex: none;
+          display: grid;
+          place-items: center;
+          border: 1px solid rgba(124,92,252,0.47);
+          border-radius: 18px;
+          background: rgba(124,92,252,0.1);
+          color: #C0B4FF;
+        }
+        .connector-glyph svg {
+          width: 42px;
+          height: 42px;
+        }
+        .mcp-copy {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          min-width: 0;
+        }
+        .mcp-label {
+          font-size: 26px;
+          color: #E4DEFF;
+        }
+        .mcp-description {
+          color: rgba(245,247,255,0.59);
+          font-size: 16px;
+          letter-spacing: 0.005em;
+        }
+        .node {
+          position: absolute;
+          width: 10px;
+          height: 10px;
+          border-radius: 50%;
+          background: #7C5CFC;
+          box-shadow: 0 0 0 6px rgba(124,92,252,0.1), 0 0 18px rgba(124,92,252,0.6);
+          opacity: 0;
+          z-index: 3;
+        }
+        #root .node-one { left: 695px; top: 276px; }
+        #root .node-two { left: 695px; top: 472px; }
+        #root .node-three { left: 695px; top: 667px; }
+        #root .node-mcp { left: 800px; top: 817px; width: 8px; height: 8px; }
+      </style>
+
+      <div id="root" data-composition-id="05-export" data-width="1920" data-height="1080" data-duration="8">
+        <div class="ground"></div>
+        <div class="bloom"></div>
+        <div class="top-rule"></div>
+        <div class="interface-tag">Interface illustration</div>
+        <div class="world" id="f05-export-world">
+          <div class="origin" id="f05-export-origin">
+            <div class="origin-image">
+              <img src="assets/demo-landscape.png" alt="Illustrative landscape preview" />
+              <div class="source-caption">We begin at first light.</div>
+            </div>
+          </div>
+          <svg class="branch-svg" viewBox="0 0 1920 1080" aria-hidden="true">
+            <path class="main-rail" id="f05-export-main-rail" d="M600 440 H700" />
+            <path class="out-rail" id="f05-export-file-rail" d="M700 440 V283 H760" />
+            <path class="out-rail" id="f05-export-soft-rail" d="M700 440 V482 H770" />
+            <path class="out-rail" id="f05-export-burned-rail" d="M700 440 V674 H770" />
+            <path class="mcp-rail" id="f05-export-mcp-rail" d="M700 822 H805" />
+          </svg>
+          <div class="junction" id="f05-export-junction"></div>
+          <div class="node node-one" id="f05-export-node-one"></div>
+          <div class="node node-two" id="f05-export-node-two"></div>
+          <div class="node node-three" id="f05-export-node-three"></div>
+          <div class="node node-mcp" id="f05-export-node-mcp"></div>
+
+          <div class="output file-output" id="f05-export-file-output">
+            <div class="document-glyph" aria-hidden="true"><div class="doc-lines"><i></i><i></i><i></i></div><div class="file-ext">.SRT</div></div>
+            <div class="output-label">Subtitle file</div>
+          </div>
+
+          <div class="output soft-output" id="f05-export-soft-output">
+            <div class="video-stack">
+              <div class="video-still"><img src="assets/demo-landscape.png" alt="Illustrative video preview" /><div class="play-mark"></div></div>
+              <div class="text-track"><span class="track-dot"></span><span>Text track</span><span class="track-line"></span><span class="track-toggle">✓</span></div>
+            </div>
+            <div class="output-label soft-label">Soft subtitles</div>
+          </div>
+
+          <div class="output burned-output" id="f05-export-burned-output">
+            <div class="burned-still"><img src="assets/demo-landscape.png" alt="Illustrative video preview with burned-in caption" /><div class="embedded-caption">We begin at first light.</div></div>
+            <div class="output-label burned-label">Burned-in captions</div>
+          </div>
+
+          <div class="mcp-divider"></div>
+          <div class="output mcp-output" id="f05-export-mcp-output">
+            <div class="connector-glyph" aria-hidden="true">
+              <svg viewBox="0 0 44 44" fill="none"><circle cx="22" cy="22" r="5" stroke="currentColor" stroke-width="2"/><circle cx="9" cy="11" r="3" stroke="currentColor" stroke-width="2"/><circle cx="35" cy="11" r="3" stroke="currentColor" stroke-width="2"/><circle cx="9" cy="33" r="3" stroke="currentColor" stroke-width="2"/><circle cx="35" cy="33" r="3" stroke="currentColor" stroke-width="2"/><path d="m18 19-7-6m15 6 7-6m-15 12-7 6m15-6 7 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </div>
+            <div class="mcp-copy"><div class="output-label mcp-label">MCP access</div><div class="mcp-description">Create and track tasks</div></div>
+          </div>
+        </div>
+      </div>
+
+      <script src="assets/vendor/gsap.min.js"></script>
+      <script>
+        window.__timelines = window.__timelines || {};
+        const tl = gsap.timeline({ paused: true });
+        const draw = (selector) => {
+          const path = document.querySelector(selector);
+          const length = path.getTotalLength();
+          path.style.strokeDasharray = `${length}`;
+          path.style.strokeDashoffset = `${length}`;
+          return path;
+        };
+        const mainRail = draw("#f05-export-main-rail");
+        const fileRail = draw("#f05-export-file-rail");
+        const softRail = draw("#f05-export-soft-rail");
+        const burnedRail = draw("#f05-export-burned-rail");
+        const mcpRail = draw("#f05-export-mcp-rail");
+
+        const sequence = [
+          { id: "#f05-export-file-output", label: "Subtitle file", hold: 0.37, targetX: 995, targetY: 285 },
+          { id: "#f05-export-soft-output", label: "Soft subtitles", hold: 0.50, targetX: 1180, targetY: 489 },
+          { id: "#f05-export-burned-output", label: "Burned-in captions", hold: 0.95, targetX: 1180, targetY: 680 },
+          { id: "#f05-export-mcp-output", label: "MCP access", hold: 1.00, targetX: 1080, targetY: 822, localEntrance: true },
+        ];
+        const baseDuration = 0.42;
+        const secondsPerCharacter = 0.025;
+        let sequenceAt = 2.02;
+        sequence.forEach((entry) => {
+          const entranceDuration = 0.52;
+          const contentDuration = baseDuration + entry.label.length * secondsPerCharacter + entry.hold;
+          const element = document.querySelector(entry.id);
+          const rect = element.getBoundingClientRect();
+          const centerX = rect.left + rect.width / 2;
+          const centerY = rect.top + rect.height / 2;
+          const clusterX = 700;
+          const clusterY = 440;
+          const startX = clusterX - centerX;
+          const startY = clusterY - centerY;
+          const fromState = entry.localEntrance
+            ? { x: 0, y: 12, scale: 0.98, opacity: 0 }
+            : { x: startX, y: startY, scale: 0.66, opacity: 0 };
+          tl.fromTo(
+            element,
+            fromState,
+            { x: 0, y: 0, scale: 1, opacity: 1, duration: entranceDuration, ease: "power3.out" },
+            sequenceAt,
+          );
+          entry.start = sequenceAt;
+          entry.end = sequenceAt + contentDuration;
+          sequenceAt += contentDuration;
+        });
+
+        // Scene 1: the preview settles into a left-side source, then its cyan rail draws.
+        tl.fromTo("#f05-export-origin", { x: 420, y: 22, scale: 1.13, opacity: 1 }, { x: 0, y: 0, scale: 1, opacity: 1, duration: 0.76, ease: "power3.out" }, 0.02);
+        tl.fromTo(mainRail, { strokeDashoffset: mainRail.getTotalLength() }, { strokeDashoffset: 0, duration: 0.62, ease: "power2.out" }, 0.72);
+        tl.fromTo("#f05-export-junction", { scale: 0.45, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.34, ease: "back.out(1.45)" }, 1.20);
+
+        // Branches trace as their matching outputs assemble out from the junction.
+        tl.fromTo(fileRail, { strokeDashoffset: fileRail.getTotalLength() }, { strokeDashoffset: 0, duration: 0.54, ease: "power2.out" }, sequence[0].start - 0.14);
+        tl.fromTo("#f05-export-node-one", { scale: 0.4, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.3, ease: "back.out(1.4)" }, sequence[0].start + 0.12);
+        tl.fromTo(softRail, { strokeDashoffset: softRail.getTotalLength() }, { strokeDashoffset: 0, duration: 0.56, ease: "power2.out" }, sequence[1].start - 0.14);
+        tl.fromTo("#f05-export-node-two", { scale: 0.4, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.3, ease: "back.out(1.4)" }, sequence[1].start + 0.12);
+        tl.fromTo(burnedRail, { strokeDashoffset: burnedRail.getTotalLength() }, { strokeDashoffset: 0, duration: 0.6, ease: "power2.out" }, sequence[2].start - 0.14);
+        tl.fromTo("#f05-export-node-three", { scale: 0.4, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.3, ease: "back.out(1.4)" }, sequence[2].start + 0.12);
+        tl.to([fileRail, softRail, burnedRail], { stroke: "#7C5CFC", duration: 0.32, ease: "power1.out" }, sequence[2].start + 0.52);
+
+        // The third media treatment contains its English caption in the picture itself.
+        tl.fromTo(".embedded-caption", { opacity: 0, y: 7 }, { opacity: 1, y: 0, duration: 0.38, ease: "power2.out" }, sequence[2].start + 0.16);
+
+        // MCP is a slimmer tool connector branch, visually distinct from the three media outputs.
+        tl.fromTo(mcpRail, { strokeDashoffset: mcpRail.getTotalLength() }, { strokeDashoffset: 0, duration: 0.54, ease: "power2.out" }, sequence[3].start - 0.16);
+        tl.fromTo("#f05-export-node-mcp", { scale: 0.4, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.3, ease: "back.out(1.4)" }, sequence[3].start + 0.08);
+
+        window.__timelines["05-export"] = tl;
+      </script>
+    </template>
+  </body>
+</html>

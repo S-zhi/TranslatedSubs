@@ -1,0 +1,619 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+  </head>
+  <body>
+    <template>
+      <style>
+        @font-face {
+          font-family: "Sora";
+          src: url("assets/fonts/sora-400.woff2") format("woff2");
+          font-weight: 400;
+          font-style: normal;
+          font-display: block;
+        }
+        @font-face {
+          font-family: "Sora";
+          src: url("assets/fonts/sora-700.woff2") format("woff2");
+          font-weight: 700;
+          font-style: normal;
+          font-display: block;
+        }
+        #root {
+          position: absolute;
+          inset: 0;
+          width: 1920px;
+          height: 1080px;
+          overflow: hidden;
+          color: #F5F7FF;
+          font-family: "Sora", sans-serif;
+          background: #080B17;
+        }
+        .ground {
+          position: absolute;
+          inset: 0;
+          background:
+            radial-gradient(ellipse 48% 48% at 35% 48%, rgba(81,230,241,.10), transparent 72%),
+            radial-gradient(ellipse 38% 48% at 80% 50%, rgba(124,92,252,.10), transparent 74%),
+            #080B17;
+        }
+        .ground::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          opacity: .10;
+          background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.92' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.2'/%3E%3C/svg%3E");
+          pointer-events: none;
+        }
+        .guide-top {
+          position: absolute;
+          left: 96px;
+          right: 96px;
+          top: 96px;
+          height: 1px;
+          background: linear-gradient(90deg, rgba(245,247,255,.18), rgba(245,247,255,.04) 72%, transparent);
+        }
+        .camera-world {
+          position: absolute;
+          inset: 0;
+          width: 1920px;
+          height: 1080px;
+          transform-origin: 50% 50%;
+        }
+        .workbench {
+          position: absolute;
+          left: 94px;
+          top: 120px;
+          width: 1732px;
+          height: 692px;
+          box-sizing: border-box;
+          border: 1px solid rgba(245,247,255,.17);
+          border-radius: 22px;
+          background: rgba(245,247,255,.045);
+          box-shadow: 0 30px 95px rgba(0,0,0,.32);
+        }
+        .panel-seam {
+          position: absolute;
+          left: 929px;
+          top: 172px;
+          width: 1px;
+          height: 566px;
+          background: linear-gradient(180deg, transparent, rgba(245,247,255,.14) 12%, rgba(245,247,255,.09) 84%, transparent);
+        }
+        .preview-title,
+        .editor-title {
+          position: absolute;
+          top: 166px;
+          color: #F5F7FF;
+          font-size: 34px;
+          font-weight: 700;
+          letter-spacing: -1.2px;
+          line-height: 1.1;
+          opacity: 0;
+        }
+        .preview-title { left: 137px; }
+        .editor-title { left: 981px; }
+        .interface-note {
+          position: absolute;
+          top: 178px;
+          right: 138px;
+          color: rgba(245,247,255,.52);
+          font-size: 20px;
+          font-weight: 400;
+          letter-spacing: .2px;
+          opacity: 0;
+        }
+        .preview-frame {
+          position: absolute;
+          left: 137px;
+          top: 224px;
+          width: 760px;
+          height: 474px;
+          overflow: hidden;
+          border: 1px solid rgba(245,247,255,.22);
+          border-radius: 16px;
+          background: #11192A;
+          box-shadow: 0 18px 54px rgba(0,0,0,.36);
+          opacity: 0;
+        }
+        .preview-image {
+          position: absolute;
+          inset: -12px;
+          width: calc(100% + 24px);
+          height: calc(100% + 24px);
+          object-fit: cover;
+          object-position: 50% 52%;
+          transform-origin: 50% 50%;
+        }
+        .preview-caption {
+          position: absolute;
+          left: 36px;
+          right: 36px;
+          bottom: 34px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 68px;
+          box-sizing: border-box;
+          padding: 10px 22px;
+          border: 1px solid rgba(245,247,255,.22);
+          border-radius: 12px;
+          background: rgba(8,11,23,.78);
+          box-shadow: 0 8px 32px rgba(0,0,0,.28);
+          color: #F5F7FF;
+          font-size: 31px;
+          font-weight: 700;
+          letter-spacing: -.8px;
+          line-height: 1.25;
+          white-space: nowrap;
+          opacity: 0;
+        }
+        .preview-prefix,
+        .editor-prefix {
+          display: inline-block;
+          margin-right: 0.22em;
+        }
+        .preview-keyword,
+        .editor-keyword {
+          display: inline-block;
+          transform-origin: 50% 50%;
+          will-change: transform, text-shadow;
+        }
+        .editor-row {
+          position: absolute;
+          left: 982px;
+          top: 282px;
+          width: 790px;
+          height: 154px;
+          box-sizing: border-box;
+          display: flex;
+          align-items: center;
+          padding: 0 32px;
+          border: 1px solid rgba(245,247,255,.17);
+          border-radius: 14px;
+          background: rgba(245,247,255,.055);
+          color: #F5F7FF;
+          font-size: 38px;
+          font-weight: 400;
+          letter-spacing: -.95px;
+          line-height: 1.2;
+          opacity: 0;
+        }
+        .editor-prefix { color: #F5F7FF; }
+        .editor-keyword { color: #F5F7FF; }
+        .editor-keyword.selected {
+          border-radius: 4px;
+          background: rgba(255,146,122,.24);
+          box-shadow: 0 0 0 4px rgba(255,146,122,.12);
+          color: #FFF0EC;
+        }
+        .edit-caret {
+          display: inline-block;
+          width: 3px;
+          height: 43px;
+          margin-left: 4px;
+          background: #FF927A;
+          opacity: 0;
+        }
+        .field {
+          position: absolute;
+          top: 482px;
+          width: 366px;
+          height: 128px;
+          box-sizing: border-box;
+          padding: 19px 24px;
+          border: 1px solid rgba(245,247,255,.18);
+          border-radius: 12px;
+          background: rgba(8,11,23,.32);
+          opacity: 0;
+        }
+        .field-start { left: 982px; }
+        .field-end { left: 1384px; }
+        .field-label {
+          display: block;
+          margin-bottom: 9px;
+          color: rgba(245,247,255,.58);
+          font-size: 22px;
+          font-weight: 400;
+          letter-spacing: .3px;
+        }
+        .field-value {
+          display: block;
+          color: #F5F7FF;
+          font-size: 31px;
+          font-weight: 700;
+          letter-spacing: -.7px;
+          line-height: 1.2;
+        }
+        .field-caret {
+          display: inline-block;
+          width: 2px;
+          height: 29px;
+          margin-left: 5px;
+          vertical-align: -4px;
+          background: #FF927A;
+          opacity: 0;
+        }
+        .timing-track {
+          position: absolute;
+          left: 982px;
+          top: 665px;
+          width: 700px;
+          height: 4px;
+          overflow: hidden;
+          border-radius: 2px;
+          background: rgba(245,247,255,.13);
+          opacity: 0;
+        }
+        .timing-range {
+          width: 100%;
+          height: 100%;
+          border-radius: 2px;
+          background: #7C5CFC;
+          transform: scaleX(.34);
+          transform-origin: left center;
+          box-shadow: 0 0 10px rgba(124,92,252,.48);
+        }
+        .confirm-mark {
+          position: absolute;
+          left: 1689px;
+          top: 645px;
+          width: 38px;
+          height: 38px;
+          overflow: visible;
+          opacity: 0;
+          transform-origin: center center;
+        }
+        .confirm-mark circle {
+          fill: rgba(124,92,252,.16);
+          stroke: #7C5CFC;
+          stroke-width: 2;
+        }
+        .confirm-mark path {
+          fill: none;
+          stroke: #F5F7FF;
+          stroke-width: 2.5;
+          stroke-linecap: round;
+          stroke-linejoin: round;
+        }
+        .pointer {
+          position: absolute;
+          left: 0;
+          top: 0;
+          width: 46px;
+          height: 54px;
+          z-index: 8;
+          opacity: 0;
+          pointer-events: none;
+          transform-origin: 8px 8px;
+        }
+        .pointer svg {
+          display: block;
+          width: 46px;
+          height: 54px;
+          overflow: visible;
+        }
+        .pointer path {
+          fill: #F5F7FF;
+          stroke: #080B17;
+          stroke-width: 2.5;
+          stroke-linejoin: round;
+        }
+        .click-ring {
+          position: absolute;
+          left: 1298px;
+          top: 326px;
+          width: 104px;
+          height: 104px;
+          box-sizing: border-box;
+          border: 2px solid rgba(255,146,122,.86);
+          border-radius: 50%;
+          opacity: 0;
+          transform-origin: center center;
+          pointer-events: none;
+          z-index: 7;
+        }
+        .click-ring.secondary {
+          border-color: rgba(255,146,122,.48);
+        }
+      </style>
+
+      <div id="root" data-composition-id="04-review" data-width="1920" data-height="1080" data-duration="8">
+        <div class="ground"></div>
+        <div class="guide-top"></div>
+        <div id="review04-camera" class="camera-world">
+          <div class="workbench"></div>
+          <div class="panel-seam"></div>
+          <div id="review04-preview-title" class="preview-title">Preview</div>
+          <div id="review04-editor-title" class="editor-title">Subtitle editor</div>
+          <div id="review04-interface-note" class="interface-note">Interface illustration</div>
+          <div id="review04-preview-frame" class="preview-frame">
+            <img id="review04-landscape" class="preview-image" src="assets/demo-landscape.png" alt="Illustrative landscape preview" />
+            <div id="review04-preview-caption" class="preview-caption">
+              <span class="preview-prefix">We begin at</span><span id="review04-preview-keyword" class="preview-keyword">dawn.</span>
+            </div>
+          </div>
+          <div id="review04-editor-row" class="editor-row">
+            <span class="editor-prefix">We begin at</span><span id="review04-editor-keyword" class="editor-keyword">dawn.</span><span id="review04-edit-caret" class="edit-caret"></span>
+          </div>
+          <div id="review04-start-field" class="field field-start">
+            <span class="field-label">Start</span>
+            <span id="review04-start-value" class="field-value">00:02.1</span><span id="review04-start-caret" class="field-caret"></span>
+          </div>
+          <div id="review04-end-field" class="field field-end">
+            <span class="field-label">End</span>
+            <span id="review04-end-value" class="field-value">00:04.7</span><span id="review04-end-caret" class="field-caret"></span>
+          </div>
+          <div id="review04-timing-track" class="timing-track"><div id="review04-timing-range" class="timing-range"></div></div>
+          <svg id="review04-confirm" class="confirm-mark" viewBox="0 0 38 38" aria-hidden="true">
+            <circle cx="19" cy="19" r="16" />
+            <path d="M11 19.5 L16.5 24.5 L27 13" />
+          </svg>
+          <div id="review04-click-ring-one" class="click-ring"></div>
+          <div id="review04-click-ring-two" class="click-ring secondary"></div>
+          <div id="review04-pointer" class="pointer" aria-hidden="true">
+            <svg viewBox="0 0 46 54">
+              <path d="M5 3 L5 39 L14 31 L21 48 L29 44 L22 27 L36 26 Z" />
+            </svg>
+          </div>
+        </div>
+
+        <script src="assets/vendor/gsap.min.js"></script>
+        <script>
+          window.__timelines = window.__timelines || {};
+          const reviewTimeline = gsap.timeline({ paused: true });
+          const reviewCamera = document.getElementById("review04-camera");
+          const reviewPointer = document.getElementById("review04-pointer");
+          const reviewEditorRow = document.getElementById("review04-editor-row");
+          const reviewEditorKeyword = document.getElementById("review04-editor-keyword");
+          const reviewPreviewKeyword = document.getElementById("review04-preview-keyword");
+          const reviewEditCaret = document.getElementById("review04-edit-caret");
+          const reviewStartField = document.getElementById("review04-start-field");
+          const reviewEndField = document.getElementById("review04-end-field");
+          const reviewStartValue = document.getElementById("review04-start-value");
+          const reviewEndValue = document.getElementById("review04-end-value");
+          const reviewStartCaret = document.getElementById("review04-start-caret");
+          const reviewEndCaret = document.getElementById("review04-end-caret");
+          const reviewTimingRange = document.getElementById("review04-timing-range");
+          const reviewConfirm = document.getElementById("review04-confirm");
+
+          const BASE_DURATION = 0.48;
+          const SEC_PER_CHAR = 0.02;
+          const reviewContent = [
+            { text: "We begin at dawn.", stage: "preview", hold: 1.16 },
+            { text: "dawn", stage: "select", hold: 0 },
+            { text: "We begin at first light.", stage: "updated", hold: 0.60 },
+            { text: "00:02.3", stage: "start", hold: 0.60 },
+            { text: "00:04.9", stage: "final", hold: 1.90 },
+          ];
+          let contentCursor = 0;
+          const reviewSequence = reviewContent.map((entry) => {
+            const duration = BASE_DURATION + entry.text.length * SEC_PER_CHAR + entry.hold;
+            const start = contentCursor;
+            contentCursor += duration;
+            return { ...entry, start, end: contentCursor };
+          });
+          function reviewEntryAt(time) {
+            for (let i = reviewSequence.length - 1; i >= 0; i -= 1) {
+              if (time >= reviewSequence[i].start) return reviewSequence[i];
+            }
+            return reviewSequence[0];
+          }
+          const reviewContentDriver = { t: 0 };
+          let activeStage = "";
+          reviewTimeline.to(reviewContentDriver, {
+            t: 8,
+            duration: 8,
+            ease: "none",
+            onUpdate: () => {
+              const entry = reviewEntryAt(reviewContentDriver.t);
+              if (entry.stage === activeStage) return;
+              activeStage = entry.stage;
+              reviewEditorKeyword.classList.toggle("selected", activeStage === "select");
+              reviewStartValue.textContent = ["start", "final"].includes(activeStage) ? "00:02.3" : "00:02.1";
+              reviewEndValue.textContent = activeStage === "final" ? "00:04.9" : "00:04.7";
+            },
+          }, 0);
+
+          const editStates = [
+            { t: 0, suffix: "dawn." },
+            { t: 2.38, suffix: "" },
+            { t: 2.66, suffix: "first light." },
+          ];
+          const editDriver = { t: 0 };
+          let shownEditState = "";
+          reviewTimeline.to(editDriver, {
+            t: 8,
+            duration: 8,
+            ease: "none",
+            onUpdate: () => {
+              let state = editStates[0];
+              for (let i = editStates.length - 1; i >= 0; i -= 1) {
+                if (editDriver.t >= editStates[i].t) {
+                  state = editStates[i];
+                  break;
+                }
+              }
+              if (shownEditState === state.suffix) return;
+              shownEditState = state.suffix;
+              reviewEditorKeyword.textContent = state.suffix;
+              reviewPreviewKeyword.textContent = state.suffix;
+              reviewEditCaret.style.opacity = state.suffix === "" ? "1" : "0";
+            },
+          }, 0);
+
+          reviewTimeline.fromTo("#review04-preview-title, #review04-editor-title",
+            { opacity: 0, y: 12 },
+            { opacity: 1, y: 0, duration: 0.48, ease: "power2.out", stagger: 0.12 },
+            0.10
+          );
+          reviewTimeline.fromTo("#review04-interface-note",
+            { opacity: 0, y: 8 },
+            { opacity: 1, y: 0, duration: 0.44, ease: "power2.out" },
+            0.38
+          );
+          reviewTimeline.fromTo("#review04-preview-frame",
+            { opacity: 0, scale: 0.985, y: 12 },
+            { opacity: 1, scale: 1, y: 0, duration: 0.68, ease: "power2.out" },
+            0.18
+          );
+          reviewTimeline.fromTo("#review04-landscape",
+            { scale: 1.025, x: -11, y: 5 },
+            { scale: 1, x: 0, y: 0, duration: 1.18, ease: "power2.out" },
+            0.18
+          );
+          reviewTimeline.fromTo("#review04-preview-caption",
+            { opacity: 0, y: 10 },
+            { opacity: 1, y: 0, duration: 0.48, ease: "power2.out" },
+            0.56
+          );
+          reviewTimeline.fromTo("#review04-editor-row",
+            { opacity: 0, x: 16 },
+            { opacity: 1, x: 0, duration: 0.58, ease: "power2.out" },
+            0.42
+          );
+          reviewTimeline.fromTo("#review04-start-field, #review04-end-field",
+            { opacity: 0, y: 12 },
+            { opacity: 1, y: 0, duration: 0.50, ease: "power2.out", stagger: 0.12 },
+            0.82
+          );
+          reviewTimeline.fromTo("#review04-timing-track",
+            { opacity: 0, scaleX: 0.86 },
+            { opacity: 1, scaleX: 1, duration: 0.45, ease: "power2.out" },
+            1.22
+          );
+          reviewTimeline.fromTo(reviewPointer,
+            { opacity: 0, x: 806, y: 788 },
+            { opacity: 1, x: 1324, y: 358, duration: 0.92, ease: "power2.inOut" },
+            0.82
+          );
+
+          // Camera follows the cursor from the selected row to the explicit timing fields.
+          reviewTimeline.to(reviewCamera,
+            { x: -13, y: -7, scale: 1.025, duration: 0.92, ease: "power2.inOut" },
+            1.84
+          );
+          reviewTimeline.to(reviewCamera,
+            { x: -23, y: -16, scale: 1.045, duration: 1.0, ease: "power2.inOut" },
+            4.18
+          );
+          reviewTimeline.to(reviewCamera,
+            { x: -34, y: -12, scale: 1.05, duration: 0.68, ease: "power2.inOut" },
+            5.20
+          );
+
+          // Click on the subtitle row: cursor press, row response, then two expanding rings.
+          reviewTimeline.to(reviewPointer, { scale: 0.86, duration: 0.08, ease: "power2.in" }, 2.02);
+          reviewTimeline.to(reviewPointer, { scale: 1, duration: 0.10, ease: "power2.out" }, 2.10);
+          reviewTimeline.to(reviewEditorRow,
+            { scale: 0.992, duration: 0.08, ease: "power2.in" },
+            2.02
+          );
+          reviewTimeline.to(reviewEditorRow,
+            { scale: 1, duration: 0.10, ease: "power2.out" },
+            2.10
+          );
+          reviewTimeline.to(reviewEditorRow,
+            { borderColor: "rgba(255,146,122,.72)", backgroundColor: "rgba(255,146,122,.065)", duration: 0.20, ease: "power1.out" },
+            2.02
+          );
+          reviewTimeline.to(reviewEditCaret, { opacity: 1, duration: 0.08, ease: "none" }, 2.02);
+          reviewTimeline.fromTo("#review04-click-ring-one",
+            { opacity: 0.72, scale: 0.22 },
+            { opacity: 0, scale: 1.85, duration: 0.60, ease: "power2.out" },
+            2.04
+          );
+          reviewTimeline.fromTo("#review04-click-ring-two",
+            { opacity: 0.42, scale: 0.18 },
+            { opacity: 0, scale: 2.15, duration: 0.66, ease: "power2.out" },
+            2.13
+          );
+
+          // Camera chase to Start, then End; no draggable timeline or scrub handle is shown.
+          reviewTimeline.to(reviewPointer,
+            { x: 1106, y: 540, duration: 0.72, ease: "power2.inOut" },
+            3.92
+          );
+          reviewTimeline.to(reviewStartField,
+            { borderColor: "#FF927A", boxShadow: "0 0 0 3px rgba(255,146,122,.12)", duration: 0.22, ease: "power1.out" },
+            4.24
+          );
+          reviewTimeline.to(reviewStartCaret, { opacity: 1, duration: 0.08, ease: "none" }, 4.26);
+          reviewTimeline.to(reviewPointer, { scale: 0.86, duration: 0.08, ease: "power2.in" }, 4.38);
+          reviewTimeline.to(reviewPointer, { scale: 1, duration: 0.10, ease: "power2.out" }, 4.46);
+          reviewTimeline.to(reviewStartField,
+            { scale: 0.99, duration: 0.08, ease: "power2.in" },
+            4.38
+          );
+          reviewTimeline.to(reviewStartField,
+            { scale: 1, duration: 0.10, ease: "power2.out" },
+            4.46
+          );
+          reviewTimeline.to(reviewPointer,
+            { x: 1508, y: 540, duration: 0.64, ease: "power2.inOut" },
+            5.12
+          );
+          reviewTimeline.to(reviewStartField,
+            { borderColor: "rgba(245,247,255,.18)", boxShadow: "0 0 0 0 rgba(255,146,122,0)", duration: 0.20, ease: "power1.out" },
+            5.40
+          );
+          reviewTimeline.to(reviewStartCaret, { opacity: 0, duration: 0.08, ease: "none" }, 5.40);
+          reviewTimeline.to(reviewEndField,
+            { borderColor: "#FF927A", boxShadow: "0 0 0 3px rgba(255,146,122,.12)", duration: 0.22, ease: "power1.out" },
+            5.46
+          );
+          reviewTimeline.to(reviewEndCaret, { opacity: 1, duration: 0.08, ease: "none" }, 5.48);
+          reviewTimeline.to(reviewPointer, { scale: 0.86, duration: 0.08, ease: "power2.in" }, 5.58);
+          reviewTimeline.to(reviewPointer, { scale: 1, duration: 0.10, ease: "power2.out" }, 5.66);
+          reviewTimeline.to(reviewEndField,
+            { scale: 0.99, duration: 0.08, ease: "power2.in" },
+            5.58
+          );
+          reviewTimeline.to(reviewEndField,
+            { scale: 1, duration: 0.10, ease: "power2.out" },
+            5.66
+          );
+          reviewTimeline.to(reviewTimingRange,
+            { x: 10, scaleX: 0.38, duration: 0.95, ease: "power2.out" },
+            4.20
+          );
+          reviewTimeline.to(reviewEditCaret, { opacity: 0, duration: 0.18, ease: "power1.out" }, 2.86);
+
+          reviewTimeline.fromTo(reviewConfirm,
+            { opacity: 0, scale: 0.72 },
+            { opacity: 1, scale: 1, duration: 0.50, ease: "power2.out" },
+            6.55
+          );
+          reviewTimeline.to(reviewPointer, { opacity: 0, duration: 0.24, ease: "power1.out" }, 6.72);
+
+          // A finite attack / sustain / release glow resolves on the updated subtitle phrase.
+          const confirmEmphasis = { t: 0 };
+          reviewTimeline.to(confirmEmphasis, {
+            t: 8,
+            duration: 8,
+            ease: "none",
+            onUpdate: () => {
+              const start = 6.55;
+              const end = 7.06;
+              const release = 0.36;
+              const rest = 0.18;
+              let env = 0;
+              if (confirmEmphasis.t >= start && confirmEmphasis.t < end) {
+                env = Math.min((confirmEmphasis.t - start) / 0.16, 1);
+              } else if (confirmEmphasis.t >= end && confirmEmphasis.t < end + release) {
+                env = 1 - ((confirmEmphasis.t - end) / release) * (1 - rest);
+              } else if (confirmEmphasis.t >= end + release) {
+                env = rest;
+              }
+              reviewPreviewKeyword.style.textShadow = `0 0 ${22 * env}px rgba(124,92,252,${0.10 + env * 0.46})`;
+              reviewPreviewKeyword.style.transform = `scale(${1 + 0.08 * env})`;
+            },
+          }, 0);
+
+          window.__timelines["04-review"] = reviewTimeline;
+        </script>
+      </div>
+    </template>
+  </body>
+</html>

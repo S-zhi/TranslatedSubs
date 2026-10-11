@@ -1,0 +1,23 @@
+1
+00:00:00,200 --> 00:00:05,000
+Every video has a voice. Help more people understand it.
+
+2
+00:00:05,200 --> 00:00:11,000
+Meet TranslatedSubs. Add a video link or a local file, then choose a target language.
+
+3
+00:00:11,200 --> 00:00:19,000
+Watch speech become a transcript, then translated subtitles, with progress you can follow.
+
+4
+00:00:19,200 --> 00:00:27,000
+Preview the video. Refine the words and timing right beside the picture.
+
+5
+00:00:27,200 --> 00:00:35,000
+Download subtitles, choose soft or burned-in captions, and connect the same workflow to your tools through MCP.
+
+6
+00:00:35,200 --> 00:00:40,000
+TranslatedSubs. Take your story further. Start translating.
