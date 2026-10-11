@@ -189,7 +189,7 @@ def _ensure_translation_engine(
     if rec.availability != "AVAILABLE":
         raise HTTPException(status_code=422, detail="翻译引擎尚未通过可用性检测")
 
-
+# 确保支持的语言翻译
 def _ensure_supported_translation_languages(
     engine: str,
     need_subtitle: bool,
