@@ -57,16 +57,6 @@ Start the API and web workbench:
 uv run uvicorn src.handler.app:app --port 8000
 ```
 
-For local debugging, use the dedicated launcher to skip the fixed website
-availability probe that normally runs during API startup:
-
-```sh
-uv run python -m src.cli --debug --port 8000
-```
-
-Debug mode only skips that startup probe. Explicit probes, downloads, and
-other business requests still run normally and report their failures.
-
 Open <http://127.0.0.1:8000/>. Check the service and confirm FFmpeg has the hard-subtitle filter with:
 
 ```sh
@@ -101,10 +91,6 @@ On Windows 10 or 11, you can run TranslatedSubs from source in PowerShell. The p
    cd TranslatedSubs
    uv python install 3.12
    uv sync --python 3.12 --locked
-   
-   # 使用本地翻译
-   uv sync --extra local-translation 
-   
    Copy-Item .env.example .env
    ```
 
