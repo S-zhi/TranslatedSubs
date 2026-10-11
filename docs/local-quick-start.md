@@ -37,6 +37,14 @@ SQLite 数据库默认位于 `data/db/app.db`，SQLite 运行时可能在同一�
 uv run uvicorn src.handler.app:app --port 8000
 ```
 
+本地调试时可以使用统一启动入口跳过 API 启动时的固定网站连通性检查：
+
+```bash
+uv run python -m src.cli --debug --port 8000
+```
+
+`--debug` 只跳过启动探测，不会绕过手动链接探测、实际下载、翻译或其它业务请求的失败处理。现有直接运行 `uvicorn` 的方式仍保持非调试模式。
+
 服务启动不要求本地翻译模型或翻译可选依赖已经存在。要执行默认的英语 → 简体中文字幕任务，再安装并下载本地模型：
 
 ```bash
@@ -66,6 +74,12 @@ cp drive-service/config.example.json drive-service/config.local.json
 
 ```bash
 ./scripts/start.sh
+```
+
+需要同时启动 sidecar 并跳过 API 启动探测时运行：
+
+```bash
+./scripts/start.sh --debug
 ```
 
 该脚本会同时启动业务 API 和 sidecar。只使用字幕流水线时，直接运行上面的 `uvicorn` 命令即可。OAuth 文件、Refresh Token 和 Client Secret 不要提交到 Git。详细 API 和同步行为见 [Google Drive sidecar README](../drive-service/README.md)。

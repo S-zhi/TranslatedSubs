@@ -8,6 +8,34 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DRIVE_CONFIG="${DRIVE_CONFIG:-${ROOT_DIR}/drive-service/config.local.json}"
 API_PORT="${API_PORT:-8000}"
+DEBUG_MODE=0
+
+case "${1:-}" in
+  --debug)
+    DEBUG_MODE=1
+    shift
+    ;;
+  --help|-h)
+    cat <<'EOF'
+用法：./scripts/start.sh [--debug]
+
+选项：
+  --debug  跳过 API 启动时的网站连通性检查，但不改变实际业务请求的错误处理。
+  --help   显示此帮助信息。
+
+环境变量：
+  API_PORT     API 监听端口，默认 8000。
+  DRIVE_CONFIG Google Drive sidecar 配置文件路径。
+EOF
+    exit 0
+    ;;
+esac
+
+if [[ "$#" -gt 0 ]]; then
+  echo "未知参数：$1" >&2
+  echo "用法：./scripts/start.sh [--debug]" >&2
+  exit 2
+fi
 
 if [[ "${DRIVE_CONFIG}" != /* ]]; then
   DRIVE_CONFIG="${ROOT_DIR}/${DRIVE_CONFIG}"
@@ -85,7 +113,11 @@ echo "编译 Google Drive sidecar..."
   go build -o ./bin/drive-server ./cmd/server
 )
 
-echo "TranslatedSubs API    → http://127.0.0.1:${API_PORT}"
+if [[ "${DEBUG_MODE}" -eq 1 ]]; then
+  echo "TranslatedSubs API    → http://127.0.0.1:${API_PORT} (debug：跳过网站连通性检查)"
+else
+  echo "TranslatedSubs API    → http://127.0.0.1:${API_PORT}"
+fi
 echo "Google Drive sidecar  → ${DRIVE_CONFIG}"
 echo "按 Ctrl-C 同时停止两个服务。"
 
@@ -97,6 +129,9 @@ drive_pid=$!
 
 (
   cd "${ROOT_DIR}"
+  if [[ "${DEBUG_MODE}" -eq 1 ]]; then
+    exec uv run python -m src.cli --debug --reload --port "${API_PORT}"
+  fi
   exec uv run python -m uvicorn src.handler.app:app --reload --port "${API_PORT}"
 ) &
 api_pid=$!

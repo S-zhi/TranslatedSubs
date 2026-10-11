@@ -57,6 +57,16 @@ Start the API and web workbench:
 uv run uvicorn src.handler.app:app --port 8000
 ```
 
+For local debugging, use the dedicated launcher to skip the fixed website
+availability probe that normally runs during API startup:
+
+```sh
+uv run python -m src.cli --debug --port 8000
+```
+
+Debug mode only skips that startup probe. Explicit probes, downloads, and
+other business requests still run normally and report their failures.
+
 Open <http://127.0.0.1:8000/>. Check the service and confirm FFmpeg has the hard-subtitle filter with:
 
 ```sh
