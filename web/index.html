@@ -45,6 +45,9 @@
           <button class="nav__item" type="button" data-view="editor" data-route="/editor">
             <i class="ph ph-text-aa" aria-hidden="true"></i><span>字幕编辑</span>
           </button>
+          <button class="nav__item" type="button" data-view="other-settings" data-settings-tab="models" data-route="/settings">
+            <i class="ph ph-cpu" aria-hidden="true"></i><span>模型设置</span>
+          </button>
           <button class="nav__item" type="button" data-view="storage" data-route="/storage">
             <i class="ph ph-hard-drives" aria-hidden="true"></i><span>资源看板</span>
           </button>
@@ -63,18 +66,6 @@
           <div class="supported-sites__viewport" aria-label="当前可抓取的网站，自动滚动展示">
             <div class="supported-sites__track" id="supportedSitesTrack" role="status" aria-live="polite"></div>
           </div>
-        </section>
-
-        <section class="settings" aria-labelledby="settingsTitle">
-          <h2 id="settingsTitle" class="settings__title">通知</h2>
-          <label class="settings__row" for="notifyToggle">
-            <span class="settings__name">任务完成 / 失败时弹通知</span>
-            <span class="settings__switch">
-              <input id="notifyToggle" type="checkbox" />
-              <span class="settings__slider" aria-hidden="true"></span>
-            </span>
-          </label>
-          <p class="settings__hint" id="notifyHint">浏览器未授权时无法弹出通知。</p>
         </section>
 
         <div class="sidebar__foot">
