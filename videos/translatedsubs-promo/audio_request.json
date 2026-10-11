@@ -1,0 +1,43 @@
+{
+  "lines": [
+    {
+      "id": "01",
+      "sfx": [
+        "soft waveform onset"
+      ]
+    },
+    {
+      "id": "02",
+      "sfx": [
+        "subdued UI click"
+      ]
+    },
+    {
+      "id": "03",
+      "sfx": [
+        "two soft process ticks"
+      ]
+    },
+    {
+      "id": "04",
+      "sfx": [
+        "soft edit confirmation"
+      ]
+    },
+    {
+      "id": "05",
+      "sfx": [
+        "gentle export handoff"
+      ]
+    },
+    {
+      "id": "06",
+      "sfx": [
+        "quiet brand resolve"
+      ]
+    }
+  ],
+  "bgm": {
+    "mode": "none"
+  }
+}

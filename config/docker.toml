@@ -1,0 +1,4 @@
+# Container deployment overrides. The application still loads config/default.toml first.
+[paths]
+data_dir = "/data"
+db_path = "/data/db/app.db"

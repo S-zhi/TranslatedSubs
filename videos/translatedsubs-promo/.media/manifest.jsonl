@@ -1,0 +1,27 @@
+{"id":"bgm_001","type":"bgm","path":"assets/bgm/track.mp3","source":"existing","description":"track","duration":52,"provenance":{"provider":"local","adopted":true}}
+{"id":"image_001","type":"image","path":"assets/demo-landscape.png","source":"existing","description":"demo landscape","width":1672,"height":941,"provenance":{"provider":"local","adopted":true}}
+{"id":"icon_001","type":"icon","path":"assets/translatedsubs-logo.svg","source":"existing","description":"translatedsubs logo","provenance":{"provider":"local","adopted":true}}
+{"id":"voice_001","type":"voice","path":"assets/audio/voice/frame-01.wav","source":"existing","description":"frame 01","duration":5,"provenance":{"provider":"local","adopted":true}}
+{"id":"voice_002","type":"voice","path":"assets/audio/voice/frame-02.wav","source":"existing","description":"frame 02","duration":6,"provenance":{"provider":"local","adopted":true}}
+{"id":"voice_003","type":"voice","path":"assets/audio/voice/frame-03.wav","source":"existing","description":"frame 03","duration":8,"provenance":{"provider":"local","adopted":true}}
+{"id":"voice_004","type":"voice","path":"assets/audio/voice/frame-04.wav","source":"existing","description":"frame 04","duration":8,"provenance":{"provider":"local","adopted":true}}
+{"id":"voice_005","type":"voice","path":"assets/audio/voice/frame-05.wav","source":"existing","description":"frame 05","duration":8,"provenance":{"provider":"local","adopted":true}}
+{"id":"voice_006","type":"voice","path":"assets/audio/voice/frame-06.wav","source":"existing","description":"frame 06","duration":5,"provenance":{"provider":"local","adopted":true}}
+{"id":"voice_007","type":"voice","path":"assets/audio/voice/source/frame-01.wav","source":"existing","description":"frame 01","duration":3.3,"provenance":{"provider":"local","adopted":true}}
+{"id":"voice_008","type":"voice","path":"assets/audio/voice/source/frame-02.wav","source":"existing","description":"frame 02","duration":5.6,"provenance":{"provider":"local","adopted":true}}
+{"id":"voice_009","type":"voice","path":"assets/audio/voice/source/frame-03.wav","source":"existing","description":"frame 03","duration":5.5,"provenance":{"provider":"local","adopted":true}}
+{"id":"voice_010","type":"voice","path":"assets/audio/voice/source/frame-04.wav","source":"existing","description":"frame 04","duration":4.3,"provenance":{"provider":"local","adopted":true}}
+{"id":"voice_011","type":"voice","path":"assets/audio/voice/source/frame-05.wav","source":"existing","description":"frame 05","duration":7,"provenance":{"provider":"local","adopted":true}}
+{"id":"voice_012","type":"voice","path":"assets/audio/voice/source/frame-06.wav","source":"existing","description":"frame 06","duration":3.6,"provenance":{"provider":"local","adopted":true}}
+{"id":"bgm_002","type":"bgm","path":"assets/bgm/promo-bed.mp3","source":"existing","description":"promo bed","duration":40,"provenance":{"provider":"local","adopted":true}}
+{"id":"sfx_001","type":"sfx","path":"assets/sfx/gentle-export-handoff.mp3","source":"existing","description":"gentle export handoff","duration":2.8,"provenance":{"provider":"local","adopted":true}}
+{"id":"sfx_002","type":"sfx","path":"assets/sfx/prepared/frame-02-ui-click.wav","source":"existing","description":"frame 02 ui click","duration":0.6,"provenance":{"provider":"local","adopted":true}}
+{"id":"sfx_003","type":"sfx","path":"assets/sfx/prepared/frame-03-process-tick-a.wav","source":"existing","description":"frame 03 process tick a","duration":0.3,"provenance":{"provider":"local","adopted":true}}
+{"id":"sfx_004","type":"sfx","path":"assets/sfx/prepared/frame-03-process-tick-b.wav","source":"existing","description":"frame 03 process tick b","duration":0.3,"provenance":{"provider":"local","adopted":true}}
+{"id":"sfx_005","type":"sfx","path":"assets/sfx/prepared/frame-04-edit-confirmation.wav","source":"existing","description":"frame 04 edit confirmation","duration":0.2,"provenance":{"provider":"local","adopted":true}}
+{"id":"sfx_006","type":"sfx","path":"assets/sfx/prepared/frame-05-export-handoff.wav","source":"existing","description":"frame 05 export handoff","duration":0.9,"provenance":{"provider":"local","adopted":true}}
+{"id":"sfx_007","type":"sfx","path":"assets/sfx/prepared/frame-06-brand-resolve.wav","source":"existing","description":"frame 06 brand resolve","duration":1,"provenance":{"provider":"local","adopted":true}}
+{"id":"sfx_008","type":"sfx","path":"assets/sfx/quiet-brand-resolve.mp3","source":"existing","description":"quiet brand resolve","duration":9.3,"provenance":{"provider":"local","adopted":true}}
+{"id":"sfx_009","type":"sfx","path":"assets/sfx/soft-edit-confirmation.mp3","source":"existing","description":"soft edit confirmation","duration":0.2,"provenance":{"provider":"local","adopted":true}}
+{"id":"sfx_010","type":"sfx","path":"assets/sfx/subdued-ui-click.mp3","source":"existing","description":"subdued ui click","duration":0.6,"provenance":{"provider":"local","adopted":true}}
+{"id":"sfx_011","type":"sfx","path":"assets/sfx/two-soft-process-ticks.mp3","source":"existing","description":"two soft process ticks","duration":7.8,"provenance":{"provider":"local","adopted":true}}
