@@ -169,8 +169,18 @@ class ProbeBatchManager:
         self._completed = 0
         self._sites = {site.id: _SiteState() for site in STARTUP_PROBE_SITES}
 
-    def start(self, probes: ProbeStore) -> None:
+    def start(self, probes: ProbeStore, *, debug: bool = False) -> None:
         with self._lock:
+            if debug:
+                self._stop_event.set()
+                self._thread = None
+                self._run_id = None
+                self._run_started_at = None
+                self._completed = 0
+                self._sites = {site.id: _SiteState() for site in STARTUP_PROBE_SITES}
+                self._state = "disabled"
+                self._updated_at = _now_ms()
+                return
             if self._state == "running":
                 return
             self._stop_event.clear()
@@ -328,9 +338,14 @@ class ProbeBatchManager:
 probe_batch_manager = ProbeBatchManager()
 
 
-def start_startup_probe(probes: ProbeStore, enabled: bool = True) -> None:
+def start_startup_probe(
+    probes: ProbeStore,
+    enabled: bool = True,
+    *,
+    debug: bool = False,
+) -> None:
     if enabled:
-        probe_batch_manager.start(probes)
+        probe_batch_manager.start(probes, debug=debug)
     else:
         probe_batch_manager.disable()
 

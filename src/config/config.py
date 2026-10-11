@@ -269,6 +269,7 @@ _ALIAS_MAP = {
     "merge_output_format": "_merge_output_format",
     "cookies_file": "_cookies_file",
     "allow_cookies_from_browser": "_allow_cookies_from_browser",
+    "debug": "_debug",
     "startup_probe_enabled": "_startup_probe_enabled",
     "download_retries": "_download_retries",
     "max_upload_mb": "_max_upload_mb",
@@ -331,6 +332,7 @@ class Settings:
     _merge_output_format: Any = field(default=_UNSET, repr=False)
     _cookies_file: Any = field(default=_UNSET, repr=False)
     _allow_cookies_from_browser: Any = field(default=_UNSET, repr=False)
+    _debug: Any = field(default=_UNSET, repr=False)
     _startup_probe_enabled: Any = field(default=_UNSET, repr=False)
     _download_retries: Any = field(default=_UNSET, repr=False)
     _max_upload_mb: Any = field(default=_UNSET, repr=False)
@@ -388,6 +390,7 @@ class Settings:
         _merge_output_format: Any = _UNSET,
         _cookies_file: Any = _UNSET,
         _allow_cookies_from_browser: Any = _UNSET,
+        _debug: Any = _UNSET,
         _startup_probe_enabled: Any = _UNSET,
         _download_retries: Any = _UNSET,
         _max_upload_mb: Any = _UNSET,
@@ -445,6 +448,7 @@ class Settings:
             "_merge_output_format": _merge_output_format,
             "_cookies_file": _cookies_file,
             "_allow_cookies_from_browser": _allow_cookies_from_browser,
+            "_debug": _debug,
             "_startup_probe_enabled": _startup_probe_enabled,
             "_download_retries": _download_retries,
             "_max_upload_mb": _max_upload_mb,
@@ -669,6 +673,13 @@ class Settings:
         return (os.getenv("SUBTRANS_ALLOW_COOKIES_FROM_BROWSER", "0") or "0").strip().lower() in {
             "1", "true", "yes", "on"
         }
+
+    # 进程启动调试模式；仅由显式启动入口传递，默认关闭。
+    @property
+    def debug(self) -> bool:
+        if self._debug is not _UNSET:
+            return bool(self._debug)
+        return False
 
     # 启动时自动探测固定站点目录，默认开启；测试和受限部署可关闭
     @property
