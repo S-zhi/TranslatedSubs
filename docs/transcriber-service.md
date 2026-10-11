@@ -1,6 +1,6 @@
 # Transcriber service protocol
 
-The transcription stage uses the local `faster-whisper` backend by default. Replicate remains available as an optional compatibility backend, as does a compatible custom HTTP service.
+The transcription stage uses the local `faster-whisper` backend by default. A compatible custom HTTP service is also supported.
 
 ## Configuration
 
@@ -11,7 +11,7 @@ SUBTRANS_TRANSCRIBER_API_KEY=optional-bearer-token
 SUBTRANS_TRANSCRIBER_TIMEOUT=1800
 ```
 
-Use `replicate` explicitly to keep the existing Replicate Whisper behavior. `local_whisper` runs the OpenAI open-source Whisper model locally through `faster-whisper`. `http`, `custom`, and `custom_http` select the custom HTTP adapter.
+`local_whisper` runs the OpenAI open-source Whisper model locally through `faster-whisper`. `http`, `custom`, and `custom_http` select the custom HTTP adapter.
 
 For the directly embedded local backend:
 
@@ -66,6 +66,6 @@ Return HTTP 2xx with a JSON object containing either timestamped `segments` or a
 }
 ```
 
-Each segment must contain non-empty `text`, numeric `start`, and numeric `end`, with `end > start`. The application validates the response and writes the normalized result to `data/{task_id}/original.srt`. HTTP 401/403, 429, 5xx, and other 4xx responses are mapped to the same stable error codes used by the Replicate backend.
+Each segment must contain non-empty `text`, numeric `start`, and numeric `end`, with `end > start`. The application validates the response and writes the normalized result to `data/{task_id}/original.srt`. HTTP 401/403, 429, 5xx, and other 4xx responses are mapped to the same stable error codes used by the local and HTTP adapters.
 
 For in-process integrations, implement `TranscriberService.transcribe()` and return a `TranscribeResponse` (or a raw output accepted by `_extract_segments`). The request object is `TranscribeRequest` and includes `audio_path`, `task_id`, `language`, and `model_name`.

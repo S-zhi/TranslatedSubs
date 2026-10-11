@@ -23,7 +23,7 @@ def _read_timeout() -> float:
 
 @dataclass(frozen=True)
 class BusinessApiConfig:
-    """MCP 侧配置，不包含 Replicate / DeepSeek 等业务密钥。"""
+    """MCP 侧配置，不包含 DeepSeek 等业务密钥。"""
 
     base_url: str = "http://127.0.0.1:8000"
     timeout: float = 15.0

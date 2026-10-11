@@ -431,8 +431,8 @@ class TranscriptionHandler(PipelineHandler):
             model_name = params.model
             if ":" in model_name:
                 candidate, selected_model = model_name.split(":", 1)
-                if candidate.strip().lower() in {"replicate", "local", "local_whisper", "whisper"}:
-                    backend = "local_whisper" if candidate.strip().lower() != "replicate" else "replicate"
+                if candidate.strip().lower() in {"local", "local_whisper", "whisper", "faster_whisper"}:
+                    backend = "local_whisper"
                     model_name = selected_model.strip()
             transcribe(
                 context.resources.vocal_audio_path or context.resources.audio_path,

@@ -130,7 +130,7 @@ Open <http://localhost:8000/>. Run `curl http://127.0.0.1:8000/api/health` to ch
 - **Localized interface**: Switch between Simplified Chinese, English, Hindi, Spanish, Arabic, French, Portuguese, and Russian from the sidebar. The choice is saved in the browser; on first visit, the browser language is used unless the deployment has set a default. Set the default with `UI_LOCALE` in `web/config.js`.
 - **MCP integration**: Let Codex, Claude Desktop, and other AI clients create and track jobs from natural language.
 - **Google Drive extension**: Upload, download, and organize task files when results need to move through a shared file workflow.
-- **Replaceable transcription backends**: Choose local faster-whisper, Replicate, or a compatible HTTP service for different cost, speed, and privacy needs.
+- **Replaceable transcription backends**: Choose local faster-whisper or a compatible HTTP service for different cost, speed, and privacy needs.
 
 ## From video to subtitles
 
@@ -148,7 +148,7 @@ Copy `.env.example` and start without an API key. The default translator is the 
 | --- | --- |
 | `SUBTRANS_DEEPSEEK_API_KEY` | Optional DeepSeek key for the explicit cloud compatibility path. |
 | `SUBTRANS_DATA_DIR`, `SUBTRANS_DB` | Locations of video and subtitle files and the SQLite job database; the Docker example stores both in a persistent volume. |
-| `SUBTRANS_TRANSCRIBER_BACKEND` | Defaults to `local_whisper`; select `replicate` or a compatible HTTP service explicitly. |
+| `SUBTRANS_TRANSCRIBER_BACKEND` | Defaults to `local_whisper`; select a compatible HTTP service explicitly. |
 | `SUBTRANS_COOKIES` | Cookie file for sites that require login or age verification. |
 | `SUBTRANS_WORKERS`, `SUBTRANS_DOWNLOAD_WORKERS` | Pipeline and download concurrency limits; adjust for available resources. |
 

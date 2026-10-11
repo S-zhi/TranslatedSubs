@@ -227,8 +227,8 @@ function errorHint(msg, code) {
     return `处理过程中发生内部错误，请检查任务日志并稍后重试`;
 
   const m = (msg || "").toLowerCase();
-  if (m.includes("replicate") || m.includes("token"))
-    return `检查 .env 中的 <code>REPLICATE_API_TOKEN</code>`;
+  if (m.includes("模型") || m.includes("whisper"))
+    return `请在本地模型设置中下载并检查 Whisper 模型`;
   if (m.includes("deepseek") || m.includes("api key"))
     return `检查 .env 中的 <code>SUBTRANS_DEEPSEEK_API_KEY</code> 或翻译引擎配置`;
   if (m.includes("libass") || m.includes("ffmpeg"))

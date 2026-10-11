@@ -250,6 +250,23 @@ def test_create_rejects_empty_model_and_languages(client, monkeypatch):
     assert enqueued == []
 
 
+def test_replicate_model_is_rejected_with_migration_code():
+    with pytest.raises(Exception) as exc_info:
+        tasks_routes._ensure_local_model_ready("replicate:tiny")
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["code"] == "REPLICATE_BACKEND_REMOVED"
+
+
+def test_retry_rejects_historical_replicate_task(client, monkeypatch):
+    created = client.post("/api/tasks", json=_payload(model="replicate:tiny"))
+    assert created.status_code == 201
+    rec_id = created.json()["id"]
+    client._store.update(rec_id, status="FAILED", error="legacy")
+    response = client.post(f"/api/tasks/{rec_id}/retry")
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "REPLICATE_BACKEND_REMOVED"
+
+
 def test_create_task_rejects_missing_deepseek_api_key(client, monkeypatch):
     """DeepSeek 引擎在需要字幕且未配置 API Key 时应返回 422 拒绝。"""
     import dataclasses
@@ -577,24 +594,19 @@ def test_health(client):
 
 def test_srt_languages(client, monkeypatch):
     """测试获取源语言选项。"""
-    monkeypatch.setattr(
-        "src.handler.srt.get_video_language_options",
-        lambda: ["en", "zh"],
-    )
     r = client.get("/api/srt/languages")
     assert r.status_code == 200
-    assert r.json() == ["en", "zh"]
+    assert r.json()[:2] == ["en", "zh"]
 
 
 def test_srt_model_weights(client, monkeypatch):
-    """测试获取 Whisper 模型权重选项。"""
-    monkeypatch.setattr(
-        "src.handler.srt.get_whisper_model_weight_options",
-        lambda: ["tiny", "small"],
-    )
+    """测试获取本地 Whisper 模型权重选项。"""
+    monkeypatch.setattr(srt_routes.model_manager, "list_models", lambda: [
+        {"name": "tiny", "status": "READY"}, {"name": "small", "status": "NOT_INSTALLED"},
+    ])
     r = client.get("/api/srt/model-weights")
     assert r.status_code == 200
-    assert r.json() == ["tiny", "small"]
+    assert r.json() == ["local:tiny"]
 
 
 def test_delete_local_model_is_blocked_while_an_active_task_uses_it(client, monkeypatch):

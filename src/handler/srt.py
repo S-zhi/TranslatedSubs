@@ -6,44 +6,29 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from src.handler.deps import get_store, require_api_token
 
-from src.service.srt.replicate_schema import (
-    ReplicateSchemaError,
-    get_video_language_options,
-    get_whisper_model_weight_options,
-)
 from src.service.model_manager import MODEL_NAMES, ModelDependencyError, ModelValidationError, model_manager
 from src.store import TaskStore
 
 router = APIRouter(prefix="/api/srt", tags=["srt"])
+LOCAL_VIDEO_LANGUAGES = ["en", "zh", "hi", "es", "ar", "fr", "pt", "ru", "de", "ko", "ja"]
 
 
 @router.get("/languages", response_model=list[str])
 def list_video_languages() -> list[str]:
-    """返回 Replicate Whisper 支持的视频源语言列表。"""
-    try:
-        return get_video_language_options()
-    except ReplicateSchemaError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    """返回本地 Whisper 支持的视频源语言列表。"""
+    return list(LOCAL_VIDEO_LANGUAGES)
 
 
 @router.get("/model-weights", response_model=list[str])
 def list_model_weights() -> list[str]:
-    """返回 Replicate Whisper 模型权重（兼容旧客户端）。"""
-    try:
-        return get_whisper_model_weight_options()
-    except ReplicateSchemaError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    """返回已就绪的本地 Whisper 模型。"""
+    return [f"local:{item['name']}" for item in model_manager.list_models() if item["status"] == "READY"]
 
 
 @router.get("/model-options", response_model=list[str])
 def list_model_options() -> list[str]:
-    """返回带识别后端标识的 Whisper 模型选项。"""
-    try:
-        replicate_models = get_whisper_model_weight_options()
-        local_models = [f"local:{item['name']}" for item in model_manager.list_models() if item["status"] == "READY"]
-        return local_models + [f"replicate:{model}" for model in replicate_models]
-    except ReplicateSchemaError as exc:
-        return [f"local:{item['name']}" for item in model_manager.list_models() if item["status"] == "READY"]
+    """返回带本地后端标识的 Whisper 模型选项。"""
+    return list_model_weights()
 
 
 @router.get("/local-models")

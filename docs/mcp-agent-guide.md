@@ -37,7 +37,7 @@ get_task_artifacts
 
 Agent 不得：
 
-- 要求用户把 `REPLICATE_API_TOKEN`、`SUBTRANS_DEEPSEEK_API_KEY` 或 `DEEPSEEK_API_KEY` 作为 MCP 工具参数传入；
+- 要求用户把 `SUBTRANS_DEEPSEEK_API_KEY` 或 `DEEPSEEK_API_KEY` 作为 MCP 工具参数传入；
 - 在对话、工具结果或日志中打印密钥实际内容；
 - 自行生成、猜测或覆盖密钥；
 - 在 setup 未就绪时反复调用 `start_subtitle_pipeline`。

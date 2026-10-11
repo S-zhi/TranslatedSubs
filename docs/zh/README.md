@@ -137,7 +137,7 @@ docker build -t translatedsubs:local . && docker run -d --name translatedsubs --
 - **多语言界面**：可在侧栏切换简体中文、英语、印地语、西班牙语、阿拉伯语、法语、葡萄牙语和俄语。用户选择会保存在浏览器中；首次访问时，除非部署方设置了默认值，否则会跟随浏览器语言。部署方可通过 `web/config.js` 中的 `UI_LOCALE` 设置默认界面语言。
 - **MCP 接入**：让 Codex、Claude Desktop 等 AI 客户端通过自然语言创建和跟踪处理任务，适合把媒体处理接入 Agent 工作流。
 - **Google Drive 扩展**：按任务上传、下载和管理云端文件，适合将处理结果接入团队文件流转。
-- **可替换转写后端**：支持本地 faster-whisper、Replicate 和兼容 HTTP 服务，适合在成本、速度、隐私之间选择。
+- **可替换转写后端**：支持本地 faster-whisper 和兼容 HTTP 服务，适合在成本、速度、隐私之间选择。
 
 ## 从视频到字幕
 
@@ -155,7 +155,7 @@ docker build -t translatedsubs:local . && docker run -d --name translatedsubs --
 | ----------------------------------------------- | --------------------------------------------------------------------------- |
 | `SUBTRANS_DEEPSEEK_API_KEY`                     | 可选的 DeepSeek 密钥；默认本地翻译不需要它。                                |
 | `SUBTRANS_DATA_DIR`、`SUBTRANS_DB`              | 视频、字幕和 SQLite 任务数据库的位置；Docker 示例把两者放在持久化数据卷中。 |
-| `SUBTRANS_TRANSCRIBER_BACKEND`                  | 默认 `local_whisper`；可显式选择 `replicate` 或兼容 HTTP 服务。             |
+| `SUBTRANS_TRANSCRIBER_BACKEND`                  | 默认 `local_whisper`；也可接入兼容 HTTP 服务。             |
 | `SUBTRANS_COOKIES`                              | 仅在目标网站要求登录或年龄验证时配置 Cookie 文件。                          |
 | `SUBTRANS_WORKERS`、`SUBTRANS_DOWNLOAD_WORKERS` | 控制流水线和下载的并发数，按机器资源调整。                                  |
 
@@ -175,7 +175,7 @@ docker build -t translatedsubs:local . && docker run -d --name translatedsubs --
 - [Linux 部署](../quick-start-linux.md)：Ubuntu/Debian 一键安装、systemd、反向代理和排障
 - [MCP Server](../mcp-server.md)：stdio、Streamable HTTP 和工具说明
 - [MCP Agent 指南](../mcp-agent-guide.md)：Agent 调用顺序、状态处理和错误处理
-- [转写服务协议](../transcriber-service.md)：本地、Replicate 和 HTTP 转写后端
+- [转写服务协议](../transcriber-service.md)：本地和 HTTP 转写后端
 - [Google Drive sidecar](../../drive-service/README.md)：云端文件同步 API 与配置
 
 ## 开发
