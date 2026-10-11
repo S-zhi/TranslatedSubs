@@ -130,7 +130,6 @@ Acesse <http://localhost:8000/>. Execute `curl http://127.0.0.1:8000/api/health`
 - **Interface multilíngue**: Alterne pela barra lateral entre chinês simplificado, inglês, hindi, espanhol, árabe, francês, português e russo. A escolha fica salva no navegador; na primeira visita, usa-se o idioma do navegador, a menos que a implantação tenha definido um idioma padrão. Defina esse padrão com `UI_LOCALE` em `web/config.js`.
 - **Integração MCP**: Permite que Codex, Claude Desktop e outros clientes de IA criem e acompanhem tarefas por linguagem natural.
 - **Extensão Google Drive**: Envia, baixa e organiza arquivos por tarefa para compartilhar resultados com a equipe.
-- **Mecanismos de transcrição substituíveis**: Escolha entre faster-whisper local, Replicate ou um serviço HTTP compatível conforme custo, velocidade e privacidade.
 
 ## Do vídeo às legendas
 
@@ -148,7 +147,6 @@ Copie `.env.example` e inicie sem uma chave de API. O tradutor padrão é local,
 | --- | --- |
 | `SUBTRANS_DEEPSEEK_API_KEY` | Chave opcional da DeepSeek para o caminho explícito de compatibilidade em nuvem. |
 | `SUBTRANS_DATA_DIR`, `SUBTRANS_DB` | Locais dos arquivos e do banco SQLite de tarefas; o exemplo Docker guarda ambos em um volume persistente. |
-| `SUBTRANS_TRANSCRIBER_BACKEND` | O padrão é `local_whisper`; selecione `replicate` ou um serviço HTTP compatível quando necessário. |
 | `SUBTRANS_COOKIES` | Arquivo de cookies para sites que exigem login ou verificação de idade. |
 | `SUBTRANS_WORKERS`, `SUBTRANS_DOWNLOAD_WORKERS` | Limites de concorrência do processamento e dos downloads. |
 
@@ -170,7 +168,6 @@ A maioria dos guias abaixo está em chinês; o protocolo do serviço de transcri
 - [Implantação no Linux](../quick-start-linux.md): instalação no Ubuntu/Debian, systemd, proxy reverso e solução de problemas.
 - [Servidor MCP](../mcp-server.md): stdio, Streamable HTTP e ferramentas.
 - [Guia para agentes MCP](../mcp-agent-guide.md): sequência de chamadas, estados e erros.
-- [Protocolo do serviço de transcrição (em inglês)](../transcriber-service.md): mecanismos local, Replicate e HTTP.
 - [Google Drive sidecar](../../drive-service/README.md): API e configuração da sincronização de arquivos.
 
 ## Desenvolvimento

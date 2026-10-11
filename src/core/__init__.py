@@ -32,7 +32,6 @@ from .transcriber import (
     TranscribeResponse,
     TranscriberBackend,
     TranscriberService,
-    ReplicateTranscriber,
     HttpTranscriber,
     LocalWhisperTranscriber,
     transcribe,
@@ -66,7 +65,7 @@ __all__ = [
     # ③ 语音识别
     "transcribe", "TranscribeResult", "TranscribeProgress", "TranscribeError",
     "TranscribeRequest", "TranscribeResponse", "TranscriberBackend", "TranscriberService",
-    "ReplicateTranscriber", "HttpTranscriber",
+    "HttpTranscriber",
     "LocalWhisperTranscriber",
     # ④ 翻译
     "translate_srt", "translate_texts", "TranslateResult", "TranslateProgress", "TranslateError",

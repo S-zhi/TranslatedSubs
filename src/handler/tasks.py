@@ -73,6 +73,14 @@ logger = logging.getLogger(__name__)
 def _ensure_local_model_ready(model: str) -> None:
     value = str(model or "")
     backend, separator, name = value.partition(":")
+    if separator and backend.strip().lower() == "replicate":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "REPLICATE_BACKEND_REMOVED",
+                "message": "Replicate 云端转写已移除，请选择已就绪的本地 Whisper 模型",
+            },
+        )
     if separator and backend.strip().lower() in {"local", "local_whisper", "whisper", "faster_whisper"}:
         if not model_manager.is_ready(name.strip()):
             raise HTTPException(status_code=409, detail={"code": "MODEL_NOT_READY", "message": f"本地模型未导入或未通过检查: {name}"})
@@ -671,6 +679,14 @@ def cancel_task(task_id: str, store: TaskStore = Depends(get_store)) -> TaskOut:
 def retry_task(task_id: str, store: TaskStore = Depends(get_store)) -> TaskOut:
     """仅允许失败或已取消任务重新入队，避免运行中任务重复执行。"""
     rec = _require(store, task_id)
+    if str(rec.model or "").partition(":")[0].strip().lower() == "replicate":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "REPLICATE_BACKEND_REMOVED",
+                "message": "该历史任务使用已移除的 Replicate 转写，请新建任务并选择本地 Whisper 模型",
+            },
+        )
     if rec.status not in ("FAILED", "CANCELLED"):
         raise HTTPException(status_code=409, detail="只有失败或已取消任务可以重试")
     updated = store.update(

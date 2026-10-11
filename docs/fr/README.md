@@ -130,7 +130,6 @@ Ouvrez <http://localhost:8000/>. Exécutez `curl http://127.0.0.1:8000/api/healt
 - **Interface multilingue** : Choisissez depuis la barre latérale le chinois simplifié, l’anglais, l’hindi, l’espagnol, l’arabe, le français, le portugais ou le russe. Le choix est enregistré dans le navigateur ; lors de la première visite, la langue du navigateur est utilisée, sauf si le déploiement en définit une par défaut. Celle-ci se configure avec `UI_LOCALE` dans `web/config.js`.
 - **Intégration MCP** : Permet à Codex, Claude Desktop et d'autres clients IA de créer et de suivre des tâches en langage naturel.
 - **Extension Google Drive** : Téléverse, télécharge et organise les fichiers par tâche pour partager les résultats au sein d'une équipe.
-- **Moteurs de transcription interchangeables** : Choisissez entre faster-whisper en local, Replicate et un service HTTP compatible selon vos besoins de coût, de rapidité et de confidentialité.
 
 ## De la vidéo aux sous-titres
 
@@ -148,7 +147,6 @@ Copiez `.env.example` et démarrez sans clé API. Le traducteur par défaut est 
 | --- | --- |
 | `SUBTRANS_DEEPSEEK_API_KEY` | Clé DeepSeek facultative pour le chemin cloud de compatibilité explicite. |
 | `SUBTRANS_DATA_DIR`, `SUBTRANS_DB` | Emplacement des fichiers et de la base SQLite des tâches ; l'exemple Docker les conserve dans un volume persistant. |
-| `SUBTRANS_TRANSCRIBER_BACKEND` | Valeur par défaut : `local_whisper` ; choisissez explicitement `replicate` ou un service HTTP compatible si nécessaire. |
 | `SUBTRANS_COOKIES` | Fichier de cookies pour les sites imposant une connexion ou une vérification de l'âge. |
 | `SUBTRANS_WORKERS`, `SUBTRANS_DOWNLOAD_WORKERS` | Limites de parallélisme du traitement et des téléchargements. |
 
@@ -170,7 +168,6 @@ La plupart des guides suivants sont en chinois ; le protocole du service de tran
 - [Déploiement sous Linux](../quick-start-linux.md) : installation sur Ubuntu/Debian, systemd, proxy inverse et dépannage.
 - [Serveur MCP](../mcp-server.md) : stdio, Streamable HTTP et outils.
 - [Guide des agents MCP](../mcp-agent-guide.md) : ordre des appels, états et erreurs.
-- [Protocole du service de transcription (en anglais)](../transcriber-service.md) : moteurs local, Replicate et HTTP.
 - [Google Drive sidecar](../../drive-service/README.md) : API et configuration de la synchronisation des fichiers.
 
 ## Développement

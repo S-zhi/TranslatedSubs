@@ -15,10 +15,7 @@ const UNSUPPORTED_LANGUAGES = new Set(["bn", "ur"]);
 const FALLBACK_TARGET_LANGUAGES = Object.keys(LANG_LABEL).filter(
   (k) => k !== "auto" && k !== "zh" && !UNSUPPORTED_LANGUAGES.has(k)
 );
-const FALLBACK_MODELS = [
-  "replicate:tiny.en", "replicate:tiny", "replicate:base.en", "replicate:base", "replicate:small.en",
-  "replicate:small", "replicate:medium.en", "replicate:medium", "replicate:large-v1", "replicate:large-v2",
-];
+const FALLBACK_MODELS = ["local:tiny", "local:base", "local:small", "local:medium", "local:large-v3", "local:large-v3-turbo"];
 const DEFAULT_SOURCE_LANGUAGE = "en";
 const URL_RE = /^https?:\/\/.+/i;
 const VIDEO_EXT_RE = /\.(mp4|mov|mkv|webm|avi|m4v|flv|ts|mpeg|mpg|wmv)$/i;
@@ -233,7 +230,7 @@ function renderTargetLanguages(languages) {
 
 function modelLabel(model) {
   // 生成 Whisper 模型下拉框展示文案。
-  const [backend, rawModel] = String(model).includes(":") ? String(model).split(":", 2) : ["replicate", model];
+  const [backend, rawModel] = String(model).includes(":") ? String(model).split(":", 2) : ["local", model];
   const labels = {
     "tiny.en": "tiny.en · 英语最快",
     tiny: "tiny · 最快",
@@ -247,7 +244,7 @@ function modelLabel(model) {
     "large-v2": "large-v2 · 高精度",
   };
   const label = labels[rawModel] || rawModel;
-  return `${backend === "local" ? "本地" : "Replicate"} · ${label}`;
+  return `${backend === "local" ? "本地" : backend} · ${label}`;
 }
 
 function renderModelWeights(models, localStates = []) {
@@ -287,7 +284,7 @@ async function initSrtOptions() {
     renderSourceLanguages(languages);
     renderTargetLanguages(targetLanguages);
     const localOptions = localStates.filter((item) => item.status === "READY").map((item) => `local:${item.name}`);
-    renderModelWeights([...models.filter((model) => !String(model).startsWith("local:")), ...localOptions], localStates);
+    renderModelWeights([...models.filter((model) => String(model).startsWith("local:")), ...localOptions], localStates);
     engineLanguageController?.sync();
   } catch (err) {
     toast(err.message || "获取识别选项失败，已使用默认选项", "ph-warning-circle");

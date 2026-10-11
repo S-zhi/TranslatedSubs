@@ -16,7 +16,6 @@ from typing import Any
 from src.config import settings
 from src.core.ffmpeg_utils import has_subtitles_filter
 from src.service.translation_model_manager import get_translation_model_manager
-from src.service.replicate_account import query_replicate_balance
 from src.store import DEFAULT_TRANSLATION_ENGINE_ID
 
 
@@ -38,13 +37,6 @@ def _has_value(value: str | None) -> bool:
     return bool(value and value.strip())
 
 
-def _configured_replicate_token() -> str | None:
-    """页面运行时 Token 优先；兼容测试替换的旧 settings 对象。"""
-    if hasattr(settings, "replicate_api_token"):
-        return settings.replicate_api_token
-    return os.getenv("REPLICATE_API_TOKEN")
-
-
 def build_readiness() -> dict[str, Any]:
     """构造业务服务的脱敏 readiness 响应。
 
@@ -52,54 +44,6 @@ def build_readiness() -> dict[str, Any]:
     下载能力和硬字幕能力单独暴露，便于 MCP 给出精确的下一步提示。
     """
     env_file = settings.backend_dir / ".env"
-
-    replicate_token_configured = _has_value(_configured_replicate_token())
-    replicate_token_invalid = False
-    # Replicate remains an optional compatibility backend. Its account state is
-    # reported when configured, but never blocks the local default pipeline.
-    replicate_ready = True
-    replicate_checked_at: int | None = None
-    replicate_cached: bool = False
-    replicate_check_status = "missing"
-
-    if replicate_token_configured:
-        # External account checks must not make the readiness endpoint fail.
-        try:
-            account_info = query_replicate_balance()
-        except Exception:
-            account_info = {
-                "status": "unavailable",
-                "errorCode": "network_error",
-                "checkedAt": int(time.time() * 1000),
-                "cached": False,
-            }
-        if not isinstance(account_info, dict):
-            account_info = {
-                "status": "unavailable",
-                "errorCode": "network_error",
-                "checkedAt": int(time.time() * 1000),
-                "cached": False,
-            }
-        replicate_checked_at = account_info.get("checkedAt")
-        replicate_cached = bool(account_info.get("cached", False))
-
-        status = account_info.get("status")
-        error_code = account_info.get("errorCode")
-
-        if status == "error" or error_code == "invalid_api_token":
-            replicate_token_invalid = True
-            replicate_ready = True
-            replicate_check_status = "invalid"
-        elif status == "unavailable":
-            replicate_token_invalid = False
-            replicate_ready = True
-            replicate_check_status = (
-                "network_error" if error_code == "network_error" else "unavailable"
-            )
-        else:
-            replicate_token_invalid = False
-            replicate_ready = True
-            replicate_check_status = "available"
 
     deepseek_ready = _has_value(
         os.getenv("SUBTRANS_DEEPSEEK_API_KEY")
@@ -227,14 +171,9 @@ def build_readiness() -> dict[str, Any]:
         "config_file": str(env_file),
         "config_file_present": env_file.is_file(),
         "required_environment": [],
-        "replicate_checked_at": replicate_checked_at,
-        "replicate_cached": replicate_cached,
         "checks": {
             "api_token_required": bool(settings.api_token),
-            "replicate_api_token": replicate_check_status,
-            "replicate_checked_at": replicate_checked_at,
-            "replicate_cached": replicate_cached,
-            "deepseek_api_key": "available" if deepseek_ready else "missing",
+                    "deepseek_api_key": "available" if deepseek_ready else "missing",
             "translation_engine": "available" if translation_ready else "missing",
             "local_translation_model": "available" if local_model_ready else "not_ready",
             "local_translation_dependencies": "available" if local_dependencies.get("ready") else "missing",

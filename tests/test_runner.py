@@ -283,6 +283,27 @@ def test_recover_interrupted_upload_task_fails_when_source_missing(store, tmp_pa
     assert updated.error_code == "resource_error"
 
 
+def test_recover_interrupted_replicate_task_is_failed_without_requeue(store, monkeypatch):
+    """历史 Replicate 任务不能在服务重启后再次调用已删除的后端。"""
+    rec = store.create(
+        url="http://x/v", source_lang="en", target_lang="zh-CN",
+        mode="mono", burn="soft", model="replicate:tiny", engine="deepseek",
+    )
+    store.update(rec.id, status="TRANSCRIBING")
+    submitted = []
+
+    class FakeExecutor:
+        def submit(self, fn, *args):
+            submitted.append((fn, args))
+
+    monkeypatch.setattr(runner, "_executor", FakeExecutor())
+    assert runner.recover_interrupted_tasks() == []
+    assert submitted == []
+    updated = store.get(rec.id)
+    assert updated.status == "FAILED"
+    assert updated.error_code == "REPLICATE_BACKEND_REMOVED"
+
+
 def test_get_executor_dynamic_worker_update(monkeypatch):
     runner.shutdown_executor(wait=True)
     monkeypatch.setenv("SUBTRANS_WORKERS", "3")
