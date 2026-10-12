@@ -19,7 +19,7 @@ from src.config import settings, task_dir
 from src.core.audio_extractor import extract_audio
 from src.core.downloader import download_video
 from src.core.subtitle_burner import burn_subtitles
-from src.core.transcriber import TranscribeCancelledError, transcribe
+from src.core.transcriber import TranscribeCancelledError, TranscribeError, transcribe
 from src.core.translator import translate_srt
 from src.core.tts import TTSError, generate_timeline_audio
 from src.core.ffmpeg_utils import probe_duration, run_ffmpeg
@@ -93,6 +93,10 @@ class PipelineParams:
     quality: Optional[str] = None  # 下载清晰度策略：best/1080p/720p/480p/360p/audio_only
     tts_enabled: bool = False
     tts_voice: str = "auto"
+    tts_speed: float = 1.0
+    tts_format: str = "wav"
+    tts_model: Optional[str] = None
+    tts_provider: str = "kokoro"
     original_voice_mode: str = "keep"
 
 
@@ -431,6 +435,8 @@ class TranscriptionHandler(PipelineHandler):
             model_name = params.model
             if ":" in model_name:
                 candidate, selected_model = model_name.split(":", 1)
+                if candidate.strip().lower() == "replicate":
+                    raise TranscribeError("当前版本不支持 Replicate Whisper", code="unsupported_backend")
                 if candidate.strip().lower() in {"local", "local_whisper", "whisper", "faster_whisper"}:
                     backend = "local_whisper"
                     model_name = selected_model.strip()
@@ -516,6 +522,8 @@ class SubtitleBurningHandler(PipelineHandler):
         params = context.params
         context.emit("SYNTHESIZING", 95, tts_status="RUNNING")
         try:
+            if str(getattr(params, "tts_provider", "kokoro") or "kokoro").lower() not in {"kokoro", "local"}:
+                raise TTSError(f"不支持的 TTS 提供商: {params.tts_provider}")
             task_path = task_dir(tid)
             high_quality_audio = task_path / "tts_source.wav"
             run_ffmpeg([
@@ -532,6 +540,9 @@ class SubtitleBurningHandler(PipelineHandler):
                 task_path / "dubbed.wav",
                 target_lang=params.target_lang,
                 voice=voice,
+                speed=float(getattr(params, "tts_speed", 1.0) or 1.0),
+                model_id=getattr(params, "tts_model", None),
+                output_format=getattr(params, "tts_format", "wav"),
                 bilingual=params.mode == "bilingual",
                 duration=probe_duration(context.resources.video_path, settings.ffprobe_bin),
                 cancel_check=lambda: _check_cancelled(tid),

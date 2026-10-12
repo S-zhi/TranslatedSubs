@@ -19,11 +19,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from src.config import settings
+from src.config.runtime_redis import start_runtime_subscription, stop_runtime_subscription
 
 
 from src.handler import (
     audio_settings,
     health,
+    model_settings,
     srt,
     subtitle_editor,
     tasks,
@@ -72,6 +74,7 @@ def create_app(debug: bool | None = None) -> FastAPI:
     app.include_router(subtitle_editor.router)
     app.include_router(health.router)
     app.include_router(translation_engines.router)
+    app.include_router(model_settings.router)
     app.include_router(audio_settings.router)
 
     # SPA 路由需要在静态目录挂载前显式回退到 index.html，否则直接打开
@@ -140,6 +143,7 @@ def create_app(debug: bool | None = None) -> FastAPI:
             logger.warning("启动恢复：以下未完成任务已重新入队: %s", recovered)
 
         start_retention_scheduler()
+        start_runtime_subscription()
         start_startup_probe(
             get_probe_store(),
             enabled=settings.startup_probe_enabled,
@@ -151,6 +155,7 @@ def create_app(debug: bool | None = None) -> FastAPI:
     def _shutdown_runner() -> None:
         """关闭应用时通知 runner 线程池退出。"""
         stop_startup_probe()
+        stop_runtime_subscription()
         get_translation_model_manager().cancel_warmup()
         shutdown_executor(wait=False)
 

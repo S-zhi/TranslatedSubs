@@ -15,6 +15,7 @@ import inspect
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 from typing import Optional
 
 from src.config import OUTPUT_VIDEO_NAMES, artifact_name, settings, task_dir
@@ -28,7 +29,7 @@ from src.service.orchestrator import (
     unregister_cancellation_signal,
 )
 from src.service.asset_resolver import AssetResolver, ResourceError, ResourceState
-from src.store import STATUSES, TaskStore, TranslationEngineStore
+from src.store import MODEL_KINDS, ModelSettingsStore, STATUSES, TaskStore, TranslationEngineStore
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,54 @@ def shutdown_executor(wait: bool = True) -> None:
             logger.info("流水线线程池已关闭")
 _RECOVERABLE_STATUSES = set(STATUSES) - {"SUCCESS", "FAILED", "CANCELLED"}
 _engine_store = TranslationEngineStore(settings.db_path)
+
+
+def _active_unified_model(kind: str) -> dict | None:
+    """Read a user-saved current model at task start.
+
+    Default rows are intentionally passive so existing tasks keep their
+    persisted model until the unified settings page has explicitly saved a
+    configuration.  This also keeps old installations and test doubles
+    compatible while making every subsequent task use the selected card.
+    """
+    if kind not in MODEL_KINDS:
+        return None
+    try:
+        config = ModelSettingsStore(settings.db_path).get(kind) or {}
+    except Exception:
+        logger.exception("读取统一模型配置失败: kind=%s", kind)
+        return None
+    if not config.get("_runtimeManaged") or not config.get("enabled", True):
+        return None
+    models = [item for item in config.get("models", []) if isinstance(item, dict)]
+    active = next((item for item in models if item.get("isCurrent")), None)
+    merged = dict(config)
+    if active:
+        merged.update(active)
+    return merged
+
+
+def _llm_engine_config(item: dict) -> object | None:
+    provider = str(item.get("provider") or "").strip().lower()
+    api_key = str(item.get("apiKey") or "").strip()
+    if not api_key:
+        return None
+    if provider in {"anthropic", "anthropic_compatible"}:
+        api_type = "anthropic_compatible"
+    elif provider in {"openai", "openai_compatible", "deepseek", "custom"}:
+        api_type = "openai_compatible"
+    else:
+        return None
+    return SimpleNamespace(
+        api_type=api_type,
+        base_url=str(item.get("baseUrl") or "").strip(),
+        model=str(item.get("model") or "").strip(),
+        api_key=api_key,
+        timeout=int(item.get("timeout") or 120),
+        temperature=float(item.get("temperature") or 0.3),
+        max_tokens=int(item.get("maxTokens") or 4096),
+        concurrency=max(1, int(item.get("concurrency") or 1)),
+    )
 
 _procs: dict[str, list[subprocess.Popen]] = {}
 _procs_lock = threading.Lock()
@@ -253,6 +302,15 @@ def _run(task_id: str) -> None:
         unregister_cancellation_signal(task_id)
         return
 
+    whisper_model = _active_unified_model("whisper")
+    tts_model = _active_unified_model("tts")
+    selected_whisper = str((whisper_model or {}).get("model") or rec.model)
+    if whisper_model:
+        whisper_provider = str(whisper_model.get("provider") or "local").strip().lower()
+        if whisper_provider == "local" and not selected_whisper.lower().startswith("local:"):
+            selected_whisper = f"local:{selected_whisper}"
+        elif whisper_provider not in {"local", "whisper", "faster_whisper"} and ":" not in selected_whisper:
+            selected_whisper = f"{whisper_provider}:{selected_whisper}"
     params = PipelineParams(
         task_id=rec.id,
         url=rec.url,
@@ -260,14 +318,18 @@ def _run(task_id: str) -> None:
         target_lang=rec.target_lang,
         mode=rec.mode,
         burn=rec.burn,
-        model=rec.model,
+        model=selected_whisper,
         engine=rec.engine,
         source_type=rec.source_type,
         need_subtitle=bool(rec.need_subtitle),
         title=rec.title,
         quality=getattr(rec, "quality", None),
         tts_enabled=bool(getattr(rec, "tts_enabled", 0)),
-        tts_voice=getattr(rec, "tts_voice", "auto"),
+        tts_voice=str((tts_model or {}).get("voice") or getattr(rec, "tts_voice", "auto")),
+        tts_speed=float((tts_model or {}).get("speed", 1.0) or 1.0),
+        tts_format=str((tts_model or {}).get("format", "wav") or "wav"),
+        tts_model=(str((tts_model or {}).get("model") or "") or None),
+        tts_provider=str((tts_model or {}).get("provider", "kokoro") or "kokoro"),
         original_voice_mode=getattr(rec, "original_voice_mode", "keep"),
     )
 
@@ -323,6 +385,9 @@ def _run(task_id: str) -> None:
     # 所有任务都从持久化配置读取引擎。DeepSeek 只是旧版默认配置 ID，
     # 由启动时的 seed 记录兼容环境变量，不再绕过数据库配置。
     engine_config = _engine_store.get(rec.engine)
+    unified_llm = _active_unified_model("llm")
+    if unified_llm is not None and rec.engine != "local-opus-en-zh":
+        engine_config = _llm_engine_config(unified_llm) or engine_config
     if engine_config is None:
         _store.update(task_id, status="FAILED", error="翻译引擎配置不存在", error_code="engine_not_found")
         unregister_cancellation_signal(task_id)
