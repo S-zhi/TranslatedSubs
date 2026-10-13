@@ -70,10 +70,26 @@ def _ensure_model_not_in_use(model_name: str, store: TaskStore) -> None:
     for task in store.list():
         if task.status in {"SUCCESS", "FAILED", "CANCELLED"} or not task.need_subtitle:
             continue
-        backend, separator, selected_model = str(task.model or "").partition(":")
+        selected = None
+        snapshot_provider = None
+        if task.runtime_config_json:
+            try:
+                import json
+                snapshot = json.loads(task.runtime_config_json)
+                whisper = snapshot.get("whisper")
+                selected_value = whisper.get("model") if isinstance(whisper, dict) else None
+                if isinstance(selected_value, str) and selected_value.strip():
+                    selected = selected_value.strip()
+                    snapshot_provider = whisper.get("provider") if isinstance(whisper.get("provider"), str) else None
+            except (TypeError, ValueError, AttributeError):
+                selected = None
+        backend, separator, selected_model = str(selected or task.model or "").partition(":")
+        if snapshot_provider and snapshot_provider.strip().lower() not in local_backends:
+            continue
         if separator and backend.strip().lower() not in local_backends:
             continue
-        if (selected_model if separator else task.model).strip() == model_name:
+        effective_name = selected_model if separator else str(selected or task.model or "")
+        if effective_name.strip() == model_name:
             raise HTTPException(
                 status_code=409,
                 detail={"code": "MODEL_IN_USE", "message": "有未结束的任务选用了这个模型，暂时无法清理"},
@@ -97,6 +113,15 @@ def check_local_model(model_name: str, store: TaskStore = Depends(get_store)) ->
 @router.delete("/local-models/{model_name}", dependencies=[Depends(require_api_token)])
 def delete_local_model(model_name: str, store: TaskStore = Depends(get_store)) -> dict:
     """删除受管模型，避免清理正在使用的模型文件。"""
+    from src.service.model_runtime import active_model_card
+    from src.store.model_settings_store import ModelSettingsStore
+
+    current = active_model_card(ModelSettingsStore(store.db_path), "whisper")
+    selected = str((current or {}).get("model") or "").removeprefix("local:")
+    if current and str(current.get("provider") or "").lower() == "local" and selected == model_name:
+        raise HTTPException(status_code=409, detail={
+            "code": "MODEL_CURRENT", "message": "请先切换当前 Whisper 模型再删除",
+        })
     _ensure_model_not_in_use(model_name, store)
 
     try:

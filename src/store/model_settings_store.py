@@ -33,6 +33,16 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     },
 }
 
+_READONLY_FIELDS = {"status", "runtimeManaged", "_runtimeManaged", "hasApiKey"}
+
+
+def _strip_public_readonly(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _strip_public_readonly(item) for key, item in value.items() if key not in _READONLY_FIELDS}
+    if isinstance(value, list):
+        return [_strip_public_readonly(item) for item in value]
+    return value
+
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
@@ -93,60 +103,77 @@ class ModelSettingsStore:
     def get(self, kind: str) -> dict[str, Any] | None:
         return self.get_all().get(kind)
 
-    def update(self, values: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    def prepare(self, values: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        """Prepare a complete candidate set without persisting any changes."""
         current = self.get_all()
+        for kind, raw_patch in values.items():
+            if kind not in KINDS:
+                raise KeyError(kind)
+            patch = _strip_public_readonly(raw_patch)
+            if not patch:
+                continue
+            merged = dict(current[kind])
+            merged["_runtimeManaged"] = True
+            old_models = list(merged.get("models") or [])
+            models_updated = bool(patch.get("models")) if isinstance(patch.get("models"), list) else False
+            for key, value in patch.items():
+                if key == "apiKey":
+                    if value:
+                        merged[key] = str(value)
+                elif key == "models" and isinstance(value, list):
+                    merged["models"] = self._merge_models(old_models, value)
+                else:
+                    merged[key] = value
+            if models_updated:
+                current_candidates = [item for item in merged.get("models", []) if item.get("isCurrent")]
+                if len(current_candidates) > 1:
+                    selected_id = current_candidates[-1].get("id")
+                    for item in merged["models"]:
+                        item["isCurrent"] = item.get("id") == selected_id
+            active = next((item for item in merged.get("models", []) if item.get("isCurrent")), None)
+            if not models_updated and old_models:
+                merged["models"] = old_models
+                active = next((item for item in merged["models"] if item.get("isCurrent")), None)
+                active = active or (merged["models"][0] if merged["models"] else None)
+                for key in ("name", "provider", "model", "baseUrl", "enabled", "temperature", "maxTokens", "timeout", "concurrency", "language", "device", "threads", "wordTimestamps", "voice", "speed", "format"):
+                    if key in patch:
+                        active[key] = patch[key]
+            if models_updated and active:
+                for key in ("name", "provider", "model", "baseUrl", "enabled", "temperature", "maxTokens", "timeout", "concurrency", "language", "device", "threads", "wordTimestamps", "voice", "speed", "format"):
+                    if key in active:
+                        merged[key] = active[key]
+                if active.get("apiKey"):
+                    merged["apiKey"] = active["apiKey"]
+            if kind == "whisper" and models_updated and active:
+                if "enabled" in patch:
+                    active["enabled"] = patch["enabled"]
+                merged["enabled"] = active.get("enabled", merged.get("enabled", True))
+            current[kind] = merged
+        return current
+
+    def update(self, values: dict[str, dict[str, Any]], *, prepared: dict[str, dict[str, Any]] | None = None) -> dict[str, dict[str, Any]]:
+        current = prepared or self.prepare(values)
         with self._connect() as conn:
-            for kind, patch in values.items():
+            for kind in values:
                 if kind not in KINDS:
                     raise KeyError(kind)
-                merged = dict(current[kind])
-                merged["_runtimeManaged"] = True
-                old_models = list(merged.get("models") or [])
-                models_updated = bool(patch.get("models")) if isinstance(patch.get("models"), list) else False
-                for key, value in patch.items():
-                    if key == "apiKey":
-                        # Empty input is the UI's "leave unchanged" value.
-                        if value:
-                            merged[key] = str(value)
-                    elif key == "models" and isinstance(value, list):
-                        merged["models"] = self._merge_models(old_models, value)
-                    else:
-                        merged[key] = value
-                if models_updated:
-                    # A browser can submit a stale card list after adding a
-                    # model.  Normalize multiple flags deterministically so
-                    # exactly one card drives task execution.
-                    current_candidates = [item for item in merged.get("models", []) if item.get("isCurrent")]
-                    if len(current_candidates) > 1:
-                        selected_id = current_candidates[-1].get("id")
-                        for item in merged["models"]:
-                            item["isCurrent"] = item.get("id") == selected_id
-                active = next((item for item in merged.get("models", []) if item.get("isCurrent")), None)
-                if not models_updated and old_models:
-                    active = active or old_models[0]
-                    for key in ("name", "provider", "model", "baseUrl", "enabled", "temperature", "maxTokens", "timeout", "concurrency", "language", "device", "threads", "wordTimestamps", "voice", "speed", "format"):
-                        if key in patch:
-                            active[key] = patch[key]
-                    merged["models"] = old_models
-                if models_updated and active:
-                    for key in ("name", "provider", "model", "baseUrl", "enabled", "temperature", "maxTokens", "timeout", "concurrency", "language", "device", "threads", "wordTimestamps", "voice", "speed", "format"):
-                        if key in active:
-                            merged[key] = active[key]
-                    if active.get("apiKey"):
-                        merged["apiKey"] = active["apiKey"]
+                merged = current[kind]
+                if merged.get("_runtimeManaged") is False:
+                    continue
                 conn.execute(
                     "UPDATE model_settings SET config_json = ?, updated_at = ? WHERE kind = ?",
                     (json.dumps(merged, ensure_ascii=False), _now_ms(), kind),
                 )
-                current[kind] = merged
         return current
 
     @staticmethod
     def _merge_models(old: list[dict[str, Any]], new: list[dict[str, Any]]) -> list[dict[str, Any]]:
         by_id = {str(item.get("id")): dict(item) for item in old if item.get("id")}
+        selected_id = None
         for item in new:
             if not isinstance(item, dict):
                 continue
+            item = _strip_public_readonly(item)
             model_id = str(item.get("id") or "")
             if not model_id:
                 model_id = "model-" + uuid.uuid4().hex[:10]
@@ -157,14 +184,19 @@ class ModelSettingsStore:
                 merged[key] = value
             merged["id"] = model_id
             by_id[model_id] = merged
+            if item.get("isCurrent"):
+                selected_id = model_id
+        if selected_id:
+            for item in by_id.values():
+                item["isCurrent"] = item.get("id") == selected_id
         return list(by_id.values())
 
-    def create_model(self, kind: str, payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    def prepare_create(self, kind: str, payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
         if kind not in KINDS:
             raise KeyError(kind)
         current = self.get_all()[kind]
         current["_runtimeManaged"] = True
-        item = dict(payload)
+        item = _strip_public_readonly(payload)
         # Creation IDs are owned by the server; clients update an existing
         # card through PUT with its persisted ID instead.
         item["id"] = f"{kind}-" + uuid.uuid4().hex[:10]
@@ -184,6 +216,10 @@ class ModelSettingsStore:
                 current[key] = item[key]
         if item.get("apiKey"):
             current["apiKey"] = item["apiKey"]
-        self.update({kind: current})
         saved = next(model for model in current["models"] if model["id"] == item["id"])
         return saved, current
+
+    def create_model(self, kind: str, payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        saved, candidate = self.prepare_create(kind, payload)
+        self.update({kind: candidate}, prepared={kind: candidate})
+        return saved, candidate

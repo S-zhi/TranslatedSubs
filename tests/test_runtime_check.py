@@ -119,3 +119,31 @@ def test_readiness_reports_saved_unified_key_without_returning_secret(monkeypatc
     assert result["model_settings"]["llm"]["hasApiKey"] is True
     assert result["effective"]["llm"]["source"] == "unified"
     assert "sk-readiness-secret" not in str(result)
+
+
+def test_default_whisper_status_matches_get_without_activating_settings(monkeypatch, tmp_path):
+    import dataclasses
+    from fastapi.testclient import TestClient
+    from src.config import settings as base_settings
+    from src.handler.app import app
+    from src.handler import deps, model_settings as model_routes
+    from src.service.model_manager import model_manager
+    from src.store import ModelSettingsStore
+
+    current = _settings(tmp_path)
+    monkeypatch.setattr(runtime_check, "settings", current)
+    monkeypatch.setattr(model_routes, "settings", dataclasses.replace(base_settings, db_path=current.db_path))
+    monkeypatch.setattr(deps, "settings", dataclasses.replace(base_settings, db_path=current.db_path))
+    monkeypatch.setattr(model_manager, "list_models", lambda: [{"name": "small", "status": "NOT_INSTALLED"}])
+    monkeypatch.setattr(model_manager, "is_ready", lambda _name: False)
+    _ready(monkeypatch)
+    with TestClient(app) as client:
+        public = client.get("/api/settings/models").json()["whisper"]
+    readiness = runtime_check.build_readiness()
+    effective = readiness["effective"]["whisper"]
+    assert public["runtimeManaged"] is False
+    assert public["status"] == "NOT_INSTALLED"
+    assert public["model"] == effective["model"] == "local:small"
+    assert public["status"] == readiness["model_settings"]["whisper"]["status"]
+    assert effective["ready"] is False
+    assert ModelSettingsStore(current.db_path).get("whisper")["_runtimeManaged"] is False

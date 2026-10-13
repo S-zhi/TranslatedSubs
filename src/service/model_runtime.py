@@ -33,6 +33,9 @@ def active_model_card(store: ModelSettingsStore, kind: str) -> dict[str, Any] | 
     config = store.get(kind) or {}
     if not config.get("_runtimeManaged") or not config.get("enabled", True):
         return None
+    if kind == "whisper":
+        effective = whisper_effective_config(config)
+        return effective if effective.get("enabled", True) else None
     models = [item for item in config.get("models", []) if isinstance(item, dict)]
     card = next((item for item in models if item.get("isCurrent")), None)
     merged = dict(config)
@@ -41,6 +44,42 @@ def active_model_card(store: ModelSettingsStore, kind: str) -> dict[str, Any] | 
         if not merged.get("apiKey") and config.get("apiKey"):
             merged["apiKey"] = config["apiKey"]
     return merged
+
+
+def whisper_effective_config(store: ModelSettingsStore | dict[str, Any]) -> dict[str, Any]:
+    """Return the selected Whisper config, regardless of runtime activation."""
+    config = store if isinstance(store, dict) else (store.get("whisper") or {})
+    card = next((item for item in config.get("models", [])
+                 if isinstance(item, dict) and item.get("isCurrent")), None)
+    result = dict(config)
+    if card:
+        result.update(card)
+        result["enabled"] = bool(config.get("enabled", True) and card.get("enabled", True))
+        if not result.get("apiKey") and config.get("apiKey"):
+            result["apiKey"] = config["apiKey"]
+    return result
+
+
+def canonical_whisper_model(model: str) -> str:
+    value = str(model or "").strip()
+    if not value:
+        return ""
+    if value[:6].lower() == "local:":
+        return f"local:{value[6:].strip()}"
+    return f"local:{value}"
+
+
+def whisper_inventory_status(
+    config: dict[str, Any], inventory: list[dict[str, Any]], *, missing_uninstalled: bool = False,
+) -> str:
+    provider = str(config.get("provider") or "").strip().lower()
+    if provider != "local":
+        return "UNAVAILABLE"
+    name = canonical_whisper_model(str(config.get("model") or "")).removeprefix("local:")
+    item = next((entry for entry in inventory if entry.get("name") == name), None)
+    if not item or (missing_uninstalled and item.get("status") == "NOT_INSTALLED"):
+        return "MISSING"
+    return str(item.get("status"))
 
 
 def _card_id(card: dict[str, Any] | None) -> str | None:
@@ -156,29 +195,41 @@ def _resolve_whisper(
         }
     card = active_model_card(model_store, "whisper")
     source = "unified_whisper" if card is not None else "request"
-    selected = str((card or {}).get("model") or request_model).strip()
+    configured_model = (card or {}).get("model") if card is not None else request_model
+    selected = str(configured_model or "").strip()
+    if card is not None and not selected:
+        raise _error(409, "MODEL_NOT_READY", "当前 Whisper 模型未配置")
+    if not selected:
+        raise _error(409, "MODEL_NOT_READY", "Whisper 模型未配置")
     provider = str((card or {}).get("provider") or "").strip().lower()
     if card is not None and not card.get("enabled", True):
         raise _error(422, "MODEL_DISABLED", "统一 Whisper 模型已停用")
+    if card is not None and provider != "local":
+        raise _error(422, "UNSUPPORTED_WHISPER_PROVIDER", f"不支持的 Whisper Provider: {provider}")
     if card is None:
         prefix, sep, _ = selected.partition(":")
+        if sep and not prefix:
+            raise _error(422, "UNSUPPORTED_WHISPER_PROVIDER", "Whisper 模型引用缺少 Provider")
         provider = prefix.lower() if sep else "local"
     if provider == "replicate":
         raise _error(422, "REPLICATE_BACKEND_REMOVED", "Replicate 云端转写已移除，请选择已就绪的本地 Whisper 模型")
     if provider in {"local", "local_whisper", "whisper", "faster_whisper"}:
+        if provider != "local" and selected.partition(":")[0].lower() == provider:
+            selected = selected.partition(":")[2]
+        selected = canonical_whisper_model(selected)
+        if not selected or selected == "local:":
+            raise _error(409, "MODEL_NOT_READY", "Whisper 模型未配置")
         check_model = selected
         if provider == "local" and not check_model.lower().startswith("local:"):
             check_model = f"local:{check_model}"
         if ensure_local_model_ready is not None:
             ensure_local_model_ready(check_model)
-        elif provider == "local":
+        else:
             from src.service.model_manager import model_manager
             if not model_manager.is_ready(selected.removeprefix("local:")):
                 raise _error(409, "MODEL_NOT_READY", f"本地模型未导入或未通过检查: {selected.removeprefix('local:')}")
     elif provider:
         raise _error(422, "UNSUPPORTED_WHISPER_PROVIDER", f"不支持的 Whisper Provider: {provider}")
-    if card is not None and provider == "local" and not selected.lower().startswith("local:"):
-        selected = f"local:{selected}"
     return {"source": source, "cardId": _card_id(card), "provider": provider or "local", "model": selected}
 
 

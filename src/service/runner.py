@@ -101,18 +101,11 @@ def _active_unified_model(kind: str, db_path=None) -> dict | None:
     if kind not in MODEL_KINDS:
         return None
     try:
-        config = ModelSettingsStore(db_path or settings.db_path).get(kind) or {}
+        from src.service.model_runtime import active_model_card
+        return active_model_card(ModelSettingsStore(db_path or settings.db_path), kind)
     except Exception:
         logger.exception("读取统一模型配置失败: kind=%s", kind)
         return None
-    if not config.get("_runtimeManaged") or not config.get("enabled", True):
-        return None
-    models = [item for item in config.get("models", []) if isinstance(item, dict)]
-    active = next((item for item in models if item.get("isCurrent")), None)
-    merged = dict(config)
-    if active:
-        merged.update(active)
-    return merged
 
 
 def _llm_engine_config(item: dict) -> object | None:
