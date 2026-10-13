@@ -182,7 +182,7 @@ class ModelSettingsStore:
         for key in ("language", "device", "threads", "wordTimestamps", "voice", "speed", "format"):
             if key in item:
                 current[key] = item[key]
-        if "apiKey" in item:
+        if item.get("apiKey"):
             current["apiKey"] = item["apiKey"]
         self.update({kind: current})
         saved = next(model for model in current["models"] if model["id"] == item["id"])

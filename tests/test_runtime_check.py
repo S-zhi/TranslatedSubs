@@ -83,3 +83,39 @@ def test_readiness_allows_soft_burn_when_subtitle_filter_missing(monkeypatch, tm
     assert result["ok"] is False
     assert result["capabilities"]["soft_burn"] is True
     assert result["agent_action"] == "use_soft_burn_or_install_libass"
+
+
+def test_readiness_reports_saved_unified_key_without_returning_secret(monkeypatch, tmp_path):
+    from src.store import ModelSettingsStore
+    import src.handler.deps as deps
+
+    current = _settings(tmp_path)
+    monkeypatch.setattr(runtime_check, "settings", current)
+    ModelSettingsStore(current.db_path).update({
+        "llm": {
+            "provider": "openai_compatible",
+            "model": "saved-model",
+            "baseUrl": "https://example.test/v1",
+            "apiKey": "sk-readiness-secret",
+            "models": [{
+                "id": "llm-deepseek",
+                "provider": "openai_compatible",
+                "model": "saved-model",
+                "baseUrl": "https://example.test/v1",
+                "isCurrent": True,
+            }],
+        },
+    })
+    monkeypatch.setattr(deps, "get_translation_engine_store", lambda: SimpleNamespace(get=lambda _: SimpleNamespace(enabled=True)))
+    monkeypatch.setattr(runtime_check, "get_translation_model_manager", lambda: SimpleNamespace(is_ready=lambda: True, dependency_status=lambda: {"ready": True, "missing": []}))
+    monkeypatch.setattr(runtime_check, "_check_binary", lambda _: "available")
+    monkeypatch.setattr(runtime_check, "_check_writable_directory", lambda _: "writable")
+    monkeypatch.setattr(runtime_check.importlib.util, "find_spec", lambda _: object())
+    monkeypatch.setattr(runtime_check, "has_subtitles_filter", lambda _: True)
+
+    result = runtime_check.build_readiness()
+
+    assert result["checks"]["deepseek_api_key"] == "available"
+    assert result["model_settings"]["llm"]["hasApiKey"] is True
+    assert result["effective"]["llm"]["source"] == "unified"
+    assert "sk-readiness-secret" not in str(result)
