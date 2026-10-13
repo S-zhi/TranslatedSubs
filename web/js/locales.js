@@ -2,6 +2,9 @@
 export const LOCALIZED_TEXT = {
   "en": {
     "Drive 同步失败": "Drive sync failed",
+    "本地模型优先使用 CPU；通过下方模型库管理本机模型；仅已就绪的模型可以设为当前模型。": "Local models prefer the CPU. Manage this device's models in the library below; only ready models can be selected as current.",
+    "由模型设置统一管理 Whisper": "Manage Whisper centrally in model settings",
+    "启用后新任务使用当前模型；关闭后可在任务页选择已就绪模型": "New tasks use the current model when enabled; when disabled, choose a ready model on the task page",
     "Drive 同步已取消": "Drive sync canceled",
     "Drive 文件分页": "Drive file paging",
     "Drive 文件夹路径": "Drive folder path",
@@ -93,6 +96,7 @@ export const LOCALIZED_TEXT = {
     "任务已加入队列": "Task has been queued",
     "任务已完成": "Task completed",
     "任务已开始处理": "Task has started processing",
+    "当前模型缺失或未就绪，请选择一个已就绪模型": "The current model is missing or not ready. Select a model that is ready.",
     "任务重新开始": "Mission restarts",
     "传输中": "Transmitting",
     "传输队列": "transmission queue",
@@ -1272,7 +1276,11 @@ export const LOCALIZED_TEXT = {
     "尚未导入模型。选择本机模型目录后，系统会先检查文件和推理结果。": "मॉडल अभी तक आयात नहीं किया गया है. मूल मॉडल निर्देशिका का चयन करने के बाद, सिस्टम पहले फ़ाइलों की जांच करता है और परिणामों का अनुमान लगाता है।",
     "已恢复": "बहाल किया गया",
     "当前余额": "वर्तमान संतुलन",
-    "当前支持的画质策略": "वर्तमान में समर्थित छवि गुणवत्ता रणनीतियाँ"
+    "当前支持的画质策略": "वर्तमान में समर्थित छवि गुणवत्ता रणनीतियाँ",
+    "本地模型优先使用 CPU；通过下方模型库管理本机模型；仅已就绪的模型可以设为当前模型。": "स्थानीय मॉडल CPU को प्राथमिकता देते हैं। इस डिवाइस के मॉडल नीचे दी गई लाइब्रेरी में प्रबंधित करें; केवल तैयार मॉडल को वर्तमान मॉडल के रूप में चुना जा सकता है।",
+    "由模型设置统一管理 Whisper": "Whisper का प्रबंधन मॉडल सेटिंग में करें",
+    "启用后新任务使用当前模型；关闭后可在任务页选择已就绪模型": "सक्षम होने पर नए कार्य वर्तमान मॉडल का उपयोग करेंगे; अक्षम होने पर कार्य पृष्ठ पर तैयार मॉडल चुनें",
+    "当前模型缺失或未就绪，请选择一个已就绪模型": "वर्तमान मॉडल मौजूद नहीं है या तैयार नहीं है। कृपया तैयार मॉडल चुनें।",
   },
   "es": {
     "(进度流已超时)": "(El flujo de progreso ha expirado)",
@@ -1909,7 +1917,11 @@ export const LOCALIZED_TEXT = {
     "正在向后端探针确认链接。": "Confirmando enlace a la sonda backend.",
     "正在获取模型文件": "Obtención de archivos de modelo",
     "正在读取…": "Leyendo…",
-    "正在验证模型": "Modelo de validación"
+    "正在验证模型": "Modelo de validación",
+    "本地模型优先使用 CPU；通过下方模型库管理本机模型；仅已就绪的模型可以设为当前模型。": "Los modelos locales priorizan la CPU. Administra los modelos de este dispositivo en la biblioteca de abajo; solo los modelos listos pueden seleccionarse como actuales.",
+    "由模型设置统一管理 Whisper": "Administra Whisper desde la configuración de modelos",
+    "启用后新任务使用当前模型；关闭后可在任务页选择已就绪模型": "Al activarlo, las tareas nuevas usarán el modelo actual; al desactivarlo, podrás elegir un modelo listo en la página de tareas",
+    "当前模型缺失或未就绪，请选择一个已就绪模型": "El modelo actual no existe o no está listo. Selecciona un modelo que esté listo.",
   },
   "ar": {
     "Rumble · 已验证": "الدمدمة · تم التحقق",
@@ -2546,7 +2558,11 @@ export const LOCALIZED_TEXT = {
     "资源确认后会自动开始加载。": "بعد تأكيد المورد، سيبدأ التحميل تلقائيًا.",
     "还没有可编辑的任务": "لا توجد مهام لتحريرها بعد",
     "还没有成品": "لا يوجد منتج نهائي بعد",
-    "队列为空": "قائمة الانتظار فارغة"
+    "队列为空": "قائمة الانتظار فارغة",
+    "本地模型优先使用 CPU；通过下方模型库管理本机模型；仅已就绪的模型可以设为当前模型。": "تعطي النماذج المحلية الأولوية لوحدة CPU. أدر نماذج هذا الجهاز من المكتبة أدناه؛ لا يمكن تعيين النموذج الحالي إلا للنماذج الجاهزة.",
+    "由模型设置统一管理 Whisper": "أدر Whisper من إعدادات النماذج",
+    "启用后新任务使用当前模型；关闭后可在任务页选择已就绪模型": "عند التفعيل، ستستخدم المهام الجديدة النموذج الحالي؛ وعند الإيقاف، يمكنك اختيار نموذج جاهز من صفحة المهام",
+    "当前模型缺失或未就绪，请选择一个已就绪模型": "النموذج الحالي غير موجود أو غير جاهز. يُرجى اختيار نموذج جاهز.",
   },
   "fr": {
     "(进度流已超时)": "(Le flux de progression a expiré)",
@@ -3183,7 +3199,11 @@ export const LOCALIZED_TEXT = {
     "资源确认后会自动开始加载。": "Une fois la ressource confirmée, elle commencera automatiquement à se charger.",
     "还没有可编辑的任务": "Il n'y a pas encore de tâches à modifier",
     "还没有成品": "Pas encore de produit fini",
-    "队列为空": "La file d'attente est vide"
+    "队列为空": "La file d'attente est vide",
+    "本地模型优先使用 CPU；通过下方模型库管理本机模型；仅已就绪的模型可以设为当前模型。": "Les modèles locaux privilégient le CPU. Gérez les modèles de cet appareil dans la bibliothèque ci-dessous ; seuls les modèles prêts peuvent être définis comme modèle actuel.",
+    "由模型设置统一管理 Whisper": "Gérer Whisper dans les paramètres des modèles",
+    "启用后新任务使用当前模型；关闭后可在任务页选择已就绪模型": "Une fois activé, les nouvelles tâches utilisent le modèle actuel ; une fois désactivé, choisissez un modèle prêt sur la page des tâches",
+    "当前模型缺失或未就绪，请选择一个已就绪模型": "Le modèle actuel est absent ou n’est pas prêt. Sélectionnez un modèle prêt.",
   },
   "pt": {
     "(进度流已超时)": "(O fluxo de progresso expirou)",
@@ -3820,7 +3840,11 @@ export const LOCALIZED_TEXT = {
     "资源确认后会自动开始加载。": "Após a confirmação do recurso, ele começará a carregar automaticamente.",
     "还没有可编辑的任务": "Ainda não há tarefas para editar",
     "还没有成品": "Ainda não há produto finalizado",
-    "队列为空": "A fila está vazia"
+    "队列为空": "A fila está vazia",
+    "本地模型优先使用 CPU；通过下方模型库管理本机模型；仅已就绪的模型可以设为当前模型。": "Os modelos locais priorizam a CPU. Gerencie os modelos deste dispositivo na biblioteca abaixo; somente modelos prontos podem ser definidos como atuais.",
+    "由模型设置统一管理 Whisper": "Gerencie o Whisper nas configurações de modelos",
+    "启用后新任务使用当前模型；关闭后可在任务页选择已就绪模型": "Quando ativado, novas tarefas usam o modelo atual; quando desativado, escolha um modelo pronto na página de tarefas",
+    "当前模型缺失或未就绪，请选择一个已就绪模型": "O modelo atual está ausente ou não está pronto. Selecione um modelo pronto.",
   },
   "ru": {
     "(进度流已超时)": "(Тайм-аут потока выполнения истек)",
@@ -4457,7 +4481,11 @@ export const LOCALIZED_TEXT = {
     "资源确认后会自动开始加载。": "После подтверждения ресурса он автоматически начнет загружаться.",
     "还没有可编辑的任务": "Пока нет задач для редактирования",
     "还没有成品": "Готового продукта еще нет",
-    "队列为空": "Очередь пуста"
+    "队列为空": "Очередь пуста",
+    "本地模型优先使用 CPU；通过下方模型库管理本机模型；仅已就绪的模型可以设为当前模型。": "Локальные модели используют CPU в первую очередь. Управляйте моделями этого устройства в библиотеке ниже; текущей можно выбрать только готовую модель.",
+    "由模型设置统一管理 Whisper": "Управляйте Whisper в настройках моделей",
+    "启用后新任务使用当前模型；关闭后可在任务页选择已就绪模型": "Если включено, новые задачи будут использовать текущую модель; если выключено, выберите готовую модель на странице задач",
+    "当前模型缺失或未就绪，请选择一个已就绪模型": "Текущая модель отсутствует или не готова. Выберите готовую модель.",
   }
 };
 export const LOCALIZED_TEMPLATES = {

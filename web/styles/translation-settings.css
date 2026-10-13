@@ -398,6 +398,7 @@
 .model-settings__rail { display:none; }
 .model-settings__main { width:100%; }
 .model-form { display:none; }
+#modelFormWhisper { display:flex; }
 .model-dialog__extra { display:grid; grid-column:1 / -1; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
 .model-dialog__extra .model-dialog__switch { grid-column:1 / -1; }
 .model-dialog__switch--extra { margin-top:0; }

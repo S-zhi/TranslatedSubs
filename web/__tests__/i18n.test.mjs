@@ -8,11 +8,28 @@ test("the requested interface locales have bundled translations", () => {
   assert.deepEqual(Object.keys(LOCALIZED_TEXT), ["en", "hi", "es", "ar", "fr", "pt", "ru"]);
   assert.deepEqual(Object.keys(LOCALIZED_TEMPLATES), ["en", "hi", "es", "ar", "fr", "pt", "ru"]);
   for (const locale of Object.keys(UI_LOCALES).filter((item) => item !== "zh-CN")) {
-    assert.equal(Object.keys(LOCALIZED_TEXT[locale]).length, 635, locale);
+    assert.deepEqual(Object.keys(LOCALIZED_TEXT[locale]).sort(), Object.keys(LOCALIZED_TEXT.en).sort(), locale);
     assert.notEqual(translate("开始处理", locale), "开始处理", locale);
     assert.notEqual(translate("目标语言", locale), "目标语言", locale);
     for (const [source, target] of Object.entries(LOCALIZED_TEMPLATES[locale])) {
       assert.deepEqual(source.match(/⟦\d+⟧/g)?.sort(), target.match(/⟦\d+⟧/g)?.sort(), locale);
+    }
+  }
+});
+
+test("model guidance has complete translations in every supported locale", () => {
+  const modelGuidance = [
+    "本地模型优先使用 CPU；通过下方模型库管理本机模型；仅已就绪的模型可以设为当前模型。",
+    "由模型设置统一管理 Whisper",
+    "启用后新任务使用当前模型；关闭后可在任务页选择已就绪模型",
+    "当前模型缺失或未就绪，请选择一个已就绪模型",
+  ];
+  for (const locale of Object.keys(UI_LOCALES).filter((item) => item !== "zh-CN")) {
+    for (const source of modelGuidance) {
+      const target = LOCALIZED_TEXT[locale][source];
+      assert.ok(target?.trim(), `${locale}: ${source}`);
+      assert.notEqual(target, source, `${locale}: ${source}`);
+      assert.equal(translate(source, locale), target, `${locale}: ${source}`);
     }
   }
 });

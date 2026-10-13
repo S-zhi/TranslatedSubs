@@ -5,6 +5,7 @@ import { createTask } from "./store.js";
 import { toast } from "./toast.js";
 import { Api } from "./api.js";
 import { LANG_LABEL } from "./constants.js";
+import { resolveTaskWhisperState } from "./task-whisper.js";
 
 const CFG = window.APP_CONFIG;
 const FALLBACK_LANGUAGES = [
@@ -15,7 +16,6 @@ const UNSUPPORTED_LANGUAGES = new Set(["bn", "ur"]);
 const FALLBACK_TARGET_LANGUAGES = Object.keys(LANG_LABEL).filter(
   (k) => k !== "auto" && k !== "zh" && !UNSUPPORTED_LANGUAGES.has(k)
 );
-const FALLBACK_MODELS = ["local:tiny", "local:base", "local:small", "local:medium", "local:large-v3", "local:large-v3-turbo"];
 const DEFAULT_SOURCE_LANGUAGE = "en";
 const URL_RE = /^https?:\/\/.+/i;
 const VIDEO_EXT_RE = /\.(mp4|mov|mkv|webm|avi|m4v|flv|ts|mpeg|mpg|wmv)$/i;
@@ -35,6 +35,13 @@ const LOCAL_ENGINE_FALLBACK = {
   hasApiKey: false,
 };
 let engineLanguageController = null;
+let taskWhisperState = null;
+let whisperRefreshSeq = 0;
+let lastWhisperSelection = "";
+let whisperRefreshPromise = null;
+let whisperRefreshDirty = true;
+let whisperRefreshScheduled = false;
+let taskSubmitSync = () => {};
 
 export function localTranslationLanguagePair() {
   return { sourceLang: "en", targetLang: "zh-CN" };
@@ -247,48 +254,106 @@ function modelLabel(model) {
   return `${backend === "local" ? "本地" : backend} · ${label}`;
 }
 
-function renderModelWeights(models, localStates = []) {
-  // 渲染 Whisper 模型权重下拉框。
+function renderModelWeights(state) {
+  // 任务页只显示库存中的 READY 模型；托管配置始终服从运行时有效配置。
   const sel = $("#model");
-  const current = sel.value;
+  if (!sel) return;
+  const current = sel.value || lastWhisperSelection;
   sel.innerHTML = "";
-  const states = new Map(localStates.map((item) => [item.name, item]));
-  models.forEach((model) => {
-    const item = option(model, modelLabel(model));
-    if (String(model).startsWith("local:")) {
-      const state = states.get(String(model).slice(6));
-      if (state && state.status !== "READY") {
-        item.disabled = true;
-        item.textContent += ` · ${state.status === "DOWNLOADING" ? "下载中" : "未下载"}`;
+  (state?.options || []).forEach((model) => sel.append(option(model.value, model.label || modelLabel(model.value))));
+  let renderedState = state;
+  const explicitlyMissing = !state?.locked && lastWhisperSelection === current && current
+    && !(state?.options || []).some((item) => item.value === current);
+  const missingModel = explicitlyMissing ? current : state?.model;
+  if (missingModel && ![...sel.options].some((item) => item.value === missingModel)) {
+    const missing = option(missingModel, `${modelLabel(missingModel)}（未就绪或不存在）`);
+    missing.disabled = true;
+    sel.append(missing);
+  }
+  const preferred = state?.locked ? state.model
+    : explicitlyMissing ? current
+      : ([...sel.options].some((item) => item.value === current) ? current : (state?.model || ""));
+  sel.value = preferred;
+  if (explicitlyMissing) renderedState = { ...state, ok: false, message: "所选 Whisper 模型已不可用，请在模型设置中修复。" };
+  else if (preferred && !state?.locked) lastWhisperSelection = preferred;
+  sel.disabled = !renderedState?.ok || renderedState?.locked;
+  const hint = $("#whisperModelHint");
+  if (hint) {
+    hint.textContent = renderedState?.message || "";
+    hint.classList.toggle("is-error", !renderedState?.ok);
+  }
+  taskWhisperState = renderedState;
+  taskSubmitSync();
+}
+
+function taskViewIsVisible() {
+  return !document.body?.dataset?.route || document.body.dataset.route === "tasks";
+}
+
+function refreshTaskWhisperState({ force = false } = {}) {
+  if (whisperRefreshPromise) {
+    if (force) return whisperRefreshPromise.then(() => refreshTaskWhisperState({ force: true }));
+    whisperRefreshDirty = true;
+    return whisperRefreshPromise;
+  }
+  whisperRefreshDirty = true;
+  if (!force && !taskViewIsVisible()) {
+    whisperRefreshSeq += 1;
+    return Promise.resolve(taskWhisperState);
+  }
+  const run = async () => {
+    let result = taskWhisperState;
+    while (whisperRefreshDirty && (force || taskViewIsVisible())) {
+      force = false;
+      whisperRefreshDirty = false;
+      const sequence = ++whisperRefreshSeq;
+      try {
+        const [items, settings] = await Promise.all([Api.listLocalModels(), Api.getModelSettings()]);
+        let readiness = null;
+        if (typeof settings?.whisper?.runtimeManaged !== "boolean") {
+          readiness = await Api.getRuntimeReadiness();
+        }
+        if (sequence !== whisperRefreshSeq) continue;
+        result = resolveTaskWhisperState({ items, settings, readiness });
+      } catch (error) {
+        if (sequence !== whisperRefreshSeq) continue;
+        result = { ok: false, options: [], message: error.message || "读取 Whisper 模型状态失败，请检查服务连接。" };
       }
+      if (sequence === whisperRefreshSeq) renderModelWeights(result);
     }
-    sel.append(item);
+    return result;
+  };
+  whisperRefreshPromise = run().finally(() => {
+    whisperRefreshPromise = null;
+    if (whisperRefreshDirty && taskViewIsVisible()) queueTaskWhisperRefresh();
   });
-  const normalizedCurrent = String(current).includes(":") ? current : `local:${current}`;
-  sel.value = [...sel.options].some((item) => item.value === normalizedCurrent) ? normalizedCurrent : (sel.options[0]?.value || "");
+  return whisperRefreshPromise;
+}
+
+function queueTaskWhisperRefresh() {
+  whisperRefreshDirty = true;
+  whisperRefreshSeq += 1;
+  if (!taskViewIsVisible() || whisperRefreshScheduled) return;
+  whisperRefreshScheduled = true;
+  queueMicrotask(() => {
+    whisperRefreshScheduled = false;
+    refreshTaskWhisperState();
+  });
 }
 
 async function initSrtOptions() {
-  // 从后端加载源语言、目标语言和模型权重选项，失败时使用本地兜底。
+  // 语言选项可以本地回退；模型状态必须来自实时库存和有效配置。
   renderSourceLanguages(FALLBACK_LANGUAGES);
   renderTargetLanguages(CFG.TARGET_LANGUAGES || FALLBACK_TARGET_LANGUAGES);
-  renderModelWeights(FALLBACK_MODELS);
-
-  try {
-    const [languages, targetLanguages, models, localStates] = await Promise.all([
-      Api.listVideoLanguages(),
-      Api.listTargetLanguages(),
-      Api.listModelWeights(),
-      Api.listLocalModels(),
-    ]);
-    renderSourceLanguages(languages);
-    renderTargetLanguages(targetLanguages);
-    const localOptions = localStates.filter((item) => item.status === "READY").map((item) => `local:${item.name}`);
-    renderModelWeights([...models.filter((model) => String(model).startsWith("local:")), ...localOptions], localStates);
-    engineLanguageController?.sync();
-  } catch (err) {
-    toast(err.message || "获取识别选项失败，已使用默认选项", "ph-warning-circle");
+  renderModelWeights({ ok: false, options: [], message: "正在读取 Whisper 模型状态…" });
+  const languageResults = await Promise.allSettled([Api.listVideoLanguages(), Api.listTargetLanguages()]);
+  if (languageResults[0].status === "fulfilled") renderSourceLanguages(languageResults[0].value);
+  if (languageResults[1].status === "fulfilled") renderTargetLanguages(languageResults[1].value);
+  if (languageResults.some((result) => result.status === "rejected")) {
+    toast("部分语言选项读取失败，已保留语言默认值", "ph-warning-circle");
   }
+  await refreshTaskWhisperState();
+  engineLanguageController?.sync();
 }
 
 export function initConsole() {
@@ -302,8 +367,13 @@ export function initConsole() {
   engineLanguageController.setEngines([LOCAL_ENGINE_FALLBACK]);
   document.addEventListener("translation-engines-change", () => loadEngines());
   document.addEventListener("viewchange", (event) => {
-    if (event.detail?.view === "tasks") loadEngines();
+    if (event.detail?.view === "tasks") {
+      loadEngines();
+      refreshTaskWhisperState({ force: true });
+    }
   });
+  document.addEventListener("whisper-models-change", queueTaskWhisperRefresh);
+  document.addEventListener("model-settings-change", queueTaskWhisperRefresh);
   initSrtOptions();
 
   const form = $("#taskForm");
@@ -321,11 +391,15 @@ export function initConsole() {
   const probeState = { status: "idle", url: "", result: null };
 
   function syncSubmitDisabled() {
-    // 根据提交状态和探针状态同步提交按钮可用性。
+    // 有字幕时必须确认最新 Whisper 模型状态后才允许提交。
+    const needsSubtitle = form.elements.needSubtitle.value === "on";
     submitBtn.disabled = submitting
       || probeState.status === "checking"
-      || probeState.status === "failed";
+      || probeState.status === "failed"
+      || (needsSubtitle && !taskWhisperState?.ok);
   }
+  taskSubmitSync = syncSubmitDisabled;
+  syncSubmitDisabled();
 
   function clearProbeTimer() {
     // 清理尚未触发的自动探测定时器。
@@ -520,7 +594,9 @@ export function initConsole() {
       if (p.id === "qualityParam") return; // 下载画质始终保持可用
       p.classList.toggle("is-disabled", !need);
       p.querySelectorAll("select, input").forEach((c) => {
-        c.disabled = !need || (engineLanguageController?.isLocked() && ["sourceLang", "targetLang"].includes(c.id));
+        c.disabled = !need
+          || (c.id === "model" && (!taskWhisperState?.ok || taskWhisperState?.locked))
+          || (engineLanguageController?.isLocked() && ["sourceLang", "targetLang"].includes(c.id));
       });
     });
   }
@@ -545,6 +621,10 @@ export function initConsole() {
     syncTtsHint();
   });
   syncSubtitleParams();
+  $("#model").addEventListener("change", () => {
+    lastWhisperSelection = $("#model").value;
+    syncSubmitDisabled();
+  });
   loadEngines();
 
   $("#engine").addEventListener("change", () => {
@@ -556,6 +636,19 @@ export function initConsole() {
     const videoFile = currentVideoFile();
     const url = urlInput.value.trim();
     const selectedEngine = engineLanguageController.selectedEngine();
+
+    if (form.elements.needSubtitle.value === "on") {
+      const whisperState = await refreshTaskWhisperState({ force: true });
+      if (!whisperState?.ok) {
+        toast(whisperState?.message || "无法确认 Whisper 模型状态，请稍后重试。", "ph-warning-circle");
+        return;
+      }
+      const selectedModel = $("#model").value;
+      if (!whisperState.options.some((item) => item.value === selectedModel)) {
+        toast("所选 Whisper 模型已不可用，请在模型设置中修复。", "ph-warning-circle");
+        return;
+      }
+    }
 
     if (requiresReadyLocalTranslation(selectedEngine, form.elements.needSubtitle.value === "on")) {
       toast("本地模型尚未就绪，请先下载并转换模型", "ph-warning-circle");

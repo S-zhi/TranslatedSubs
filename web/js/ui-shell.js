@@ -1,12 +1,24 @@
 /* 外壳：侧边导航 / 视图切换 / 筛选，全部由 store 状态驱动。 */
 
 import { $, $$ } from "./utils.js";
-import { state, subscribe, setView, setFilter, setSettingsTab } from "./store.js";
+import { state, subscribe, setView, setFilter, setSettingsTab, setModelKind } from "./store.js";
 
 export function initShell() {
+  $("#whisperImportShortcut")?.addEventListener("click", () => {
+    const target = $("#localModelLabel") || $("#localModelFiles");
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+    target.focus({ preventScroll: true });
+  });
+
   $("#nav").addEventListener("click", (e) => {
     const item = e.target.closest(".nav__item");
     if (!item) return;
+    if (item.dataset.settingsTab === "models") {
+      setModelKind("whisper");
+      setView("model-settings");
+      return;
+    }
     if (item.dataset.settingsTab) setSettingsTab(item.dataset.settingsTab);
     setView(item.dataset.view);
   });

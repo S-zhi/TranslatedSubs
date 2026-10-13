@@ -8,6 +8,42 @@ let selectedFiles = [];
 let modelNameTouched = false;
 let lastSuggestedName = "";
 let isImporting = false;
+let refreshInFlight = null;
+let inventoryNames = [];
+let currentWhisperModel = "";
+let refreshGeneration = 0;
+let whisperPageActive = false;
+let inventoryItems = [];
+let currentWhisperSettings = null;
+let forceRefreshQueued = false;
+let maxActiveRefreshes = 0;
+
+function actionFeedback(message, error = false) {
+  const node = $("#localModelActionFeedback");
+  if (node) {
+    node.hidden = !message;
+    node.textContent = message;
+    node.setAttribute("role", error ? "alert" : "status");
+    return;
+  }
+  if (message) toast(message, error ? "ph-warning-circle" : "ph-check-circle");
+}
+
+function syncPollTimer(active) {
+  if (active && !pollTimer) pollTimer = setInterval(() => {
+    if (document.visibilityState === "visible" && whisperPageActive) void refresh();
+  }, 2500);
+  else if (!active && pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+function emitInventory(items) {
+  inventoryItems = items;
+  inventoryNames = items.map((item) => item.name).filter(Boolean);
+  document.dispatchEvent(new CustomEvent("whisper-models-change", { detail: { items, whisper: currentWhisperSettings } }));
+}
 
 function formatBytes(value) {
   const bytes = Number(value);
@@ -33,7 +69,8 @@ function render(items) {
     const statusLabel = installed ? "已就绪" : busy ? "下载中" : error ? "下载失败" : "未安装";
     const statusClass = installed ? "ready" : busy ? "busy" : error ? "error" : "idle";
     const size = installed && item.installedBytes ? formatBytes(item.installedBytes) : item.size || "大小未知";
-    return `<article class="local-model-card${busy ? " is-downloading" : ""}" data-model-name="${name}" aria-label="${label}">
+    const current = currentWhisperModel.replace(/^local:/, "") === String(item.name);
+    return `<article class="local-model-card${busy ? " is-downloading" : ""}${current ? " is-current" : ""}" data-model-name="${name}" aria-label="${label}">
       <div class="local-model-card__top">
         <div class="local-model-card__identity"><span class="local-model-card__icon"><i class="ph ph-cpu" aria-hidden="true"></i></span><div><h3>${label}</h3><span class="local-model-card__name">${name}</span></div></div>
         <span class="local-model-card__status local-model-card__status--${statusClass}">${statusLabel}</span>
@@ -42,8 +79,9 @@ function render(items) {
       ${busy ? `<progress class="local-model-card__progress" aria-label="${label} 下载中"></progress>` : ""}
       ${error ? `<p class="local-model-card__error" title="${escapeHtml(item.error || "")}">${escapeHtml(item.error || "下载失败，请重试")}</p>` : ""}
       <div class="local-model-card__foot">
-        <span class="local-model-card__phase">${busy ? item.phase === "checking" ? "正在验证模型" : "正在获取模型文件" : installed ? "可在任务中使用" : "下载后可在任务中使用"}</span>
+        <span class="local-model-card__phase">${current ? "当前使用" : busy ? item.phase === "checking" ? "正在验证模型" : "正在获取模型文件" : installed ? "可在任务中使用" : "下载后可在任务中使用"}</span>
         <div class="local-model-actions">
+          ${installed ? `<button class="btn btn--${current ? "ghost" : "primary"} btn--sm" type="button" data-model-current="${name}"${current ? " disabled aria-current=\"true\"" : ""}>${current ? "当前模型" : "设为当前"}</button>` : ""}
           ${installed && item.format === "huggingface" ? `<button class="btn btn--ghost btn--sm" type="button" data-model-check="${name}" title="检查模型" aria-label="检查 ${label}"><i class="ph ph-shield-check" aria-hidden="true"></i></button>` : ""}
           ${installed ? `<button class="btn btn--ghost btn--sm local-model-card__delete" type="button" data-model-delete="${name}" title="删除模型" aria-label="删除 ${label}"><i class="ph ph-trash" aria-hidden="true"></i><span>删除</span></button>` : item.source === "official" ? `<button class="btn btn--primary btn--sm" type="button" data-model-download="${name}"${busy ? " disabled" : ""}><i class="ph ph-download-simple" aria-hidden="true"></i><span>${busy ? "下载中" : error ? "重试" : "下载"}</span></button>` : ""}
         </div>
@@ -63,11 +101,17 @@ function render(items) {
     button.disabled = true;
     try {
       await Api.downloadLocalModel(button.dataset.modelDownload);
-      await refresh();
     } catch (error) {
       button.disabled = false;
+      actionFeedback(error.message || "下载官方模型失败", true);
       toast(error.message || "下载官方模型失败", "ph-warning-circle");
+    } finally {
+      await refresh({ force: true });
     }
+  }));
+
+  actionsRoot.querySelectorAll("[data-model-current]").forEach((button) => button.addEventListener("click", () => {
+    document.dispatchEvent(new CustomEvent("whisper-model-select", { detail: { name: button.dataset.modelCurrent } }));
   }));
 
   actionsRoot.querySelectorAll("[data-model-check]").forEach((button) => button.addEventListener("click", async () => {
@@ -76,53 +120,69 @@ function render(items) {
       await Api.checkLocalModel(button.dataset.modelCheck);
       toast("模型检查通过", "ph-shield-check");
     } catch (error) {
+      actionFeedback(error.message || "模型检查失败", true);
       toast(error.message || "模型检查失败", "ph-warning-circle");
     } finally {
       button.disabled = false;
-      await refresh();
+      await refresh({ force: true });
     }
   }));
 
   actionsRoot.querySelectorAll("[data-model-delete]").forEach((button) => button.addEventListener("click", async () => {
     const name = button.dataset.modelDelete;
+    if (currentWhisperModel && currentWhisperModel.replace(/^local:/, "") === name) {
+      actionFeedback("当前模型正在使用，请先切换当前模型后再删除。", true);
+      return;
+    }
     if (!window.confirm(`删除 ${name} 并释放本地空间？`)) return;
     button.disabled = true;
     try {
       await Api.deleteLocalModel(name);
-      [...($("#model")?.options || [])].find((option) => option.value === `local:${name}`)?.remove();
       toast("模型已删除", "ph-trash");
-      await refresh();
     } catch (error) {
       button.disabled = false;
+      actionFeedback(error.message || "删除本地模型失败", true);
       toast(error.message || "删除本地模型失败", "ph-warning-circle");
+    } finally {
+      await refresh({ force: true });
     }
   }));
 }
 
-async function refresh() {
-  try {
-    const items = await Api.listLocalModels();
-    render(items);
-    const select = $("#model");
-    if (select) {
-      const ready = new Set(items.filter((item) => item.status === "READY").map((item) => `local:${item.name}`));
-      [...select.options].filter((option) => option.value.startsWith("local:") && !ready.has(option.value)).forEach((option) => option.remove());
-      for (const item of items.filter((model) => model.status === "READY")) {
-        if (![...select.options].some((option) => option.value === `local:${item.name}`)) {
-          select.add(new Option(`本地 · ${item.label || item.name}`, `local:${item.name}`));
-        }
-      }
-    }
-  } catch (error) {
-    toast(error.message || "获取本地模型失败", "ph-warning-circle");
+async function refresh({ force = false } = {}) {
+  if (refreshInFlight) {
+    if (force) forceRefreshQueued = true;
+    return refreshInFlight;
   }
+  refreshInFlight = (async () => {
+    do {
+      forceRefreshQueued = false;
+      const generation = refreshGeneration;
+      try {
+        maxActiveRefreshes += 1;
+        if (maxActiveRefreshes > 1) throw new Error("检测到重叠的本地模型刷新请求");
+        const [items, settings] = await Promise.all([Api.listLocalModels(), Api.getModelSettings()]);
+        if (generation !== refreshGeneration || !whisperPageActive || document.visibilityState !== "visible") continue;
+        currentWhisperSettings = settings?.whisper || null;
+        currentWhisperModel = currentWhisperSettings?.model || "";
+        render(items);
+        emitInventory(items);
+        document.dispatchEvent(new CustomEvent("model-settings-change", { detail: { settings: { whisper: currentWhisperSettings }, source: "refresh" } }));
+      } catch (error) {
+        toast(error.message || "获取本地模型或设置失败", "ph-warning-circle");
+      } finally {
+        maxActiveRefreshes -= 1;
+      }
+    } while (forceRefreshQueued);
+  })().finally(() => {
+    refreshInFlight = null;
+    if (forceRefreshQueued) void refresh({ force: true });
+  });
+  return refreshInFlight;
 }
 
 function existingModelNames() {
-  const names = [...($("#model")?.options || [])]
-    .map((option) => option.value.startsWith("local:") ? option.value.slice(6) : "")
-    .filter(Boolean);
-  return names;
+  return [...inventoryNames];
 }
 
 function setFeedback(message, state = "info", icon = "ph-info") {
@@ -309,35 +369,62 @@ export function initLocalModels() {
     setFeedback("正在上传并验证模型，请稍候…", "busy", "ph-spinner");
     try {
       const item = await Api.importLocalModel(name, label, result.analysis.files);
-      const select = $("#model");
-      if (select && ![...select.options].some((option) => option.value === `local:${item.name}`)) {
-        select.add(new Option(`本地 · ${item.label || item.name}`, `local:${item.name}`));
-      }
       form.reset();
       selectedFiles = [];
       modelNameTouched = false;
       lastSuggestedName = "";
       setFeedback(`“${item.label || label}”已导入，可在任务创建中选择。`, "success", "ph-check-circle");
       toast("模型已导入并通过检查", "ph-shield-check");
-      await refresh();
     } catch (error) {
       setFeedback(error.message || "导入本地模型失败，请检查文件后重试。", "error", "ph-warning-circle");
     } finally {
+      await refresh({ force: true });
       isImporting = false;
       form.removeAttribute("aria-busy");
       updateImportPreview();
     }
   });
   document.addEventListener("viewchange", (event) => {
-    const visible = event.detail?.view === "other-settings" && event.detail?.settingsTab === "models";
+    const visible = event.detail?.view === "model-settings"
+      && !$("#model-panel-whisper")?.hidden
+      && document.visibilityState === "visible";
+    whisperPageActive = visible;
+    refreshGeneration += 1;
     if (visible) {
       void refresh();
-      if (!pollTimer) pollTimer = setInterval(() => void refresh(), 2500);
-    } else if (pollTimer) {
-      clearInterval(pollTimer);
-      pollTimer = null;
+      syncPollTimer(true);
+    } else syncPollTimer(false);
+  });
+  document.addEventListener("visibilitychange", () => {
+    const visible = document.visibilityState === "visible" && document.body.dataset.route === "model-settings" && !$("#model-panel-whisper")?.hidden;
+    whisperPageActive = visible;
+    refreshGeneration += 1;
+    if (visible) { void refresh(); syncPollTimer(true); }
+    else syncPollTimer(false);
+  });
+  document.addEventListener("modelkindchange", (event) => {
+    const visible = event.detail?.kind === "whisper" && document.body.dataset.route === "model-settings" && document.visibilityState === "visible";
+    whisperPageActive = visible;
+    refreshGeneration += 1;
+    if (visible) {
+      void refresh();
+      syncPollTimer(true);
+    } else syncPollTimer(false);
+  });
+  document.addEventListener("model-settings-change", (event) => {
+    currentWhisperSettings = event.detail?.settings?.whisper || null;
+    currentWhisperModel = currentWhisperSettings?.model || "";
+    if (inventoryItems.length) render(inventoryItems);
+    if (event.detail?.source === "mutation") {
+      refreshGeneration += 1;
+      void refresh({ force: true });
     }
   });
+  if (document.body.dataset.route === "model-settings" && !$("#model-panel-whisper")?.hidden && document.visibilityState === "visible") {
+    whisperPageActive = true;
+    void refresh();
+    syncPollTimer(true);
+  }
 }
 
 export { render, refresh, validateImportForm };
