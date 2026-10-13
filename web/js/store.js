@@ -8,6 +8,7 @@ export const state = {
   tasks: [],
   filter: "all",       // all | active | done | failed
   view: "tasks",       // tasks | preview | editor | storage | model-settings | other-settings
+  modelKind: "llm",
   settingsTab: "engines", // engines | audio | probe | drive
   previewId: null,
   loading: true,
@@ -42,7 +43,24 @@ export function setView(v, options = {}) {
   state.view = v;
   emit({ type: "view", history: options.history !== false });
 }
+export function setModelKind(kind, options = {}) {
+  if (!["llm", "whisper", "tts"].includes(kind) || state.modelKind === kind) return;
+  state.modelKind = kind;
+  emit({ type: "model-kind", modelKind: kind, history: options.history !== false });
+}
 export function setSettingsTab(tab) {
+  // Legacy model navigation now lives in the dedicated model-settings view.
+  if (tab === "models") {
+    state.settingsTab = "models";
+    const changedKind = state.modelKind !== "whisper";
+    state.modelKind = "whisper";
+    state.view = "model-settings";
+    if (changedKind && typeof document !== "undefined") {
+      document.dispatchEvent(new CustomEvent("modelkindchange", { detail: { kind: "whisper" } }));
+    }
+    emit({ type: "legacy-model-navigation", settingsTab: "models", modelKind: "whisper", history: true });
+    return;
+  }
   if (!tab || state.settingsTab === tab) return;
   state.settingsTab = tab;
   emit({ type: "settings-tab", settingsTab: tab });

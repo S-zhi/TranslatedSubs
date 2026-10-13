@@ -2,6 +2,9 @@
 export const LOCALIZED_TEXT = {
   "en": {
     "Drive 同步失败": "Drive sync failed",
+    "本地模型优先使用 CPU；通过下方模型库管理本机模型；仅已就绪的模型可以设为当前模型。": "Local models prefer the CPU. Manage this device's models in the library below; only ready models can be selected as current.",
+    "由模型设置统一管理 Whisper": "Manage Whisper centrally in model settings",
+    "启用后新任务使用当前模型；关闭后可在任务页选择已就绪模型": "New tasks use the current model when enabled; when disabled, choose a ready model on the task page",
     "Drive 同步已取消": "Drive sync canceled",
     "Drive 文件分页": "Drive file paging",
     "Drive 文件夹路径": "Drive folder path",
@@ -93,6 +96,7 @@ export const LOCALIZED_TEXT = {
     "任务已加入队列": "Task has been queued",
     "任务已完成": "Task completed",
     "任务已开始处理": "Task has started processing",
+    "当前模型缺失或未就绪，请选择一个已就绪模型": "The current model is missing or not ready. Select a model that is ready.",
     "任务重新开始": "Mission restarts",
     "传输中": "Transmitting",
     "传输队列": "transmission queue",
