@@ -38,7 +38,7 @@ tts = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["src*"]
+include = ["src*", "desktop*"]
 
 [dependency-groups]
 dev = [

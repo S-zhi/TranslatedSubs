@@ -14,6 +14,9 @@ app.db-shm
 app.db-wal
 .ci
 .worktrees
+/build/
+/dist/
+/.desktop-build-libs/
 
 /README.yt-dlp.zh-CN.md
 /skill-todo.md
