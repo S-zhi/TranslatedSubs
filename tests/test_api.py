@@ -650,6 +650,157 @@ def test_delete_local_model_is_blocked_while_an_active_task_uses_it(client, monk
     assert manager.deleted == ["small"]
 
 
+def test_delete_current_whisper_model_and_snapshot_model_protection(client, monkeypatch):
+    import dataclasses
+    import json
+    from src.config import settings as app_settings
+    from src.store.model_settings_store import ModelSettingsStore
+
+    monkeypatch.setattr("src.config.settings", dataclasses.replace(app_settings, db_path=client._store.db_path))
+    settings_store = ModelSettingsStore(client._store.db_path)
+    settings_store.update({"whisper": {
+        "enabled": True, "provider": "local", "model": "local:current",
+        "models": [{"id": "current", "provider": "local", "model": "local:current",
+                    "enabled": True, "isCurrent": True}],
+    }})
+
+    class ModelManagerStub:
+        deleted = []
+
+        def delete(self, name):
+            self.deleted.append(name)
+            return {"name": name, "status": "NOT_INSTALLED"}
+
+    manager = ModelManagerStub()
+    monkeypatch.setattr(srt_routes, "model_manager", manager)
+    current = client.delete("/api/srt/local-models/current")
+    assert current.status_code == 409
+    assert current.json()["detail"]["code"] == "MODEL_CURRENT"
+
+    task_id = client.post("/api/tasks", json=_payload(model="local:other")).json()["id"]
+    client._store.update(task_id, runtime_config_json=json.dumps({
+        "whisper": {"model": "local:current"},
+    }))
+    settings_store.update({"whisper": {
+        "provider": "local", "model": "local:other",
+        "models": [{"id": "current", "provider": "local", "model": "local:other",
+                    "enabled": True, "isCurrent": True}],
+    }})
+    in_use = client.delete("/api/srt/local-models/current")
+    assert in_use.status_code == 409
+    assert in_use.json()["detail"]["code"] == "MODEL_IN_USE"
+    assert manager.deleted == []
+
+
+def test_model_asset_actions_do_not_change_settings_and_failed_check_keeps_reference(client, monkeypatch):
+    import dataclasses
+    from src.config import settings as app_settings
+    from src.handler import model_settings as settings_routes
+    from src.service.model_manager import ModelValidationError
+    from src.store.model_settings_store import ModelSettingsStore
+
+    configured = dataclasses.replace(app_settings, db_path=client._store.db_path)
+    monkeypatch.setattr("src.config.settings", configured)
+    monkeypatch.setattr(settings_routes, "settings", configured)
+    monkeypatch.setattr("src.handler.deps.settings", configured)
+    store = ModelSettingsStore(client._store.db_path)
+    before = store.get_all()
+
+    class InventoryManager:
+        inventory = [
+            {"name": "tiny", "status": "NOT_INSTALLED"},
+            {"name": "official-b", "status": "READY"},
+            {"name": "imported-c", "status": "READY"},
+        ]
+
+        def list_models(self):
+            return self.inventory
+
+        def is_ready(self, name):
+            return name in {"official-b", "imported-c"}
+
+        def download(self, name):
+            return {"name": name, "status": "READY"}
+
+        def import_files(self, name, _label, _files):
+            return {"name": name, "status": "READY"}
+
+        def check(self, _name):
+            self.inventory = [item for item in self.inventory if item["name"] != "imported-c"]
+            raise ModelValidationError("broken model")
+
+    manager = InventoryManager()
+    monkeypatch.setattr(srt_routes, "model_manager", manager)
+    monkeypatch.setattr(settings_routes, "model_manager", manager)
+    downloaded = client.post("/api/srt/local-models/tiny/download")
+    imported = client.post("/api/srt/local-models/import", data={
+        "name": "imported-c", "label": "Imported",
+    }, files=[("files", ("config.json", io.BytesIO(b"{}"), "application/json"))])
+    assert downloaded.status_code == imported.status_code == 200
+    assert store.get_all() == before
+
+    monkeypatch.setattr(manager, "is_ready", lambda name: name == "imported-c")
+    saved = client.put("/api/settings/models", json={"whisper": {
+        "enabled": True, "provider": "local", "model": "local:imported-c",
+        "models": [{"id": "imported-card", "provider": "local", "model": "local:imported-c",
+                    "enabled": True, "isCurrent": True}],
+    }})
+    assert saved.status_code == 200
+    failed_check = client.post("/api/srt/local-models/imported-c/check")
+    assert failed_check.status_code == 422
+    assert failed_check.json()["detail"]["cleaned"] is True
+    assert store.get("whisper")["model"] == "local:imported-c"
+    status = client.get("/api/settings/models").json()["whisper"]
+    assert status["model"] == "local:imported-c" and status["status"] == "MISSING"
+
+
+@pytest.mark.parametrize(
+    ("target", "snapshot", "status_code", "code"),
+    [
+        ("A", '{"whisper":{"provider":"local","model":"local:B"}}', 200, None),
+        ("B", '{"whisper":{"provider":"local","model":"local:B"}}', 409, "MODEL_IN_USE"),
+        ("A", None, 409, "MODEL_IN_USE"),
+        ("A", "{bad json", 409, "MODEL_IN_USE"),
+        ("A", "[]", 409, "MODEL_IN_USE"),
+        ("A", '{"whisper":{"model":17}}', 409, "MODEL_IN_USE"),
+        ("A", '{"whisper":{"model":" "}}', 409, "MODEL_IN_USE"),
+    ],
+)
+def test_delete_uses_valid_snapshot_then_falls_back_for_invalid_snapshot(
+    client, monkeypatch, target, snapshot, status_code, code,
+):
+    import dataclasses
+    from src.config import settings as app_settings
+    from src.store.model_settings_store import ModelSettingsStore
+
+    monkeypatch.setattr("src.config.settings", dataclasses.replace(app_settings, db_path=client._store.db_path))
+    settings_store = ModelSettingsStore(client._store.db_path)
+    settings_store.update({"whisper": {
+        "enabled": True, "provider": "local", "model": "local:C",
+        "models": [{"id": "current", "provider": "local", "model": "local:C",
+                    "enabled": True, "isCurrent": True}],
+    }})
+
+    class Manager:
+        deleted = []
+
+        def delete(self, name):
+            self.deleted.append(name)
+            return {"name": name, "status": "NOT_INSTALLED"}
+
+    manager = Manager()
+    monkeypatch.setattr(srt_routes, "model_manager", manager)
+    task_id = client.post("/api/tasks", json=_payload(model="local:A")).json()["id"]
+    client._store.update(task_id, model="local:A", runtime_config_json=snapshot)
+    response = client.delete(f"/api/srt/local-models/{target}")
+    assert response.status_code == status_code
+    if code:
+        assert response.json()["detail"]["code"] == code
+        assert manager.deleted == []
+    else:
+        assert manager.deleted == [target]
+
+
 def test_import_and_check_local_model_api(client, monkeypatch, tmp_path):
     from src.service import model_manager as models
 

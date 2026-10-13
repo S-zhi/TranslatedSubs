@@ -84,11 +84,16 @@ class TaskRecord:
     tts_status: str = "DISABLED"
     tts_error: Optional[str] = None
     output_dubbed_video: Optional[str] = None
+    plugin_plan_json: Optional[str] = None
     # Non-sensitive runtime routing snapshot captured at task creation.
     runtime_config_json: Optional[str] = None
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        # The plugin plan is internal execution data, never part of API payloads.
+        record = asdict(self)
+        record.pop("plugin_plan_json", None)
+        record.pop("runtime_config_json", None)
+        return record
 
 
 _COLUMNS = list(TaskRecord.__dataclass_fields__.keys())
@@ -164,7 +169,8 @@ class TaskStore:
                     downgrade_reason TEXT,
                     downgrade_errno INTEGER,
                     downgraded_at INTEGER,
-                    is_cancelling INTEGER NOT NULL DEFAULT 0
+                    is_cancelling INTEGER NOT NULL DEFAULT 0,
+                    plugin_plan_json TEXT
                 )
                 """
             )
@@ -210,6 +216,8 @@ class TaskStore:
                     conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {declaration}")
             if "output_dubbed_video" not in cols:
                 conn.execute("ALTER TABLE tasks ADD COLUMN output_dubbed_video TEXT")
+            if "plugin_plan_json" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN plugin_plan_json TEXT")
             if "runtime_config_json" not in cols:
                 conn.execute("ALTER TABLE tasks ADD COLUMN runtime_config_json TEXT")
             # Older versions persisted absolute output paths. Keep only the
@@ -253,6 +261,7 @@ class TaskStore:
         tts_enabled: bool = False,
         tts_voice: str = "auto",
         original_voice_mode: str = "keep",
+        plugin_plan_json: Optional[str] = None,
         runtime_config_json: Optional[str] = None,
     ) -> TaskRecord:
         with self._connect() as conn:
@@ -273,6 +282,7 @@ class TaskStore:
                 tts_enabled=tts_enabled,
                 tts_voice=tts_voice,
                 original_voice_mode=original_voice_mode,
+                plugin_plan_json=plugin_plan_json,
                 runtime_config_json=runtime_config_json,
             )
 
@@ -321,6 +331,7 @@ class TaskStore:
             original_voice_mode=kwargs.get("original_voice_mode", "keep"),
             runtime_config_json=kwargs.get("runtime_config_json"),
             tts_status="PENDING" if kwargs.get("tts_enabled", False) else "DISABLED",
+            plugin_plan_json=kwargs.get("plugin_plan_json"),
             status="PENDING",
             progress=0,
             created_at=now,
@@ -394,6 +405,22 @@ class TaskStore:
         if after_id and not before_id:
             records.reverse()
         return records
+
+    def ensure_plugin_plan(self, task_id: str, plugin_plan_json: str) -> Optional[TaskRecord]:
+        """Atomically preserve an existing plan or initialize a legacy NULL plan."""
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if row is None:
+                return None
+            if row["plugin_plan_json"] is None:
+                conn.execute(
+                    "UPDATE tasks SET plugin_plan_json = ?, updated_at = ? "
+                    "WHERE id = ? AND plugin_plan_json IS NULL",
+                    (plugin_plan_json, _now_ms(), task_id),
+                )
+                row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        return _row_to_record(row) if row else None
 
     # ---------- 改 ----------
     def update(self, task_id: str, **fields) -> Optional[TaskRecord]:

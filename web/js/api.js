@@ -38,12 +38,13 @@ function probeRequestBody(url, options = {}) {
 
 // 为普通 REST 请求统一接入超时控制；SSE 订阅保留独立连接策略。
 async function request(base, path, options = {}) {
-  const timeoutMs = Number(CFG.API_TIMEOUT_MS) || 15000;
+  const { requestTimeoutMs, ...fetchOptions } = options;
+  const timeoutMs = Number(requestTimeoutMs || CFG.API_TIMEOUT_MS) || 15000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(`${base}${path}`, {
-      ...options,
+      ...fetchOptions,
       signal: controller.signal,
     });
   } catch (e) {
@@ -58,17 +59,24 @@ async function request(base, path, options = {}) {
 
 async function readError(res, fallback) {
   let detail = "";
+  let detailValue = null;
   try {
     const text = await res.text();
     try {
       const data = JSON.parse(text);
       if (data && data.detail) {
+        detailValue = data.detail;
         if (Array.isArray(data.detail)) {
           detail = data.detail.map((item) => `${item.loc?.join(".")}: ${item.msg}`).join("; ");
         } else if (typeof data.detail === "object") {
           const message = data.detail.message || data.detail.code || "请求失败";
           const suggestion = data.detail.suggestion;
-          detail = suggestion ? `${message}；${suggestion}` : String(message);
+          const knownSuggestion = {
+            MODEL_NOT_READY: "请先下载或导入并检查模型，再到模型设置中启用。",
+            MODEL_CURRENT: "请先在模型设置中切换当前模型。",
+            MODEL_IN_USE: "请等待使用该模型的任务结束后重试。",
+          }[data.detail.code];
+          detail = [message, suggestion || knownSuggestion].filter(Boolean).join("；");
         } else {
           detail = String(data.detail);
         }
@@ -84,7 +92,94 @@ async function readError(res, fallback) {
   if (!detail || !detail.trim()) {
     detail = String(res.status);
   }
-  return `${fallback}：${detail}`;
+  const error = new Error(`${fallback}：${detail}`);
+  error.status = res.status;
+  error.detail = detailValue;
+  error.code = detailValue && typeof detailValue === "object" ? detailValue.code : undefined;
+  return error;
+}
+
+const MODEL_SETTING_FIELDS = {
+  llm: new Set(["enabled", "provider", "baseUrl", "model", "apiKey", "temperature", "maxTokens", "timeout", "concurrency", "voice", "models"]),
+  whisper: new Set(["enabled", "provider", "model", "language", "device", "threads", "wordTimestamps", "models"]),
+  tts: new Set(["enabled", "provider", "baseUrl", "model", "apiKey", "voice", "speed", "format", "models"]),
+};
+const MODEL_CARD_FIELDS = new Set(["id", "name", "enabled", "provider", "baseUrl", "model", "apiKey", "temperature", "maxTokens", "timeout", "concurrency", "language", "device", "threads", "wordTimestamps", "voice", "speed", "format", "isCurrent"]);
+const MOCK_WHISPER_ASSETS_KEY = "subtrans_mock_whisper_assets_v2";
+
+function modelApiError(code, message, status = 409) {
+  const error = new Error(message);
+  error.code = code;
+  error.status = status;
+  error.detail = { code, message };
+  return error;
+}
+
+const OFFICIAL_WHISPER_MODELS = [
+  ["tiny", "~75 MB"], ["tiny.en", "~75 MB"], ["base", "~145 MB"], ["base.en", "~145 MB"],
+  ["small", "~465 MB"], ["small.en", "~465 MB"], ["medium", "~1.5 GB"], ["medium.en", "~1.5 GB"],
+  ["large-v1", "~3 GB"], ["large-v2", "~3 GB"], ["large-v3", "~3 GB"], ["large-v3-turbo", "~1.6 GB"],
+];
+
+async function validateImportedWhisperFiles(files = []) {
+  const list = Array.from(files || []);
+  const names = new Set();
+  const allowed = /^(config\.json|generation_config\.json|preprocessor_config\.json|tokenizer_config\.json|tokenizer\.json|vocab\.json|merges\.txt|normalizer\.json|special_tokens_map\.json|added_tokens\.json|pytorch_model(?:-\d{5}-of-\d{5})?\.bin|model(?:-\d{5}-of-\d{5})?\.safetensors|pytorch_model\.bin\.index\.json|model\.safetensors\.index\.json)$/;
+  for (const file of list) {
+    const name = String(file?.name || "");
+    if (!name || name !== name.split(/[\\/]/).pop() || name.startsWith(".") || !allowed.test(name)) {
+      throw modelApiError("MODEL_INVALID", `不支持的模型文件: ${name || "(空文件名)"}`, 422);
+    }
+    if (names.has(name)) throw modelApiError("MODEL_INVALID", `模型文件重复: ${name}`, 422);
+    if (Number(file.size) === 0) throw modelApiError("MODEL_INVALID", `模型文件为空: ${name}`, 422);
+    names.add(name);
+  }
+  const weights = [...names].filter((name) => /^(pytorch_model(?:-\d{5}-of-\d{5})?\.bin|model(?:-\d{5}-of-\d{5})?\.safetensors)$/.test(name));
+  if (!names.has("config.json") || !names.has("preprocessor_config.json")
+    || !(names.has("tokenizer.json") || (names.has("vocab.json") && names.has("merges.txt")))
+    || !weights.length) {
+    throw modelApiError("MODEL_INVALID", "缺少有效的 config.json、preprocessor_config.json、Whisper tokenizer 文件或 .bin/.safetensors 权重", 422);
+  }
+  const suffixes = new Set(weights.map((name) => name.endsWith(".bin") ? "bin" : "safetensors"));
+  if (suffixes.size > 1) throw modelApiError("MODEL_INVALID", "不能混用 .bin 和 .safetensors 权重", 422);
+  const weightIndex = [...names].find((name) => /^(pytorch_model\.bin|model\.safetensors)\.index\.json$/.test(name));
+  const sharded = weights.length > 1 || weights.some((name) => name.includes("-of-"));
+  if (sharded && !weightIndex) throw modelApiError("MODEL_INVALID", "分片权重缺少索引文件", 422);
+  if (!sharded && weightIndex) throw modelApiError("MODEL_INVALID", "单文件权重不应带分片索引", 422);
+  const configFile = list.find((file) => file.name === "config.json");
+  if (typeof configFile?.text === "function") {
+    let config;
+    try { config = JSON.parse(await configFile.text()); } catch (_) { throw modelApiError("MODEL_INVALID", "缺少有效的 config.json", 422); }
+    if (config?.model_type !== "whisper") throw modelApiError("MODEL_INVALID", "只支持 Hugging Face Whisper 语音识别模型", 422);
+  }
+  if (weightIndex) {
+    const indexFile = list.find((file) => file.name === weightIndex);
+    if (typeof indexFile?.text === "function") {
+      let declared;
+      try { declared = new Set(Object.values(JSON.parse(await indexFile.text()).weight_map)); } catch (_) { throw modelApiError("MODEL_INVALID", "权重索引格式无效", 422); }
+      if (declared.size !== weights.length || weights.some((name) => !declared.has(name))) {
+        throw modelApiError("MODEL_INVALID", "权重分片与索引不一致", 422);
+      }
+    }
+  }
+  return [...names];
+}
+
+function filterModelSettingsPayload(payload = {}) {
+  const output = {};
+  for (const kind of Object.keys(MODEL_SETTING_FIELDS)) {
+    const config = payload?.[kind];
+    if (!config || typeof config !== "object" || Array.isArray(config)) continue;
+    const allowed = MODEL_SETTING_FIELDS[kind];
+    const clean = Object.fromEntries(Object.entries(config).filter(([key]) => allowed.has(key)));
+    if (Array.isArray(clean.models)) {
+      clean.models = clean.models.map((model) => Object.fromEntries(
+        Object.entries(model || {}).filter(([key]) => MODEL_CARD_FIELDS.has(key)),
+      ));
+    }
+    output[kind] = clean;
+  }
+  return output;
 }
 
 const RealApi = {
@@ -96,7 +191,7 @@ const RealApi = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error(await readError(res, "创建任务失败"));
+    if (!res.ok) throw await readError(res, "创建任务失败");
     return res.json();
   },
 
@@ -122,7 +217,7 @@ const RealApi = {
       method: "POST",
       body,
     });
-    if (!res.ok) throw new Error(await readError(res, "上传任务创建失败"));
+    if (!res.ok) throw await readError(res, "上传任务创建失败");
     return res.json();
   },
 
@@ -133,14 +228,14 @@ const RealApi = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(probeRequestBody(url, options)),
     });
-    if (!res.ok) throw new Error(await readError(res, "链接校验失败"));
+    if (!res.ok) throw await readError(res, "链接校验失败");
     return res.json();
   },
 
   // 获取 yt-dlp 运行时版本与提取器环境信息。
   async getYtDlpInfo() {
     const res = await request(this.base, "/api/tasks/probe/ytdlp-info");
-    if (!res.ok) throw new Error(await readError(res, "获取 yt-dlp 环境信息失败"));
+    if (!res.ok) throw await readError(res, "获取 yt-dlp 环境信息失败");
     return res.json();
   },
 
@@ -150,14 +245,14 @@ const RealApi = {
       this.base,
       `/api/tasks/probe/records?limit=${encodeURIComponent(limit)}`,
     );
-    if (!res.ok) throw new Error(await readError(res, "获取测试历史失败"));
+    if (!res.ok) throw await readError(res, "获取测试历史失败");
     return res.json();
   },
 
   // 获取固定十站点启动探测与开发者页重测的实时状态。
   async getProbeStartupStatus() {
     const res = await request(this.base, "/api/tasks/probe/startup-status");
-    if (!res.ok) throw new Error(await readError(res, "获取站点可用性状态失败"));
+    if (!res.ok) throw await readError(res, "获取站点可用性状态失败");
     return res.json();
   },
 
@@ -166,7 +261,7 @@ const RealApi = {
     const res = await request(this.base, "/api/tasks/probe/records", {
       method: "DELETE",
     });
-    if (!res.ok) throw new Error(await readError(res, "清空测试历史失败"));
+    if (!res.ok) throw await readError(res, "清空测试历史失败");
     return res.json();
   },
 
@@ -175,19 +270,19 @@ const RealApi = {
     const res = await request(this.base, `/api/tasks/probe/records/${encodeURIComponent(id)}`, {
       method: "DELETE",
     });
-    if (!res.ok) throw new Error(await readError(res, "删除测试记录失败"));
+    if (!res.ok) throw await readError(res, "删除测试记录失败");
   },
 
   async listTasks() {
     const res = await request(this.base, "/api/tasks");
-    if (!res.ok) throw new Error(await readError(res, "获取任务列表失败"));
+    if (!res.ok) throw await readError(res, "获取任务列表失败");
     return res.json();
   },
 
   // 获取源视频语言选项。
   async listVideoLanguages() {
     const res = await request(this.base, "/api/srt/languages");
-    if (!res.ok) throw new Error(await readError(res, "获取源语言失败"));
+    if (!res.ok) throw await readError(res, "获取源语言失败");
     return res.json();
   },
 
@@ -201,19 +296,19 @@ const RealApi = {
   // 获取 Whisper 模型权重选项。
   async listModelWeights() {
     const res = await request(this.base, "/api/srt/model-options");
-    if (!res.ok) throw new Error(await readError(res, "获取模型列表失败"));
+    if (!res.ok) throw await readError(res, "获取模型列表失败");
     return res.json();
   },
 
   async listLocalModels() {
     const res = await request(this.base, "/api/srt/local-models");
-    if (!res.ok) throw new Error(await readError(res, "获取本地模型失败"));
+    if (!res.ok) throw await readError(res, "获取本地模型失败");
     return res.json();
   },
 
   async downloadLocalModel(name) {
     const res = await request(this.base, `/api/srt/local-models/${encodeURIComponent(name)}/download`, { method: "POST" });
-    if (!res.ok) throw new Error(await readError(res, "下载官方模型失败"));
+    if (!res.ok) throw await readError(res, "下载官方模型失败");
     return res.json();
   },
 
@@ -222,32 +317,34 @@ const RealApi = {
     body.append("name", name);
     body.append("label", label);
     for (const file of files) body.append("files", file, file.name);
-    const res = await fetch(`${this.base}/api/srt/local-models/import`, { method: "POST", body });
-    if (!res.ok) throw new Error(await readError(res, "导入本地模型失败"));
+    const res = await request(this.base, "/api/srt/local-models/import", {
+      method: "POST", body, requestTimeoutMs: 10 * 60 * 1000,
+    });
+    if (!res.ok) throw await readError(res, "导入本地模型失败");
     return res.json();
   },
 
   async checkLocalModel(name) {
     const res = await request(this.base, `/api/srt/local-models/${encodeURIComponent(name)}/check`, { method: "POST" });
-    if (!res.ok) throw new Error(await readError(res, "检查本地模型失败"));
+    if (!res.ok) throw await readError(res, "检查本地模型失败");
     return res.json();
   },
 
   async deleteLocalModel(name) {
     const res = await request(this.base, `/api/srt/local-models/${encodeURIComponent(name)}`, { method: "DELETE" });
-    if (!res.ok) throw new Error(await readError(res, "删除本地模型失败"));
+    if (!res.ok) throw await readError(res, "删除本地模型失败");
     return res.json();
   },
 
   async listTranslationEngines() {
     const res = await request(this.base, "/api/settings/translation-engines");
-    if (!res.ok) throw new Error(await readError(res, "获取翻译引擎失败"));
+    if (!res.ok) throw await readError(res, "获取翻译引擎失败");
     return res.json();
   },
 
   async getAudioSettings() {
     const res = await request(this.base, "/api/settings/audio");
-    if (!res.ok) throw new Error(await readError(res, "读取音频设置失败"));
+    if (!res.ok) throw await readError(res, "读取音频设置失败");
     return res.json();
   },
 
@@ -255,7 +352,7 @@ const RealApi = {
     const res = await request(this.base, "/api/settings/audio", {
       method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error(await readError(res, "保存音频设置失败"));
+    if (!res.ok) throw await readError(res, "保存音频设置失败");
     return res.json();
   },
 
@@ -263,7 +360,7 @@ const RealApi = {
     const res = await request(this.base, "/api/settings/translation-engines", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error(await readError(res, "创建翻译引擎失败"));
+    if (!res.ok) throw await readError(res, "创建翻译引擎失败");
     return res.json();
   },
 
@@ -271,7 +368,7 @@ const RealApi = {
     const res = await request(this.base, `/api/settings/translation-engines/${encodeURIComponent(id)}`, {
       method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error(await readError(res, "保存翻译引擎失败"));
+    if (!res.ok) throw await readError(res, "保存翻译引擎失败");
     return res.json();
   },
 
@@ -279,7 +376,7 @@ const RealApi = {
     const res = await request(this.base, `/api/settings/translation-engines/${encodeURIComponent(id)}/validate`, {
       method: "POST",
     });
-    if (!res.ok) throw new Error(await readError(res, "检测翻译引擎失败"));
+    if (!res.ok) throw await readError(res, "检测翻译引擎失败");
     return res.json();
   },
 
@@ -287,19 +384,25 @@ const RealApi = {
     const res = await request(this.base, `/api/settings/translation-engines/${encodeURIComponent(id)}/download`, {
       method: "POST",
     });
-    if (!res.ok) throw new Error(await readError(res, "下载本地翻译模型失败"));
+    if (!res.ok) throw await readError(res, "下载本地翻译模型失败");
     return res.json();
   },
 
   async deleteTranslationEngine(id) {
     const res = await request(this.base, `/api/settings/translation-engines/${encodeURIComponent(id)}`, { method: "DELETE" });
-    if (!res.ok) throw new Error(await readError(res, "删除翻译引擎失败"));
+    if (!res.ok) throw await readError(res, "删除翻译引擎失败");
   },
 
   // 统一模型设置：后端返回的 API Key 应为脱敏值或仅 hasApiKey 标志。
   async getModelSettings() {
     const res = await request(this.base, "/api/settings/models");
-    if (!res.ok) throw new Error(await readError(res, "读取模型设置失败"));
+    if (!res.ok) throw await readError(res, "读取模型设置失败");
+    return res.json();
+  },
+
+  async getRuntimeReadiness() {
+    const res = await request(this.base, "/api/health/ready");
+    if (!res.ok) throw await readError(res, "读取运行时模型状态失败");
     return res.json();
   },
 
@@ -307,9 +410,9 @@ const RealApi = {
     const res = await request(this.base, "/api/settings/models", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(filterModelSettingsPayload(payload)),
     });
-    if (!res.ok) throw new Error(await readError(res, "保存模型设置失败"));
+    if (!res.ok) throw await readError(res, "保存模型设置失败");
     return res.json();
   },
 
@@ -319,7 +422,7 @@ const RealApi = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error(await readError(res, "新增模型失败"));
+    if (!res.ok) throw await readError(res, "新增模型失败");
     return res.json();
   },
 
@@ -329,43 +432,43 @@ const RealApi = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error(await readError(res, "模型连接检查失败"));
+    if (!res.ok) throw await readError(res, "模型连接检查失败");
     return res.json();
   },
 
   async deleteTask(id) {
     const res = await request(this.base, `/api/tasks/${id}`, { method: "DELETE" });
-    if (!res.ok) throw new Error(await readError(res, "删除失败"));
+    if (!res.ok) throw await readError(res, "删除失败");
   },
 
   async cancelTask(id) {
     const res = await request(this.base, `/api/tasks/${id}/cancel`, { method: "POST" });
-    if (!res.ok) throw new Error(await readError(res, "取消失败"));
+    if (!res.ok) throw await readError(res, "取消失败");
     return res.json();
   },
 
   async retryTask(id) {
     const res = await request(this.base, `/api/tasks/${id}/retry`, { method: "POST" });
-    if (!res.ok) throw new Error(await readError(res, "重试失败"));
+    if (!res.ok) throw await readError(res, "重试失败");
     return res.json();
   },
 
   // 请求后端打开任务所在的本地文件夹。
   async openFolder(id) {
     const res = await request(this.base, `/api/tasks/${id}/folder`, { method: "POST" });
-    if (!res.ok) throw new Error(await readError(res, "打开文件夹失败"));
+    if (!res.ok) throw await readError(res, "打开文件夹失败");
   },
 
   async folderCapability(id) {
     const res = await request(this.base, `/api/tasks/${encodeURIComponent(id)}/folder-capability`);
-    if (!res.ok) throw new Error(await readError(res, "查询文件夹能力失败"));
+    if (!res.ok) throw await readError(res, "查询文件夹能力失败");
     return res.json();
   },
 
   async listTaskFiles(id, path = "") {
     const query = path ? `?path=${encodeURIComponent(path)}` : "";
     const res = await request(this.base, `/api/tasks/${encodeURIComponent(id)}/files${query}`);
-    if (!res.ok) throw new Error(await readError(res, "读取任务文件失败"));
+    if (!res.ok) throw await readError(res, "读取任务文件失败");
     return res.json();
   },
 
@@ -380,7 +483,7 @@ const RealApi = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(artifactNames.length ? { artifactNames } : {}),
     });
-    if (!res.ok) throw new Error(await readError(res, "创建 Drive 上传批次失败"));
+    if (!res.ok) throw await readError(res, "创建 Drive 上传批次失败");
     return res.json();
   },
 
@@ -390,25 +493,25 @@ const RealApi = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
-    if (!res.ok) throw new Error(await readError(res, "创建 Drive 下载批次失败"));
+    if (!res.ok) throw await readError(res, "创建 Drive 下载批次失败");
     return res.json();
   },
 
   async getDriveBatch(batchId) {
     const res = await request(this.base, `/api/storage/drive/batches/${encodeURIComponent(batchId)}`);
-    if (!res.ok) throw new Error(await readError(res, "读取 Drive 批次失败"));
+    if (!res.ok) throw await readError(res, "读取 Drive 批次失败");
     return res.json();
   },
 
   async retryDriveBatch(batchId) {
     const res = await request(this.base, `/api/storage/drive/batches/${encodeURIComponent(batchId)}/retry`, { method: "POST" });
-    if (!res.ok) throw new Error(await readError(res, "重试 Drive 批次失败"));
+    if (!res.ok) throw await readError(res, "重试 Drive 批次失败");
     return res.json();
   },
 
   async cancelDriveBatch(batchId) {
     const res = await request(this.base, `/api/storage/drive/batches/${encodeURIComponent(batchId)}/cancel`, { method: "POST" });
-    if (!res.ok) throw new Error(await readError(res, "取消 Drive 批次失败"));
+    if (!res.ok) throw await readError(res, "取消 Drive 批次失败");
     return res.json();
   },
 
@@ -424,7 +527,7 @@ const RealApi = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload || {}),
     });
-    if (!res.ok) throw new Error(await readError(res, "预览清理失败"));
+    if (!res.ok) throw await readError(res, "预览清理失败");
     return res.json();
   },
 
@@ -434,13 +537,13 @@ const RealApi = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload || {}),
     });
-    if (!res.ok) throw new Error(await readError(res, "执行清理失败"));
+    if (!res.ok) throw await readError(res, "执行清理失败");
     return res.json();
   },
 
   async getRetention() {
     const res = await request(this.base, "/api/storage/retention");
-    if (!res.ok) throw new Error(await readError(res, "获取保留策略失败"));
+    if (!res.ok) throw await readError(res, "获取保留策略失败");
     return res.json();
   },
 
@@ -450,14 +553,14 @@ const RealApi = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ days }),
     });
-    if (!res.ok) throw new Error(await readError(res, "保存保留策略失败"));
+    if (!res.ok) throw await readError(res, "保存保留策略失败");
     return res.json();
   },
 
   // 拉取任务 current subtitles（original + translated），解析为前端可编辑结构
   async getSubtitles(id) {
     const res = await request(this.base, `/api/tasks/${id}/subtitles`);
-    if (!res.ok) throw new Error(await readError(res, "读取字幕失败"));
+    if (!res.ok) throw await readError(res, "读取字幕失败");
     return res.json();
   },
 
@@ -468,7 +571,7 @@ const RealApi = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error(await readError(res, "保存字幕失败"));
+    if (!res.ok) throw await readError(res, "保存字幕失败");
     return res.json();
   },
 
@@ -479,7 +582,7 @@ const RealApi = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error(await readError(res, "重新烧录失败"));
+    if (!res.ok) throw await readError(res, "重新烧录失败");
     return res.json();
   },
 
@@ -584,6 +687,102 @@ const MockApi = (() => {
   function _saveProbe(arr) {
     try { localStorage.setItem(PROBE_STORE_KEY, JSON.stringify(arr)); } catch (e) {}
   }
+
+  function _dispatch(name, detail) {
+    if (typeof document !== "undefined" && typeof CustomEvent !== "undefined") {
+      document.dispatchEvent(new CustomEvent(name, { detail }));
+    }
+  }
+
+  function _loadWhisperAssets() {
+    try {
+      const saved = localStorage.getItem(MOCK_WHISPER_ASSETS_KEY);
+      if (saved !== null) {
+        const items = JSON.parse(saved);
+        if (Array.isArray(items)) return items;
+      }
+    } catch (_) {}
+    const catalog = OFFICIAL_WHISPER_MODELS.map(([name, size]) => ({
+      id: `whisper-local-${name}`, name, label: `Whisper ${name}`, size,
+      status: name === "tiny" ? "READY" : "NOT_INSTALLED", format: "ctranslate2",
+      source: "official", phase: name === "tiny" ? "ready" : "idle", progress: name === "tiny" ? 100 : 0,
+    }));
+    // Upgrade the former array-only store while preserving every installed custom/official name.
+    try {
+      const legacyRaw = localStorage.getItem("subtrans_mock_local_models_v1");
+      const legacy = legacyRaw === null ? ["tiny"] : JSON.parse(legacyRaw);
+      if (Array.isArray(legacy)) {
+        for (const name of legacy) {
+          const item = catalog.find((asset) => asset.name === name);
+          if (item) Object.assign(item, { status: "READY", phase: "ready", progress: 100 });
+          else catalog.push({ id: `whisper-imported-${name}`, name, label: name, size: null, status: "READY", format: "huggingface", source: "imported", phase: "ready", progress: 100, files: [] });
+        }
+      }
+    } catch (_) {}
+    _saveWhisperAssets(catalog);
+    try { localStorage.removeItem("subtrans_mock_local_models_v1"); } catch (_) {}
+    return catalog;
+  }
+
+  function _saveWhisperAssets(items) {
+    try { localStorage.setItem(MOCK_WHISPER_ASSETS_KEY, JSON.stringify(items)); } catch (_) {}
+  }
+
+  function _whisperAssets() {
+    return _loadWhisperAssets();
+  }
+
+  function _asset(name) {
+    return _whisperAssets().find((item) => item.name === name);
+  }
+
+  function _emitWhisperAssets() {
+    const items = _whisperAssets();
+    const settings = _readMockSettings();
+    _dispatch("whisper-models-change", { items, whisper: _settingsWithAssetStatus(settings.whisper) });
+    return items;
+  }
+
+  function _effectiveTaskModel(payload) {
+    const whisper = _readMockSettings().whisper;
+    return whisper.runtimeManaged && whisper.enabled !== false ? whisper.model : payload.model;
+  }
+
+  function _ensureTaskModelReady(model, needSubtitle = true) {
+    if (!needSubtitle) return;
+    const name = String(model || "").replace(/^local:/, "");
+    if (_asset(name)?.status !== "READY") {
+      throw modelApiError("MODEL_NOT_READY", `本地 Whisper 模型尚未就绪: ${name}`, 409);
+    }
+  }
+
+  function _readMockSettings() {
+    const defaults = {
+      llm: { enabled: true, provider: "deepseek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat", hasApiKey: false, temperature: 0.3, maxTokens: 4096, timeout: 120, concurrency: 2 },
+      whisper: { enabled: true, provider: "local", model: "local:tiny", language: "auto", device: "cpu", threads: 4, wordTimestamps: true, runtimeManaged: false },
+      tts: { enabled: false, provider: "kokoro", baseUrl: "", model: "kokoro-v1", hasApiKey: false, voice: "auto", speed: 1, format: "wav" },
+    };
+    try {
+      const saved = JSON.parse(localStorage.getItem("subtrans_mock_model_settings_v1") || "null");
+      if (!saved) return defaults;
+      return { ...defaults, ...saved, llm: { ...defaults.llm, ...saved.llm }, whisper: { ...defaults.whisper, ...saved.whisper }, tts: { ...defaults.tts, ...saved.tts } };
+    } catch (_) { return defaults; }
+  }
+
+  function _settingsWithAssetStatus(config) {
+    const assets = _whisperAssets();
+    const selectedName = String(config.model || "local:tiny").replace(/^local:/, "");
+    const selected = assets.find((item) => item.name === selectedName);
+    const savedCards = Array.isArray(config.models) ? config.models : [];
+    const models = assets.map((item) => ({
+      ...(savedCards.find((card) => String(card.model || "").replace(/^local:/, "") === item.name) || {}),
+      id: savedCards.find((card) => String(card.model || "").replace(/^local:/, "") === item.name)?.id || `whisper-card-${encodeURIComponent(item.name)}`,
+      name: savedCards.find((card) => String(card.model || "").replace(/^local:/, "") === item.name)?.name || item.label || item.name,
+      provider: "local", model: `local:${item.name}`,
+      enabled: item.status === "READY", status: item.status, isCurrent: item.name === selectedName,
+    }));
+    return { ...config, provider: "local", model: `local:${selectedName}`, status: selected?.status || "MISSING", models };
+  }
   function _pushProbe(rec) {
     const arr = _loadProbe();
     arr.unshift(rec);
@@ -655,20 +854,26 @@ const MockApi = (() => {
 
   return {
     async createTask(payload) {
+      const model = _effectiveTaskModel(payload);
+      _ensureTaskModelReady(model, payload.needSubtitle !== false);
       const t = {
         id: uid(), url: payload.url, title: null,
         sourceLang: payload.sourceLang, targetLang: payload.targetLang,
-        mode: payload.mode, burn: payload.burn, model: payload.model, engine: payload.engine,
+        mode: payload.mode, burn: payload.burn, model, engine: payload.engine,
+        runtimeConfig: { whisper: { ..._readMockSettings().whisper, model } },
         status: "PENDING", progress: 0, error: null, createdAt: Date.now(), outputs: null, _sim: true,
       };
       tasks.unshift(t); persist(); await delay(150); return { ...t };
     },
     // 示例模式下模拟本地视频上传任务。
     async createUploadTask(payload) {
+      const model = _effectiveTaskModel(payload);
+      _ensureTaskModelReady(model, payload.needSubtitle !== false);
       const t = {
         id: uid(), url: payload.file?.name || "uploaded-video", title: payload.file?.name || null,
         sourceLang: payload.sourceLang, targetLang: payload.targetLang,
-        mode: payload.mode, burn: payload.burn, model: payload.model, engine: payload.engine,
+        mode: payload.mode, burn: payload.burn, model, engine: payload.engine,
+        runtimeConfig: { whisper: { ..._readMockSettings().whisper, model } },
         sourceType: "upload", needSubtitle: payload.needSubtitle,
         status: "PENDING", progress: 0, error: null, createdAt: Date.now(), outputs: null, _sim: true,
       };
@@ -782,56 +987,90 @@ const MockApi = (() => {
         Object.keys(LANG_LABEL).filter((k) => k !== "auto" && k !== "zh")
       ).filter((k) => k !== "bn" && k !== "ur");
     },
-    // 示例模式下返回本地 Whisper 模型权重选项。
-    async listModelWeights() { await delay(80); return ["local:tiny", "local:base", "local:small", "local:medium", "local:large-v3", "local:large-v3-turbo"]; },
-    async listLocalModels() {
+    async listModelWeights() {
       await delay(40);
-      let downloaded = [];
-      try {
-        const saved = localStorage.getItem("subtrans_mock_local_models_v1");
-        downloaded = saved === null ? ["tiny"] : JSON.parse(saved);
-      } catch (_) {}
-      const ready = new Set(Array.isArray(downloaded) ? downloaded : ["tiny"]);
-      const official = ["tiny", "tiny.en", "base", "base.en", "small", "small.en", "medium", "medium.en", "large-v1", "large-v2", "large-v3", "large-v3-turbo"];
-      const sizes = ["~75 MB", "~75 MB", "~145 MB", "~145 MB", "~465 MB", "~465 MB", "~1.5 GB", "~1.5 GB", "~3 GB", "~3 GB", "~3 GB", "~1.6 GB"];
-      return [
-        ...official.map((name, i) => ({ name, label: `Whisper ${name}`, size: sizes[i], status: ready.has(name) ? "READY" : "NOT_INSTALLED", format: "ctranslate2", source: "official" })),
-        ...[...ready].filter((name) => !official.includes(name)).map((name) => ({ name, label: name, size: null, status: "READY", format: "huggingface", source: "imported" })),
-      ];
+      return _whisperAssets().filter((item) => item.status === "READY").map((item) => `local:${item.name}`);
     },
+    async listLocalModels() { await delay(30); return _whisperAssets().map((item) => ({ ...item })); },
     async downloadLocalModel(name) {
-      await delay(40);
-      let downloaded = [];
-      try { downloaded = JSON.parse(localStorage.getItem("subtrans_mock_local_models_v1") || "[]"); } catch (_) {}
-      if (!Array.isArray(downloaded)) downloaded = [];
-      if (!downloaded.includes(name)) downloaded.push(name);
-      localStorage.setItem("subtrans_mock_local_models_v1", JSON.stringify(downloaded));
-      return { name, status: "READY", format: "ctranslate2", source: "official" };
+      await delay(25);
+      const item = _asset(name);
+      if (!item || item.source !== "official") throw modelApiError("MODEL_INVALID", `未知官方模型: ${name}`, 404);
+      if (item.status === "READY" || item.status === "DOWNLOADING") return { ...item };
+      const assets = _whisperAssets();
+      const downloading = assets.map((asset) => asset.name === name ? { ...asset, status: "DOWNLOADING", phase: "downloading", progress: 1, error: null } : asset);
+      _saveWhisperAssets(downloading);
+      _emitWhisperAssets();
+      setTimeout(() => {
+        let failNext = false;
+        try { failNext = localStorage.getItem("subtrans_mock_whisper_fail_next_download") === "1"; } catch (_) {}
+        try { localStorage.removeItem("subtrans_mock_whisper_fail_next_download"); } catch (_) {}
+        const current = _whisperAssets();
+        _saveWhisperAssets(current.map((asset) => asset.name === name
+          ? { ...asset, status: failNext ? "ERROR" : "READY", phase: failNext ? "error" : "ready", progress: failNext ? 0 : 100, error: failNext ? "示例下载失败，可重试" : null }
+          : asset));
+        _emitWhisperAssets();
+      }, 450);
+      return { ...downloading.find((asset) => asset.name === name) };
     },
-    async importLocalModel(name, label) {
-      await delay(40);
-      let downloaded = [];
-      try { downloaded = JSON.parse(localStorage.getItem("subtrans_mock_local_models_v1") || "[]"); } catch (_) {}
-      if (!Array.isArray(downloaded)) downloaded = [];
-      if (!downloaded.includes(name)) downloaded.push(name);
-      try { localStorage.setItem("subtrans_mock_local_models_v1", JSON.stringify(downloaded)); } catch (_) {}
-      return { name, label: label || name, status: "READY", format: "huggingface" };
+    async importLocalModel(name, label, files) {
+      const safeName = String(name || "");
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$/.test(safeName) || safeName.startsWith(".")
+        || OFFICIAL_WHISPER_MODELS.some(([official]) => official === safeName)) {
+        throw modelApiError("MODEL_INVALID", "模型名称无效或与内置模型重名", 422);
+      }
+      const fileNames = await validateImportedWhisperFiles(files);
+      if (["false", "0"].includes(localStorage.getItem("subtrans_mock_hf_dependency_enabled"))) {
+        throw modelApiError("MODEL_DEPENDENCY_MISSING", "请先启用 Hugging Face 模型依赖：uv sync --extra hf-models", 503);
+      }
+      if (_asset(safeName)) throw modelApiError("MODEL_EXISTS", "模型已存在", 409);
+      const asset = { id: `whisper-imported-${safeName}`, name: safeName, label: label || safeName, size: null, status: "READY", format: "huggingface", source: "imported", phase: "ready", progress: 100, files: fileNames };
+      const items = [..._whisperAssets(), asset];
+      _saveWhisperAssets(items);
+      _emitWhisperAssets();
+      await delay(25);
+      return { ...asset };
     },
     async checkLocalModel(name) {
-      await delay(40);
-      return { name, status: "READY", format: "huggingface" };
+      await delay(30);
+      const assets = _whisperAssets();
+      const item = assets.find((asset) => asset.name === name);
+      if (!item) throw modelApiError("MODEL_NOT_FOUND", `模型不存在: ${name}`, 404);
+      const files = new Set(item.files || []);
+      const validImported = item.source !== "imported"
+        || (files.has("config.json") && files.has("preprocessor_config.json")
+          && (files.has("tokenizer.json") || files.has("vocab.json") && files.has("merges.txt"))
+          && [...files].some((file) => /\.(bin|safetensors)$/.test(file)));
+      if (!validImported) {
+        const updated = assets.map((asset) => asset.name === name ? { ...asset, status: "ERROR", phase: "error", error: "Whisper 文件结构无效" } : asset);
+        _saveWhisperAssets(updated);
+        _emitWhisperAssets();
+        throw modelApiError("MODEL_INVALID", "缺少有效的 config.json、preprocessor_config.json、tokenizer 或 .bin/.safetensors 权重", 422);
+      }
+      const updated = assets.map((asset) => asset.name === name ? { ...asset, status: "READY", phase: "ready", progress: 100, error: null } : asset);
+      _saveWhisperAssets(updated);
+      _emitWhisperAssets();
+      return { ...updated.find((asset) => asset.name === name) };
     },
     async deleteLocalModel(name) {
-      await delay(40);
-      let downloaded = [];
-      try {
-        const saved = localStorage.getItem("subtrans_mock_local_models_v1");
-        downloaded = saved === null ? ["tiny"] : JSON.parse(saved);
-      } catch (_) {}
-      if (!Array.isArray(downloaded)) downloaded = [];
-      const remaining = downloaded.filter((item) => item !== name);
-      try { localStorage.setItem("subtrans_mock_local_models_v1", JSON.stringify(remaining)); } catch (_) {}
-      return { name, label: `Whisper ${name}`, size: "", status: "NOT_INSTALLED", phase: "idle", progress: 0 };
+      await delay(25);
+      const settings = _readMockSettings().whisper;
+      if (String(settings.model || "").replace(/^local:/, "") === name) {
+        throw modelApiError("MODEL_CURRENT", "当前正在使用这个模型，请先切换当前模型。", 409);
+      }
+      const inUse = tasks.some((task) => !["SUCCESS", "FAILED", "CANCELLED"].includes(task.status)
+        && task.needSubtitle !== false && String(task.model || "").replace(/^local:/, "") === name);
+      if (inUse) throw modelApiError("MODEL_IN_USE", "有未结束的任务选用了这个模型，暂时无法清理", 409);
+      const assets = _whisperAssets();
+      const target = assets.find((asset) => asset.name === name);
+      const remaining = assets.flatMap((asset) => {
+        if (asset.name !== name) return [asset];
+        if (asset.source === "official") return [{ ...asset, status: "NOT_INSTALLED", phase: "idle", progress: 0, installedBytes: 0, error: null }];
+        return [];
+      });
+      _saveWhisperAssets(remaining);
+      _emitWhisperAssets();
+      return { name, label: target?.label || `Whisper ${name}`, size: target?.size || "", status: "NOT_INSTALLED", phase: "idle", progress: 0 };
     },
     async getAudioSettings() {
       await delay(40);
@@ -876,25 +1115,66 @@ const MockApi = (() => {
     async deleteTranslationEngine(id) { const list = (await this.listTranslationEngines()).filter((e) => e.id !== id); localStorage.setItem("subtrans_mock_engines_v1", JSON.stringify(list)); },
     async getModelSettings() {
       await delay(50);
-      const defaults = {
-        llm: { enabled: true, provider: "deepseek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat", hasApiKey: false, temperature: 0.3, maxTokens: 4096, timeout: 120, concurrency: 2 },
-        whisper: { enabled: true, provider: "local", model: "local:small", language: "auto", device: "cpu", threads: 4, wordTimestamps: true, status: "ready" },
-        tts: { enabled: false, provider: "kokoro", baseUrl: "", model: "kokoro-v1", hasApiKey: false, voice: "auto", speed: 1, format: "wav" },
-      };
-      try {
-        const saved = JSON.parse(localStorage.getItem("subtrans_mock_model_settings_v1") || "null");
-        return saved ? { ...defaults, ...saved, llm: { ...defaults.llm, ...saved.llm }, whisper: { ...defaults.whisper, ...saved.whisper }, tts: { ...defaults.tts, ...saved.tts } } : defaults;
-      } catch (_) { return defaults; }
+      const settings = _readMockSettings();
+      settings.whisper = _settingsWithAssetStatus(settings.whisper);
+      return settings;
+    },
+    async getRuntimeReadiness() {
+      await delay(25);
+      const settings = _readMockSettings();
+      return { ok: true, modelSettings: { whisper: _settingsWithAssetStatus(settings.whisper) } };
     },
     async updateModelSettings(payload) {
       await delay(90);
-      const current = await this.getModelSettings();
+      const current = _readMockSettings();
+      const cleanPayload = filterModelSettingsPayload(payload);
+      const incomingWhisper = cleanPayload.whisper;
+      if (incomingWhisper) {
+        if ((incomingWhisper.provider || current.whisper.provider) !== "local") {
+          throw modelApiError("WHISPER_PROVIDER_UNSUPPORTED", "示例模式暂不支持 Replicate 或自定义 Whisper 服务。", 422);
+        }
+        const requestedCards = Array.isArray(incomingWhisper.models) ? incomingWhisper.models : [];
+        const chosen = requestedCards.find((model) => model.isCurrent);
+        if (chosen && (chosen.provider || "local") !== "local") {
+          throw modelApiError("WHISPER_PROVIDER_UNSUPPORTED", "示例模式暂不支持 Replicate 或自定义 Whisper 服务。", 422);
+        }
+        const selectedModel = incomingWhisper.model || chosen?.model || current.whisper.model;
+        const selectedName = String(selectedModel || "").replace(/^local:/, "");
+        if (!OFFICIAL_WHISPER_MODELS.some(([name]) => name === selectedName)
+          && !_asset(selectedName)) throw modelApiError("MODEL_NOT_READY", `模型不存在: ${selectedName}`, 409);
+        if (_asset(selectedName)?.status !== "READY") throw modelApiError("MODEL_NOT_READY", `本地 Whisper 模型尚未就绪: ${selectedName}`, 409);
+        const assetCards = _whisperAssets().map((asset) => ({
+          id: `whisper-card-${encodeURIComponent(asset.name)}`, name: asset.label || asset.name,
+          provider: "local", model: `local:${asset.name}`,
+          enabled: asset.status === "READY", status: asset.status, isCurrent: asset.name === selectedName,
+        }));
+        // Keep settings card IDs stable and merge incoming card edits by ID or model.
+        const oldCards = Array.isArray(current.whisper.models) ? current.whisper.models : [];
+        const newCards = requestedCards.reduce((map, card) => map.set(card.id, card), new Map());
+        const mergedCards = assetCards.map((card) => {
+          const previous = oldCards.find((item) => item.id === card.id
+            || String(item.model || "").replace(/^local:/, "") === card.model.slice(6)) || {};
+          const update = newCards.get(previous.id || card.id)
+            || requestedCards.find((item) => String(item.model || "").replace(/^local:/, "") === card.model.slice(6)) || {};
+          return {
+            ...card, ...previous, ...update,
+            id: previous.id || update.id || card.id,
+            name: update.name || previous.name || card.name,
+            provider: "local", model: card.model, enabled: card.enabled, status: card.status,
+            isCurrent: card.model === `local:${selectedName}`,
+          };
+        });
+        current.whisper = {
+          ...current.whisper, ...incomingWhisper, provider: "local", model: `local:${selectedName}`,
+          runtimeManaged: true, models: mergedCards,
+        };
+      }
       const next = {
         ...current,
-        ...payload,
-        llm: { ...current.llm, ...(payload.llm || {}) },
-        whisper: { ...current.whisper, ...(payload.whisper || {}) },
-        tts: { ...current.tts, ...(payload.tts || {}) },
+        ...cleanPayload,
+        llm: { ...current.llm, ...(cleanPayload.llm || {}) },
+        whisper: { ...current.whisper, ...(cleanPayload.whisper || {}), ...(incomingWhisper ? current.whisper : {}) },
+        tts: { ...current.tts, ...(cleanPayload.tts || {}) },
       };
       for (const kind of ["llm", "tts"]) {
         const key = next[kind].apiKey;
@@ -903,11 +1183,14 @@ const MockApi = (() => {
         delete next[kind].apiKey;
       }
       localStorage.setItem("subtrans_mock_model_settings_v1", JSON.stringify(next));
-      return next;
+      const response = { ...next, whisper: _settingsWithAssetStatus(next.whisper) };
+      if (incomingWhisper) _dispatch("model-settings-change", { settings: response });
+      return response;
     },
     async createModelSettings(kind, payload) {
       await delay(90);
       if (!["llm", "whisper", "tts"].includes(kind)) throw new Error("未知模型类型");
+      if (kind === "whisper") throw modelApiError("WHISPER_PROVIDER_UNSUPPORTED", "Whisper 只能通过模型商店下载官方模型或导入本地文件；Replicate 和自定义服务暂不支持。", 422);
       const current = await this.getModelSettings();
       const model = {
         ...payload,
@@ -926,7 +1209,7 @@ const MockApi = (() => {
     },
     async validateModelSettings(kind, payload) {
       await delay(120);
-      if (kind === "whisper") return { ok: true, message: payload.provider === "local" ? "本地模型可用" : "Replicate 配置可用", latencyMs: 42 };
+      if (kind === "whisper") return { ok: false, message: payload.provider === "local" ? "请先在模型商店检查本地 Whisper 模型。" : "示例模式暂不支持 Replicate 或自定义 Whisper 服务。" };
       if (!payload.model) return { ok: false, message: "请先填写模型名称" };
       return { ok: true, message: "连接成功（示例模式）", latencyMs: 86 };
     },

@@ -9,6 +9,7 @@ from __future__ import annotations
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 from yt_dlp.utils import DownloadError as YtDlpDownloadError
@@ -150,6 +151,75 @@ def test_download_passes_progress_hook(task_path, monkeypatch):
     assert captured["opts"]["concurrent_fragment_downloads"] == (
         downloader.settings.download_concurrent_fragments
     )
+
+
+def test_download_explicit_none_and_frozen_options_override_settings(task_path, monkeypatch):
+    import dataclasses
+
+    src = task_path / "source.mkv"
+    captured = {}
+    monkeypatch.setattr(
+        downloader,
+        "settings",
+        dataclasses.replace(
+            downloader.settings,
+            _download_proxy="https://global-proxy.example",
+            _cookies_file=task_path / "global-cookies.txt",
+            _download_socket_timeout=90,
+            _merge_output_format="mp4",
+            _download_retries=10,
+            _download_concurrent_fragments=12,
+        ),
+    )
+
+    def on_extract(url, download, opts):
+        captured.update(opts)
+        src.write_bytes(b"x")
+        return {"requested_downloads": [{"filepath": str(src)}]}
+
+    monkeypatch.setattr(downloader, "YoutubeDL", make_fake_ydl(on_extract))
+    download_video(
+        "https://example.test/video", "task1",
+        cookies_file=None,
+        proxy=None,
+        socket_timeout=17,
+        merge_output_format="mkv",
+        retries=4,
+        concurrent_fragments=3,
+    )
+
+    assert "cookiefile" not in captured
+    assert "proxy" not in captured
+    assert captured["socket_timeout"] == 17
+    assert captured["merge_output_format"] == "mkv"
+    assert captured["retries"] == 4
+    assert captured["concurrent_fragment_downloads"] == 3
+
+
+def test_download_progress_cancellation_is_not_swallowed(task_path, monkeypatch):
+    from src.plugin_system import PluginCancelled
+
+    checks = 0
+
+    def cancel_check():
+        nonlocal checks
+        checks += 1
+        if checks >= 2:
+            raise PluginCancelled("cancelled")
+
+    def on_extract(url, download, opts):
+        opts["progress_hooks"][0]({
+            "status": "downloading", "downloaded_bytes": 1, "total_bytes": 2,
+        })
+        return {}
+
+    monkeypatch.setattr(downloader, "YoutubeDL", make_fake_ydl(on_extract))
+    with pytest.raises(PluginCancelled, match="cancelled"):
+        download_video(
+            "https://example.test/video", "task1",
+            on_progress=lambda progress: None,
+            cancel_check=cancel_check,
+        )
 
 
 def test_download_limiter_releases_after_media_download(tmp_path, monkeypatch):
@@ -578,6 +648,40 @@ def test_probe_passes_cookies_file(monkeypatch, tmp_path):
     monkeypatch.setattr(downloader, "YoutubeDL", make_fake_ydl(on_extract))
     probe_video("https://x/v", cookies_file=cookies)
     assert captured["opts"]["cookiefile"] == str(cookies)
+
+
+def test_probe_explicit_none_and_frozen_transport_settings(monkeypatch):
+    import dataclasses
+
+    captured = {}
+    monkeypatch.setattr(
+        downloader,
+        "settings",
+        dataclasses.replace(
+            downloader.settings,
+            _download_proxy="https://global-proxy.example",
+            _cookies_file=Path("/tmp/global-cookies.txt"),
+            _download_socket_timeout=90,
+        ),
+    )
+
+    def on_extract(url, download, opts):
+        captured.update(opts)
+        return {"title": "T", "url": "https://example.test/video"}
+
+    monkeypatch.setattr(downloader, "YoutubeDL", make_fake_ydl(on_extract))
+    probe_video(
+        "https://example.test/video",
+        cookies_file=None,
+        format_selector="bv*[height<=720]+ba/b[height<=720]",
+        proxy=None,
+        socket_timeout=19,
+    )
+
+    assert "cookiefile" not in captured
+    assert "proxy" not in captured
+    assert captured["format"] == "bv*[height<=720]+ba/b[height<=720]"
+    assert captured["socket_timeout"] == 19
 
 
 def test_probe_uses_browser_cookies_without_cookiefile_or_cache(monkeypatch):

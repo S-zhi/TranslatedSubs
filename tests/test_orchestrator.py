@@ -1,68 +1,92 @@
-"""流水线编排单测。mock 五步函数，验证事件序列、进度映射与失败处理。"""
-
-from __future__ import annotations
+"""I1 pipeline orchestration through the injected plugin manager."""
 
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
+from src.plugin_system import (
+    AudioExtractResult, DownloadResult, PluginError, SubtitleRenderResult, TranscribeResult,
+    TranslateResult,
+)
 from src.service import orchestrator
-from src.core.transcriber import TranscribeCancelledError
 from src.service.orchestrator import (
-    PipelineCancelledError,
-    PipelineHandler,
-    PipelineParams,
-    PipelineResources,
-    build_default_pipeline_chain,
-    build_pipeline_chain,
-    run_pipeline,
+    PipelineHandler, PipelineParams, PipelineResources, build_default_pipeline_chain,
+    build_pipeline_chain, run_pipeline,
 )
 
 
-def _params():
-    return PipelineParams(
-        task_id="t1",
-        url="http://x/v",
-        source_lang="auto",
-        target_lang="zh-CN",
-        mode="mono",
-        burn="hard",
-        model="small",
+def _params(**overrides):
+    values = dict(
+        task_id="t1", url="https://example.test/video", source_lang="en",
+        target_lang="zh-CN", mode="mono", burn="hard", model="local:tiny",
     )
+    values.update(overrides)
+    return PipelineParams(**values)
 
 
-def _install_fakes(monkeypatch, *, calls, fail_at=None, percent=100):
-    """装上五步假实现：各自调用 on_progress 并返回带必要属性的结果。"""
+def _plan(params=None):
+    params = params or _params()
+    slots = {}
 
-    def make(name, result):
-        def fn(*args, **kwargs):
-            calls.append(name)
-            if fail_at == name:
-                raise RuntimeError(f"{name} boom")
-            cb = kwargs.get("on_progress")
-            if cb:
-                cb(SimpleNamespace(percent=percent))
-            return result
-        return fn
+    def add(purpose, plugin_id, config):
+        slots[purpose] = {
+            "plugin_id": plugin_id, "implementation_version": "1", "config": config,
+        }
 
-    monkeypatch.setattr(orchestrator, "download_video",
-                        make("download", SimpleNamespace(video_path=Path("/d/source.mp4"), title="My Video")))
-    monkeypatch.setattr(orchestrator, "extract_audio",
-                        make("extract", SimpleNamespace(audio_path=Path("/d/audio.wav"))))
-    monkeypatch.setattr(orchestrator, "transcribe",
-                        make("transcribe", SimpleNamespace(srt_path=Path("/d/original.srt"))))
-    monkeypatch.setattr(orchestrator, "translate_srt",
-                        make("translate", SimpleNamespace(srt_path=Path("/d/translated.srt"))))
-    monkeypatch.setattr(orchestrator, "burn_subtitles",
-                        make("burn", SimpleNamespace(output_path=Path("/d/output.mp4"))))
+    if params.source_type == "url":
+        add("download", "builtin.ytdlp", {"quality": "480p"})
+    if params.need_subtitle:
+        add("extract.asr", "builtin.ffmpeg_audio", {"sample_rate": 16000, "channels": 1})
+        add("transcribe", "builtin.whisper", {"backend": "local_whisper", "model": "tiny"})
+        add("translate", "builtin.translation_engine", {})
+        add("render.subtitle", "builtin.ffmpeg_render", {"mode": params.burn})
+    return {"schema_version": 1, "slots": slots}
 
-    # Mock AssetResolver requirements to support mock paths
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_source", lambda tid: Path("/d/source.mp4"))
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_audio", lambda tid: Path("/d/audio.wav"))
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_original_srt", lambda tid: Path("/d/original.srt"))
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_translated_srt", lambda tid: Path("/d/translated.srt"))
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_output_video", lambda tid: Path("/d/output.mp4"))
+
+class FakeManager:
+    def __init__(self, *, percent=100, fail_at=None):
+        self.percent = percent
+        self.fail_at = fail_at
+        self.calls = []
+        self.requests = []
+
+    def run(self, plugin_id, version, request, config, context):
+        purpose = request.purpose
+        self.calls.append(purpose)
+        self.requests.append((plugin_id, version, request, dict(config)))
+        if purpose == self.fail_at:
+            raise RuntimeError("secret-bearing underlying error")
+        context.report_progress(self.percent)
+        if purpose == "download":
+            output = request.target_dir / "source.mp4"
+            output.write_bytes(b"source-video")
+            return DownloadResult(output, title="Example title")
+        if purpose == "extract.asr":
+            request.output_path.write_bytes(b"RIFF\x00\x00\x00\x00WAVE")
+            return AudioExtractResult(request.output_path, request.sample_rate, request.channels)
+        if purpose == "transcribe":
+            request.output_srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nhello\n", encoding="utf-8")
+            return TranscribeResult(request.output_srt, 1)
+        if purpose == "translate":
+            request.output_srt.write_text("1\n00:00:00,000 --> 00:00:01,000\n你好\n", encoding="utf-8")
+            return TranslateResult(request.output_srt, 1, request.mode == "bilingual")
+        if purpose == "render.subtitle":
+            request.output_video.write_bytes(b"\x00\x00\x00\x18ftypisom")
+            return SubtitleRenderResult(request.output_video)
+        raise AssertionError(purpose)
+
+
+def _run(monkeypatch, tmp_path, params=None, *, manager=None, events=None):
+    params = params or _params()
+    manager = manager or FakeManager()
+    events = events if events is not None else []
+    monkeypatch.setattr(orchestrator, "task_dir", lambda task_id: tmp_path)
+    monkeypatch.setattr("src.service.asset_resolver.task_dir", lambda task_id: tmp_path)
+    event = run_pipeline(
+        params, events.append, plugin_manager=manager, plugin_plan=_plan(params),
+        credential_resolver=lambda ref: "secret-value",
+    )
+    return event, events, manager
 
 
 @pytest.mark.parametrize(
@@ -77,662 +101,270 @@ def _install_fakes(monkeypatch, *, calls, fail_at=None, percent=100):
     ],
 )
 def test_error_code_for_exception_maps_builtin_errors(exception, expected):
-    """内置异常应映射为稳定错误码，避免错误事件携带空码。"""
     assert orchestrator._error_code_for_exception(exception) == expected
 
 
-def test_error_code_for_exception_preserves_custom_code():
-    """异常自定义非空 code 应优先于通用类型映射。"""
-    error = ValueError("bad value")
-    error.code = "custom_error"
-    assert orchestrator._error_code_for_exception(error) == "custom_error"
+def test_pipeline_routes_every_enabled_stage_through_manager(monkeypatch, tmp_path):
+    event, events, manager = _run(monkeypatch, tmp_path)
+    assert manager.calls == ["download", "extract.asr", "transcribe", "translate", "render.subtitle"]
+    assert event.status == "SUCCESS"
+    assert event.title == "Example title"
+    assert event.outputs["video"].endswith("output_hard.mp4")
+    assert event.outputs["subtitle"].endswith("translated.srt")
+    assert [item.progress for item in events] == sorted(item.progress for item in events)
+    assert events[-1].status == "SUCCESS" and events[-1].progress == 100
+    assert (tmp_path / "translate.plugin-meta.json").is_file()
 
 
-def test_pipeline_success_event_sequence(monkeypatch):
-    calls = []
-    _install_fakes(monkeypatch, calls=calls)
-    events = []
+def test_pre_cancelled_pipeline_wins_over_invalid_plugin_plan():
+    from src.service.orchestrator import (
+        PipelineCancelledError, set_cancelled_signal, unregister_cancellation_signal,
+    )
 
-    result = run_pipeline(_params(), events.append)
-
-    # 五步都按序调用
-    assert calls == ["download", "extract", "transcribe", "translate", "burn"]
-
-    # 状态顺序覆盖五个阶段，最后 SUCCESS
-    statuses = [e.status for e in events]
-    for s in ["DOWNLOADING", "EXTRACTING", "TRANSCRIBING", "TRANSLATING", "BURNING"]:
-        assert s in statuses
-    assert statuses[-1] == "SUCCESS"
-
-    # 进度单调不减，结束 100
-    progs = [e.progress for e in events]
-    assert progs == sorted(progs)
-    assert events[-1].progress == 100
-
-    # 成功事件带标题与产物
-    assert result.status == "SUCCESS"
-    assert result.title == "My Video"
-    assert result.outputs == {"video": "/d/output.mp4", "subtitle": "/d/translated.srt"}
+    params = _params()
+    set_cancelled_signal(params.task_id)
+    try:
+        with pytest.raises(PipelineCancelledError):
+            run_pipeline(
+                params, lambda event: None, plugin_manager=FakeManager(), plugin_plan={},
+                credential_resolver=lambda ref: "secret",
+            )
+    finally:
+        unregister_cancellation_signal(params.task_id)
 
 
-def test_pipeline_progress_mapping(monkeypatch):
-    # 每步内部 50% -> 应落在该阶段的 band 内
-    calls = []
-    _install_fakes(monkeypatch, calls=calls, percent=50)
-    events = []
-    run_pipeline(_params(), events.append)
-
+def test_pipeline_maps_progress_bands(monkeypatch, tmp_path):
+    _, events, manager = _run(monkeypatch, tmp_path, manager=FakeManager(percent=50))
     by_status = {}
-    for e in events:
-        by_status.setdefault(e.status, []).append(e.progress)
-
-    # 下载内部 50% -> 0 + 0.5*(20-0) = 10
+    for event in events:
+        by_status.setdefault(event.status, []).append(event.progress)
     assert 10 in by_status["DOWNLOADING"]
-    # 识别内部 50% -> 35 + 0.5*(65-35) = 50
     assert 50 in by_status["TRANSCRIBING"]
-    # 烧录内部 50% -> 85 + 0.5*(100-85) = 92
     assert 92 in by_status["BURNING"]
 
 
-def test_pipeline_failure(monkeypatch):
-    calls = []
-    _install_fakes(monkeypatch, calls=calls, fail_at="transcribe")
+def test_pipeline_sanitizes_unknown_plugin_failure(monkeypatch, tmp_path):
     events = []
-
+    manager = FakeManager(fail_at="transcribe")
     with pytest.raises(RuntimeError):
-        run_pipeline(_params(), events.append)
-
-    # 识别后续步骤不应执行
-    assert "translate" not in calls and "burn" not in calls
-
-    last = events[-1]
-    assert last.status == "FAILED"
-    assert last.current_step == "TRANSCRIBING"
-    assert last.error_code == "internal_error"
-    assert "boom" in last.error
+        _run(monkeypatch, tmp_path, manager=manager, events=events)
+    assert manager.calls == ["download", "extract.asr", "transcribe"]
+    assert events[-1].status == "FAILED"
+    assert events[-1].error_code == "internal_error"
+    assert "secret-bearing" not in events[-1].error
 
 
-def test_default_pipeline_chain_has_expected_handler_order():
+def test_pipeline_preserves_plugin_error_code_and_stops_downstream(monkeypatch, tmp_path):
+    class CodeFailure(FakeManager):
+        def run(self, plugin_id, version, request, config, context):
+            self.calls.append(request.purpose)
+            if request.purpose == "transcribe":
+                raise PluginError(
+                    "model_unavailable", "transcribe", plugin_id,
+                    "transcription model unavailable",
+                )
+            self.calls.pop()
+            return super().run(plugin_id, version, request, config, context)
+
+    manager = CodeFailure()
+    events = []
+    with pytest.raises(PluginError) as exc_info:
+        _run(monkeypatch, tmp_path, manager=manager, events=events)
+    assert exc_info.value.code == "model_unavailable"
+    assert manager.calls == ["download", "extract.asr", "transcribe"]
+    assert events[-1].error_code == "model_unavailable"
+    assert events[-1].error == "transcription model unavailable"
+
+
+def test_plugin_cancel_during_invocation_cleans_new_output_and_stops_chain(monkeypatch, tmp_path):
+    from src.service.orchestrator import (
+        PipelineCancelledError, set_cancelled_signal, unregister_cancellation_signal,
+    )
+
+    class CancellingManager(FakeManager):
+        def run(self, plugin_id, version, request, config, context):
+            if request.purpose == "extract.asr":
+                self.calls.append(request.purpose)
+                request.output_path.write_bytes(b"new partial audio")
+                set_cancelled_signal("t1")
+                context.report_progress(25)
+            return super().run(plugin_id, version, request, config, context)
+
+    manager = CancellingManager()
+    params = _params()
+    monkeypatch.setattr(orchestrator, "task_dir", lambda task_id: tmp_path)
+    monkeypatch.setattr("src.service.asset_resolver.task_dir", lambda task_id: tmp_path)
+    try:
+        with pytest.raises(PipelineCancelledError):
+            run_pipeline(
+                params, lambda event: None, plugin_manager=manager,
+                plugin_plan=_plan(params), credential_resolver=lambda ref: "secret",
+            )
+        assert manager.calls == ["download", "extract.asr"]
+        assert not (tmp_path / "audio.wav").exists()
+    finally:
+        unregister_cancellation_signal(params.task_id)
+
+
+def test_cancel_during_cache_metadata_publication_discards_invocation(monkeypatch, tmp_path):
+    from src.service.orchestrator import (
+        PipelineCancelledError, set_cancelled_signal, unregister_cancellation_signal,
+    )
+
+    params = _params()
+    manager = FakeManager()
+    monkeypatch.setattr(orchestrator, "task_dir", lambda task_id: tmp_path)
+    monkeypatch.setattr("src.service.asset_resolver.task_dir", lambda task_id: tmp_path)
+    write_metadata = orchestrator.AssetResolver.write_plugin_cache_metadata
+
+    def cancel_after_metadata(task_id, metadata):
+        write_metadata(task_id, metadata)
+        if metadata["purpose"] == "extract.asr":
+            set_cancelled_signal(params.task_id)
+
+    monkeypatch.setattr(
+        orchestrator.AssetResolver, "write_plugin_cache_metadata", cancel_after_metadata
+    )
+    try:
+        with pytest.raises(PipelineCancelledError):
+            run_pipeline(
+                params, lambda event: None, plugin_manager=manager, plugin_plan=_plan(params),
+                credential_resolver=lambda ref: "secret",
+            )
+        assert manager.calls == ["download", "extract.asr"]
+        assert (tmp_path / "source.mp4").is_file()
+        assert (tmp_path / "download.plugin-meta.json").is_file()
+        assert not (tmp_path / "audio.wav").exists()
+        assert not (tmp_path / "extract.asr.plugin-meta.json").exists()
+    finally:
+        unregister_cancellation_signal(params.task_id)
+
+
+def test_upload_without_source_fails_before_any_plugin_call(monkeypatch, tmp_path):
+    from src.service.asset_resolver import ResourceError, ResourceState
+
+    monkeypatch.setattr(orchestrator, "task_dir", lambda task_id: tmp_path)
+    monkeypatch.setattr("src.service.asset_resolver.task_dir", lambda task_id: tmp_path)
+    monkeypatch.setattr(
+        orchestrator.AssetResolver, "require_source",
+        lambda task_id: (_ for _ in ()).throw(
+            ResourceError("missing upload", ResourceState.DELETED)
+        ),
+    )
+    params = _params(source_type="upload", need_subtitle=False)
+    events = []
+    manager = FakeManager()
+    with pytest.raises(orchestrator.PipelineError):
+        run_pipeline(
+            params, events.append, plugin_manager=manager, plugin_plan=_plan(params),
+            credential_resolver=lambda ref: "secret",
+        )
+    assert manager.calls == []
+    assert events[-1].status == "FAILED"
+
+
+def test_download_plugin_failure_stops_pipeline_before_next_stage(monkeypatch, tmp_path):
+    class MissingOutputManager(FakeManager):
+        def run(self, plugin_id, version, request, config, context):
+            self.calls.append(request.purpose)
+            raise PluginError(
+                "download_failed", "download", plugin_id, "download output unavailable"
+            )
+
+    params = _params()
+    monkeypatch.setattr(orchestrator, "task_dir", lambda task_id: tmp_path)
+    monkeypatch.setattr("src.service.asset_resolver.task_dir", lambda task_id: tmp_path)
+    manager = MissingOutputManager()
+    events = []
+    with pytest.raises(PluginError):
+        run_pipeline(
+            params, events.append, plugin_manager=manager, plugin_plan=_plan(params),
+            credential_resolver=lambda ref: "secret",
+        )
+    assert manager.calls == ["download"]
+    assert events[-1].status == "FAILED"
+
+
+def test_resume_reuses_valid_cached_stages_and_recomputes_invalidated_suffix(monkeypatch, tmp_path):
+    params = _params()
+    monkeypatch.setattr(orchestrator, "task_dir", lambda task_id: tmp_path)
+    monkeypatch.setattr("src.service.asset_resolver.task_dir", lambda task_id: tmp_path)
+    first_manager = FakeManager()
+    first = run_pipeline(
+        params, lambda event: None, plugin_manager=first_manager, plugin_plan=_plan(params),
+        credential_resolver=lambda ref: "secret",
+    )
+    assert first.status == "SUCCESS"
+
+    # Simulate interruption after translation inputs were ready but before the
+    # translated subtitle and rendered video were durably published.
+    for name in ("translated.srt", "output_hard.mp4", "translate.plugin-meta.json", "render.subtitle.plugin-meta.json"):
+        (tmp_path / name).unlink(missing_ok=True)
+    second_manager = FakeManager()
+    resumed = run_pipeline(
+        params, lambda event: None, plugin_manager=second_manager, plugin_plan=_plan(params),
+        credential_resolver=lambda ref: "secret",
+    )
+    assert resumed.status == "SUCCESS"
+    assert second_manager.calls == ["translate", "render.subtitle"]
+
+
+def test_upload_and_download_only_do_not_initialize_unneeded_slots(monkeypatch, tmp_path):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"uploaded")
+    params = _params(source_type="upload", need_subtitle=False, title="Upload")
+    event, _, manager = _run(monkeypatch, tmp_path, params)
+    assert manager.calls == []
+    assert event.outputs == {"video": str(source)}
+
+    params = _params(need_subtitle=False)
+    event, _, manager = _run(monkeypatch, tmp_path, params)
+    assert manager.calls == ["download"]
+    assert event.status == "SUCCESS"
+
+
+def test_custom_handler_chain_shares_resources_and_completes():
+    calls = []
+    resource_ids = []
+
+    class Handler(PipelineHandler):
+        def __init__(self, name, complete=False):
+            super().__init__()
+            self.name = name
+            self.complete_result = complete
+
+        def process(self, context):
+            calls.append(self.name)
+            resource_ids.append(id(context.resources))
+            if self.name == "first":
+                context.resources.video_path = Path("/source.mp4")
+            if self.complete_result:
+                context.complete(outputs={"video": str(context.resources.video_path)})
+
+    chain = build_pipeline_chain(Handler("first"), Handler("second", complete=True))
+    event = run_pipeline(
+        _params(), lambda item: None, plugin_manager=FakeManager(), plugin_plan=_plan(),
+        credential_resolver=lambda ref: "secret", handler_chain=chain,
+    )
+    assert calls == ["first", "second"]
+    assert resource_ids[0] == resource_ids[1]
+    assert event.outputs == {"video": "/source.mp4"}
+
+
+def test_default_pipeline_keeps_the_six_handler_order():
     handler = build_default_pipeline_chain()
     names = []
     while handler is not None:
         names.append(type(handler).__name__)
         handler = handler._next_handler
-
     assert names == [
-        "DownloadHandler",
-        "AudioExtractionHandler",
-        "VocalSeparationHandler",
-        "TranscriptionHandler",
-        "TranslationHandler",
-        "SubtitleBurningHandler",
+        "DownloadHandler", "AudioExtractionHandler", "VocalSeparationHandler",
+        "TranscriptionHandler", "TranslationHandler", "SubtitleBurningHandler",
     ]
 
 
-def test_custom_handler_chain_shares_context_and_runs_in_order():
-    calls = []
-    resource_ids = []
-
-    class RecordingHandler(PipelineHandler):
-        def __init__(self, name, *, complete=False):
-            super().__init__()
-            self.name = name
-            self.should_complete = complete
-
-        def process(self, context):
-            calls.append((self.name, context.task_id))
-            resource_ids.append(id(context.resources))
-            if self.name == "first":
-                context.resources.video_path = Path("/d/source.mp4")
-            else:
-                assert context.resources.video_path == Path("/d/source.mp4")
-            if self.should_complete:
-                context.complete(outputs={"video": str(context.resources.video_path)})
-
-    chain = build_pipeline_chain(
-        RecordingHandler("first"),
-        RecordingHandler("second", complete=True),
-    )
-    events = []
-
-    result = run_pipeline(_params(), events.append, handler_chain=chain)
-
-    assert calls == [("first", "t1"), ("second", "t1")]
-    assert resource_ids[0] == resource_ids[1]
-    assert result.status == "SUCCESS"
-    assert result.outputs == {"video": "/d/source.mp4"}
-    assert events == [result]
-
-
-def test_pipeline_resources_isolated_per_context():
-    first = PipelineResources(video_path=Path("/d/first.mp4"))
+def test_pipeline_resources_are_isolated():
+    first = PipelineResources(video_path=Path("/first.mp4"))
     second = PipelineResources()
-
-    assert first.video_path == Path("/d/first.mp4")
+    assert first.video_path == Path("/first.mp4")
     assert second.video_path is None
-
-
-def test_custom_handler_failure_stops_chain_and_emits_failed():
-    calls = []
-
-    class RecordingHandler(PipelineHandler):
-        def __init__(self, name, *, fail=False):
-            super().__init__()
-            self.name = name
-            self.fail = fail
-
-        def process(self, context):
-            calls.append(self.name)
-            if self.fail:
-                raise RuntimeError("handler failed")
-
-    chain = build_pipeline_chain(
-        RecordingHandler("first", fail=True),
-        RecordingHandler("must-not-run"),
-    )
-    events = []
-
-    with pytest.raises(RuntimeError, match="handler failed"):
-        run_pipeline(_params(), events.append, handler_chain=chain)
-
-    assert calls == ["first"]
-    assert events[-1].status == "FAILED"
-    assert events[-1].error == "handler failed"
-    assert events[-1].error_code == "internal_error"
-
-
-def test_pipeline_passes_options(monkeypatch):
-    """目标语言 / 模式 / 模型 / 烧录方式应透传给对应步骤。"""
-    seen = {}
-
-    def fake_transcribe(audio, tid, **kw):
-        seen["model"] = kw.get("model_name")
-        seen["language"] = kw.get("language")
-        return SimpleNamespace(srt_path=Path("/d/original.srt"))
-
-    def fake_translate(srt, tid, src, tgt, **kw):
-        seen["target"] = tgt
-        seen["mode"] = kw.get("mode")
-        return SimpleNamespace(srt_path=Path("/d/translated.srt"))
-
-    def fake_burn(video, srt, tid, **kw):
-        seen["burn"] = kw.get("mode")
-        return SimpleNamespace(output_path=Path("/d/output.mp4"))
-
-    monkeypatch.setattr(orchestrator, "download_video",
-                        lambda *a, **k: SimpleNamespace(video_path=Path("/d/source.mp4"), title="T"))
-    monkeypatch.setattr(orchestrator, "extract_audio",
-                        lambda *a, **k: SimpleNamespace(audio_path=Path("/d/audio.wav")))
-    monkeypatch.setattr(orchestrator, "transcribe", fake_transcribe)
-    monkeypatch.setattr(orchestrator, "translate_srt", fake_translate)
-    monkeypatch.setattr(orchestrator, "burn_subtitles", fake_burn)
-
-    # Mock AssetResolver requirements
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_source", lambda tid: Path("/d/source.mp4"))
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_audio", lambda tid: Path("/d/audio.wav"))
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_original_srt", lambda tid: Path("/d/original.srt"))
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_translated_srt", lambda tid: Path("/d/translated.srt"))
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_output_video", lambda tid: Path("/d/output.mp4"))
-
-    params = PipelineParams(
-        task_id="t1", url="http://x", source_lang="en", target_lang="ja",
-        mode="bilingual", burn="soft", model="medium",
-    )
-    run_pipeline(params, lambda e: None)
-
-    assert seen == {
-        "model": "medium", "language": "en",
-        "target": "ja", "mode": "bilingual", "burn": "soft",
-    }
-
-
-def test_vocal_separation_handler_uses_cached_vocal_artifact(monkeypatch, tmp_path):
-    """已有 vocal.wav 时，断点续跑不重复调用 Demucs。"""
-    context = orchestrator.PipelineContext(params=_params(), on_event=lambda event: None)
-    context.resources.audio_path = tmp_path / "audio.wav"
-    vocal = tmp_path / "vocal.wav"
-    vocal.write_bytes(b"cached vocals")
-    monkeypatch.setattr(orchestrator, "settings", SimpleNamespace(vocal_separation_enabled=True))
-    monkeypatch.setattr(orchestrator, "task_dir", lambda task_id: tmp_path)
-    monkeypatch.setattr(orchestrator, "cached_vocals_are_current", lambda *args: True)
-    monkeypatch.setattr(orchestrator, "separate_vocals", lambda *args: pytest.fail("不应重复分离"))
-
-    orchestrator.VocalSeparationHandler().process(context)
-
-    assert context.resources.vocal_audio_path == vocal
-
-
-def test_vocal_separation_handler_passes_audio_to_separator(monkeypatch, tmp_path):
-    """分离的输出路径应成为下个识别阶段的人声资源。"""
-    context = orchestrator.PipelineContext(params=_params(), on_event=lambda event: None)
-    audio = tmp_path / "audio.wav"
-    audio.write_bytes(b"audio")
-    output = tmp_path / "vocal.wav"
-    calls = []
-    monkeypatch.setattr(orchestrator, "settings", SimpleNamespace(vocal_separation_enabled=True))
-    monkeypatch.setattr(orchestrator, "task_dir", lambda task_id: tmp_path)
-
-    def fake_separator(audio_path, task_id, *, cancel_check=None):
-        calls.append((audio_path, task_id))
-        return output
-
-    monkeypatch.setattr(orchestrator, "separate_vocals", fake_separator)
-    context.resources.audio_path = audio
-
-    orchestrator.VocalSeparationHandler().process(context)
-
-    assert calls == [(audio, "t1")]
-    assert context.resources.vocal_audio_path == output
-
-
-def test_vocal_separation_handler_is_zero_cost_when_disabled(monkeypatch, tmp_path):
-    """关闭分离不创建目录、不调用外部模型，也不改变音频资源。"""
-    context = orchestrator.PipelineContext(params=_params(), on_event=lambda event: None)
-    audio = tmp_path / "audio.wav"
-    context.resources.audio_path = audio
-    monkeypatch.setattr(orchestrator, "settings", SimpleNamespace(vocal_separation_enabled=False))
-    monkeypatch.setattr(orchestrator, "task_dir", lambda task_id: pytest.fail("关闭时不应访问任务目录"))
-    monkeypatch.setattr(orchestrator, "separate_vocals", lambda *args: pytest.fail("关闭时不应调用分离"))
-
-    orchestrator.VocalSeparationHandler().process(context)
-
-    assert context.resources.vocal_audio_path is None
-    assert context.resources.audio_path == audio
-
-
-def test_vocal_separation_handler_converts_cancellation(monkeypatch, tmp_path):
-    """外部分离进程取消时，流水线应转换为统一的 PipelineCancelledError。"""
-    context = orchestrator.PipelineContext(params=_params(), on_event=lambda event: None)
-    context.resources.audio_path = tmp_path / "audio.wav"
-    monkeypatch.setattr(orchestrator, "settings", SimpleNamespace(vocal_separation_enabled=True))
-    monkeypatch.setattr(orchestrator, "task_dir", lambda task_id: tmp_path)
-    monkeypatch.setattr(orchestrator, "cached_vocals_are_current", lambda *args: False)
-    monkeypatch.setattr(
-        orchestrator,
-        "separate_vocals",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            orchestrator.VocalSeparationCancelledError("任务已被用户取消")
-        ),
-    )
-
-    with pytest.raises(orchestrator.PipelineCancelledError, match="任务已被用户取消"):
-        orchestrator.VocalSeparationHandler().process(context)
-
-
-def test_pipeline_upload_skips_download_and_honors_options(monkeypatch, tmp_path):
-    """上传模式：跳过下载、复用本地源文件，且字幕模式 / 烧录方式透传到下层。"""
-    src = tmp_path / "source.mp4"
-    src.write_bytes(b"VID")
-    monkeypatch.setattr(orchestrator, "task_dir", lambda tid: tmp_path)
-
-    # Mock AssetResolver requirements
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_source", lambda tid: src)
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_audio", lambda tid: Path("/d/audio.wav"))
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_original_srt", lambda tid: Path("/d/original.srt"))
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_translated_srt", lambda tid: Path("/d/translated.srt"))
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_output_video", lambda tid: Path("/d/output.mp4"))
-
-    calls = []
-    seen = {}
-
-    def fail_download(*a, **k):
-        calls.append("download")
-        raise AssertionError("上传模式不应调用下载")
-
-    def fake_extract(video, tid, **kw):
-        calls.append("extract")
-        seen["extract_video"] = video
-        return SimpleNamespace(audio_path=Path("/d/audio.wav"))
-
-    def fake_translate(srt, tid, s, t, **kw):
-        calls.append("translate")
-        seen["mode"] = kw.get("mode")
-        return SimpleNamespace(srt_path=Path("/d/translated.srt"))
-
-    def fake_burn(video, srt, tid, **kw):
-        calls.append("burn")
-        seen["burn"] = kw.get("mode")
-        seen["burn_video"] = video
-        return SimpleNamespace(output_path=Path("/d/output.mp4"))
-
-    def fake_transcribe(*a, **k):
-        calls.append("transcribe")
-        return SimpleNamespace(srt_path=Path("/d/original.srt"))
-
-    monkeypatch.setattr(orchestrator, "download_video", fail_download)
-    monkeypatch.setattr(orchestrator, "extract_audio", fake_extract)
-    monkeypatch.setattr(orchestrator, "transcribe", fake_transcribe)
-    monkeypatch.setattr(orchestrator, "translate_srt", fake_translate)
-    monkeypatch.setattr(orchestrator, "burn_subtitles", fake_burn)
-
-    params = PipelineParams(
-        task_id="t1", url="clip.mp4", source_lang="auto", target_lang="zh-CN",
-        mode="bilingual", burn="soft", source_type="upload", title="Clip",
-    )
-    events = []
-    result = run_pipeline(params, events.append)
-
-    assert calls == ["extract", "transcribe", "translate", "burn"]  # 无 download
-    assert seen["extract_video"] == src and seen["burn_video"] == src  # 复用上传源
-    assert seen["mode"] == "bilingual" and seen["burn"] == "soft"      # 透传生效
-    assert result.status == "SUCCESS" and result.title == "Clip"
-    assert result.outputs == {"video": "/d/output.mp4", "subtitle": "/d/translated.srt"}
-
-
-def test_pipeline_upload_missing_source_fails(monkeypatch, tmp_path):
-    """上传源文件缺失时应发 FAILED 并抛出。"""
-    monkeypatch.setattr(orchestrator, "task_dir", lambda tid: tmp_path)  # 空目录
-    monkeypatch.setattr("src.service.asset_resolver.task_dir", lambda tid: tmp_path)
-    params = PipelineParams(
-        task_id="t1", url="clip.mp4", source_lang="auto", target_lang="zh-CN",
-        source_type="upload",
-    )
-    events = []
-    with pytest.raises(orchestrator.PipelineError):
-        run_pipeline(params, events.append)
-    assert events[-1].status == "FAILED"
-
-
-def test_pipeline_upload_smooth_progress(monkeypatch, tmp_path):
-    """上传模式：生成平滑中间帧（如 0% -> 5% -> 10% -> 15% -> 20%）。"""
-    src = tmp_path / "source.mp4"
-    src.write_bytes(b"VID")
-    monkeypatch.setattr(orchestrator, "task_dir", lambda tid: tmp_path)
-
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_source", lambda tid: src)
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_audio", lambda tid: Path("/d/audio.wav"))
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_original_srt", lambda tid: Path("/d/original.srt"))
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_translated_srt", lambda tid: Path("/d/translated.srt"))
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_output_video", lambda tid: Path("/d/output.mp4"))
-
-    monkeypatch.setattr(orchestrator, "download_video", lambda *a, **k: None)
-    monkeypatch.setattr(orchestrator, "extract_audio", lambda *a, **k: None)
-    monkeypatch.setattr(orchestrator, "transcribe", lambda *a, **k: None)
-    monkeypatch.setattr(orchestrator, "translate_srt", lambda *a, **k: None)
-    monkeypatch.setattr(orchestrator, "burn_subtitles", lambda *a, **k: None)
-
-    params = PipelineParams(
-        task_id="t1", url="clip.mp4", source_lang="auto", target_lang="zh-CN",
-        source_type="upload", title="Clip",
-    )
-    events = []
-    run_pipeline(params, events.append)
-
-    dl_progs = [e.progress for e in events if e.status == "DOWNLOADING"]
-    assert dl_progs == [0, 5, 10, 15, 20]
-
-
-def test_pipeline_upload_download_only_smooth_progress(monkeypatch, tmp_path):
-    """仅下载模式+上传：平滑过渡至 100%。"""
-    src = tmp_path / "source.mp4"
-    src.write_bytes(b"VID")
-    monkeypatch.setattr(orchestrator, "task_dir", lambda tid: tmp_path)
-
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_source", lambda tid: src)
-
-    params = PipelineParams(
-        task_id="t1", url="clip.mp4", source_lang="auto", target_lang="zh-CN",
-        source_type="upload", need_subtitle=False, title="Clip",
-    )
-    events = []
-    run_pipeline(params, events.append)
-
-    dl_progs = [e.progress for e in events if e.status == "DOWNLOADING"]
-    assert dl_progs == [0, 25, 50, 75, 100]
-
-
-# ---------- need_subtitle=False：仅下载/仅载入，跳过识别/翻译/烧录 ----------
-
-def test_pipeline_url_only_download_skips_subtitle_steps(monkeypatch):
-    """链接模式 + need_subtitle=False：只走 download_video，识别/翻译/烧录全跳过。"""
-    calls = []
-
-    def fake_download(url, tid, on_progress=None, **kw):
-        calls.append("download")
-        # 模拟下载内部 50% 进度，应被映射到 [0, 100] 整段（因为整条流水线只剩它）
-        if on_progress:
-            on_progress(SimpleNamespace(percent=50))
-        return SimpleNamespace(video_path=Path("/d/source.mp4"), title="URL Title")
-
-    def fail_extract(*a, **k):
-        calls.append("extract")
-        raise AssertionError("need_subtitle=False 不应调用 extract")
-
-    def fail_transcribe(*a, **k):
-        calls.append("transcribe")
-        raise AssertionError("need_subtitle=False 不应调用 transcribe")
-
-    def fail_translate(*a, **k):
-        calls.append("translate")
-        raise AssertionError("need_subtitle=False 不应调用 translate")
-
-    def fail_burn(*a, **k):
-        calls.append("burn")
-        raise AssertionError("need_subtitle=False 不应调用 burn")
-
-    monkeypatch.setattr(orchestrator, "download_video", fake_download)
-    monkeypatch.setattr(orchestrator, "extract_audio", fail_extract)
-    monkeypatch.setattr(orchestrator, "transcribe", fail_transcribe)
-    monkeypatch.setattr(orchestrator, "translate_srt", fail_translate)
-    monkeypatch.setattr(orchestrator, "burn_subtitles", fail_burn)
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_source", lambda tid: Path("/d/source.mp4"))
-
-    params = PipelineParams(
-        task_id="t1", url="https://x/v", source_lang="en", target_lang="ja",
-        mode="bilingual", burn="soft", model="medium",
-        need_subtitle=False,
-    )
-    events = []
-    result = run_pipeline(params, events.append)
-
-    assert calls == ["download"]  # 后续步骤零调用
-    assert result.status == "SUCCESS"
-    assert result.title == "URL Title"
-    # 仅下载场景：outputs 只暴露 video，不应有 subtitle 键
-    assert result.outputs == {"video": "/d/source.mp4"}
-    # 进度 50% -> 0 + 0.5*(100-0) = 50；最终 100
-    assert events[-1].progress == 100
-    assert 50 in [e.progress for e in events if e.status == "DOWNLOADING"]
-
-
-def test_pipeline_upload_only_load_skips_subtitle_steps(monkeypatch, tmp_path):
-    """上传模式 + need_subtitle=False：跳过下载和识别/翻译/烧录。"""
-    src = tmp_path / "source.mp4"
-    src.write_bytes(b"VID")
-    monkeypatch.setattr(orchestrator, "task_dir", lambda tid: tmp_path)
-    monkeypatch.setattr("src.service.asset_resolver.task_dir", lambda tid: tmp_path)
-
-    def fail_download(*a, **k):
-        raise AssertionError("need_subtitle=False + upload 不应调用 download")
-
-    def fail_extract(*a, **k):
-        raise AssertionError("need_subtitle=False 不应调用 extract")
-
-    def fail_transcribe(*a, **k):
-        raise AssertionError("need_subtitle=False 不应调用 transcribe")
-
-    def fail_translate(*a, **k):
-        raise AssertionError("need_subtitle=False 不应调用 translate")
-
-    def fail_burn(*a, **k):
-        raise AssertionError("need_subtitle=False 不应调用 burn")
-
-    monkeypatch.setattr(orchestrator, "download_video", fail_download)
-    monkeypatch.setattr(orchestrator, "extract_audio", fail_extract)
-    monkeypatch.setattr(orchestrator, "transcribe", fail_transcribe)
-    monkeypatch.setattr(orchestrator, "translate_srt", fail_translate)
-    monkeypatch.setattr(orchestrator, "burn_subtitles", fail_burn)
-
-    params = PipelineParams(
-        task_id="t1", url="clip.mp4", source_lang="auto", target_lang="zh-CN",
-        source_type="upload", need_subtitle=False, title="Clip",
-    )
-    events = []
-    result = run_pipeline(params, events.append)
-
-    # 显式给定 title 时使用它
-    assert result.status == "SUCCESS" and result.title == "Clip"
-    assert result.outputs == {"video": str(src)}
-    # 状态序列应只有 DOWNLOADING + SUCCESS
-    statuses = [e.status for e in events]
-    assert "EXTRACTING" not in statuses
-    assert "TRANSCRIBING" not in statuses
-    assert "TRANSLATING" not in statuses
-    assert "BURNING" not in statuses
-    assert statuses[-1] == "SUCCESS"
-
-
-def test_pipeline_upload_only_load_title_falls_back_to_stem(monkeypatch, tmp_path):
-    """上传 + need_subtitle=False：未给 title 时回退到源文件名 stem。"""
-    src = tmp_path / "source.mp4"
-    src.write_bytes(b"VID")
-    monkeypatch.setattr(orchestrator, "task_dir", lambda tid: tmp_path)
-    monkeypatch.setattr("src.service.asset_resolver.task_dir", lambda tid: tmp_path)
-
-    monkeypatch.setattr(orchestrator, "download_video",
-                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应调用 download")))
-    for name in ("extract_audio", "transcribe", "translate_srt", "burn_subtitles"):
-        monkeypatch.setattr(orchestrator, name, lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应调用 " + name)))
-
-    params = PipelineParams(
-        task_id="t1", url="clip.mp4", source_lang="auto", target_lang="zh-CN",
-        source_type="upload", need_subtitle=False,  # 未指定 title
-    )
-    result = run_pipeline(params, lambda e: None)
-    assert result.title == "source"
-
-
-def test_pipeline_url_only_download_emits_only_downloading_events(monkeypatch):
-    """need_subtitle=False 时事件序列应只有 DOWNLOADING + SUCCESS。"""
-    monkeypatch.setattr(orchestrator, "download_video",
-                        lambda url, tid, on_progress=None, **kw: SimpleNamespace(
-                            video_path=Path("/d/source.mp4"), title="T"))
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_source", lambda tid: Path("/d/source.mp4"))
-    for name in ("extract_audio", "transcribe", "translate_srt", "burn_subtitles"):
-        monkeypatch.setattr(orchestrator, name, lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应调用 " + name)))
-
-    params = PipelineParams(
-        task_id="t1", url="https://x", source_lang="auto", target_lang="zh-CN",
-        need_subtitle=False,
-    )
-    events = []
-    run_pipeline(params, events.append)
-
-    statuses = [e.status for e in events]
-    # 不应有 EXTRACTING / TRANSCRIBING / TRANSLATING / BURNING
-    assert "EXTRACTING" not in statuses
-    assert "TRANSCRIBING" not in statuses
-    assert "TRANSLATING" not in statuses
-    assert "BURNING" not in statuses
-    # 结尾是 SUCCESS
-    assert statuses[-1] == "SUCCESS"
-
-
-def test_pipeline_transcribing_cancelled_raises_pipeline_cancelled(monkeypatch):
-    """TRANSCRIBING 阶段发生 TranscribeCancelledError 时应转换为 PipelineCancelledError 抛出。"""
-    monkeypatch.setattr(orchestrator, "download_video",
-                        lambda *a, **k: SimpleNamespace(video_path=Path("/d/source.mp4"), title="My Video"))
-    monkeypatch.setattr(orchestrator, "extract_audio",
-                        lambda *a, **k: SimpleNamespace(audio_path=Path("/d/audio.wav")))
-
-    def cancelling_transcribe(*args, **kwargs):
-        cancel_check = kwargs.get("cancel_check")
-        if cancel_check:
-            cancel_check()
-        raise TranscribeCancelledError("transcription cancelled")
-
-    monkeypatch.setattr(orchestrator, "transcribe", cancelling_transcribe)
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_source", lambda tid: Path("/d/source.mp4"))
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_audio", lambda tid: Path("/d/audio.wav"))
-
-    events = []
-    with pytest.raises(PipelineCancelledError, match="任务已被用户取消"):
-        run_pipeline(_params(), events.append)
-
-
-def test_in_memory_cancellation_signal():
-    tid = "test_cancel_sig"
-    orchestrator.unregister_cancellation_signal(tid)
-    assert not orchestrator.is_cancelled_signal(tid)
-
-    orchestrator.register_cancellation_signal(tid)
-    assert not orchestrator.is_cancelled_signal(tid)
-
-    orchestrator.set_cancelled_signal(tid)
-    assert orchestrator.is_cancelled_signal(tid)
-
-    with pytest.raises(orchestrator.PipelineCancelledError):
-        orchestrator._check_cancelled(tid)
-
-    orchestrator.unregister_cancellation_signal(tid)
-    assert not orchestrator.is_cancelled_signal(tid)
-
-
-def test_pipeline_cancelled_during_emit(monkeypatch):
-    """验证 run_pipeline 在 emit 过程中检测到取消信号时即刻抛出 PipelineCancelledError，无需 SQLite 操作。"""
-    tid = "t_cancel_emit"
-    orchestrator.register_cancellation_signal(tid)
-
-    def fake_download(url, task_id, on_progress=None, **kw):
-        # 触发 progress 上报
-        if on_progress:
-            on_progress(SimpleNamespace(percent=50))
-            # 模拟在下载过程中用户点击了取消
-            orchestrator.set_cancelled_signal(tid)
-            on_progress(SimpleNamespace(percent=60))
-        return SimpleNamespace(video_path=Path("/d/source.mp4"), title="Cancel Test")
-
-    monkeypatch.setattr(orchestrator, "download_video", fake_download)
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_source", lambda t: Path("/d/source.mp4"))
-
-    params = PipelineParams(
-        task_id=tid,
-        url="http://x/v",
-        source_lang="auto",
-        target_lang="zh-CN",
-    )
-
-    events = []
-    with pytest.raises(PipelineCancelledError, match="任务已被用户取消"):
-        run_pipeline(params, events.append)
-
-    orchestrator.unregister_cancellation_signal(tid)
-
-
-def test_pipeline_cancellation_cleans_current_stage_artifacts(monkeypatch, tmp_path):
-    """责任链取消时，清理当前阶段的部分产物并保留可续跑输入。"""
-    tid = "t_cancel_cleanup"
-    monkeypatch.setattr("src.service.asset_resolver.task_dir", lambda task_id: tmp_path)
-    for name, content in {
-        "source.mp4": b"video",
-        "audio.wav": b"audio",
-        "original.srt": b"original",
-        "translated.srt": b"translated",
-    }.items():
-        (tmp_path / name).write_bytes(content)
-
-    def cancelling_burn(video, subtitle, task_id, on_progress=None, **kwargs):
-        (tmp_path / "output.mp4").write_bytes(b"partial output")
-        orchestrator.set_cancelled_signal(tid)
-        on_progress(SimpleNamespace(percent=50))
-
-    monkeypatch.setattr(orchestrator, "burn_subtitles", cancelling_burn)
-    orchestrator.register_cancellation_signal(tid)
-    events = []
-    params = PipelineParams(
-        task_id=tid, url="https://x/v", source_lang="auto", target_lang="zh-CN",
-    )
-
-    try:
-        with pytest.raises(PipelineCancelledError, match="任务已被用户取消"):
-            run_pipeline(params, events.append)
-    finally:
-        orchestrator.unregister_cancellation_signal(tid)
-
-    assert (tmp_path / "source.mp4").exists()
-    assert (tmp_path / "audio.wav").exists()
-    assert (tmp_path / "original.srt").exists()
-    assert (tmp_path / "translated.srt").exists()
-    assert not (tmp_path / "output.mp4").exists()
-    assert not (tmp_path / "tmp_burn.srt").exists()
-    assert all(event.status != "FAILED" for event in events)

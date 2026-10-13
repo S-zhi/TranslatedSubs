@@ -125,6 +125,8 @@ def translate_texts(
     on_batch: Optional[BatchHook] = None,
     engine_config=None,
     cancel_check: Optional[Callable[[], None]] = None,
+    batch_size: Optional[int] = None,
+    local_batch_size: Optional[int] = None,
 ) -> List[str]:
     """翻译一批文本，保持顺序与数量一致。
 
@@ -146,12 +148,17 @@ def translate_texts(
                 code="unsupported_language",
             )
         manager = get_translation_model_manager()
-        batch_size = max(1, getattr(settings, "local_translate_batch_size", 16))
+        effective_local_batch_size = max(
+            1,
+            local_batch_size
+            if local_batch_size is not None
+            else getattr(settings, "local_translate_batch_size", 16),
+        )
         translated: List[str] = []
-        for start in range(0, len(texts), batch_size):
+        for start in range(0, len(texts), effective_local_batch_size):
             if cancel_check is not None:
                 cancel_check()
-            batch = texts[start:start + batch_size]
+            batch = texts[start:start + effective_local_batch_size]
             try:
                 translated.extend(manager.translate_texts(batch, cancel_check=cancel_check))
             except TranslationModelError as exc:
@@ -168,10 +175,15 @@ def translate_texts(
     if engine_config is None:
         raise TranslateError("未提供翻译引擎配置，请从已保存的引擎配置启动", code="missing_engine_config")
 
-    batch_size = max(1, settings.translate_batch_size)
+    effective_batch_size = max(
+        1,
+        batch_size if batch_size is not None else settings.translate_batch_size,
+    )
     out: List[str] = []
-    for start in range(0, len(texts), batch_size):
-        batch = texts[start:start + batch_size]
+    for start in range(0, len(texts), effective_batch_size):
+        if cancel_check is not None:
+            cancel_check()
+        batch = texts[start:start + effective_batch_size]
         translated = _translate_with_fallback(
             batch,
             source_lang,
@@ -232,6 +244,11 @@ def _translate_with_fallback(
         if len(translated) == len(missing_indices):
             return [partial[idx] for idx in indices]
     except Exception as exc:
+        # Cancellation is control flow. In particular, the recursive fallback
+        # must not turn a PluginCancelled (or another cancellation signal) into
+        # a partial translation or a smaller retry batch.
+        if cancel_check is not None:
+            cancel_check()
         err_code = getattr(exc, "code", None)
         if err_code in (
             "unauthorized", "missing_api_key", "rate_limited", "insufficient_quota",
@@ -409,6 +426,8 @@ def translate_srt(
     api_key: Optional[str] = None,
     engine_config=None,
     cancel_check: Optional[Callable[[], None]] = None,
+    batch_size: Optional[int] = None,
+    local_batch_size: Optional[int] = None,
 ) -> TranslateResult:
     """翻译 SRT 文件到 data/{task_id}/translated.srt，时间轴保持不变。
 
@@ -443,7 +462,8 @@ def translate_srt(
     translated = translate_texts(
         [s.text for s in subs], source_lang, target_lang,
         api_key=api_key, on_batch=_on_batch, engine_config=engine_config,
-        cancel_check=cancel_check,
+        cancel_check=cancel_check, batch_size=batch_size,
+        local_batch_size=local_batch_size,
     )
 
     out_subs = [

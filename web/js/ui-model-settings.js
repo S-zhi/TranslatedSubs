@@ -3,7 +3,7 @@
 import { $, $$ } from "./utils.js";
 import { Api } from "./api.js";
 import { toast } from "./toast.js";
-import { state } from "./store.js";
+import { state, setModelKind, subscribe } from "./store.js";
 
 const KINDS = ["llm", "whisper", "tts"];
 const LABELS = { llm: "LLM", whisper: "Whisper", tts: "TTS" };
@@ -20,6 +20,103 @@ const MODEL_ICONS = { llm: "ph-brain", whisper: "ph-waveform", tts: "ph-speaker-
 let settings = normalizeModelSettings(DEFAULTS);
 let activeKind = "llm";
 let loading = false;
+let whisperInventory = [];
+let refreshEpoch = 0;
+let refreshPending = false;
+let whisperSaveEpoch = 0;
+let whisperSaving = false;
+let whisperFormDirty = false;
+
+function normalizedLocalModel(value) {
+  return String(value || "").replace(/^local:/, "").trim();
+}
+
+function mergeWhisperInventory(config, items = whisperInventory) {
+  const ready = items.filter((item) => item.status === "READY");
+  const currentName = normalizedLocalModel(config?.model);
+  const old = config?.models || [];
+  const models = old.map((model) => {
+    const inventoryItem = items.find((item) => normalizedLocalModel(item.name) === normalizedLocalModel(model.model));
+    return { ...model, status: inventoryItem?.status || "MISSING", isCurrent: false };
+  });
+  for (const item of ready) {
+    const modelName = normalizedLocalModel(item.name);
+    const existing = models.find((model) => normalizedLocalModel(model.model) === modelName);
+    const readyModel = {
+      ...(existing || {}), id: existing?.id || `whisper-${item.name}`, name: item.label || item.name,
+      provider: "local", model: `local:${item.name}`, enabled: existing?.enabled ?? config?.enabled !== false, status: "READY",
+      isCurrent: false,
+    };
+    if (existing) Object.assign(existing, readyModel);
+    else models.push(readyModel);
+  }
+  const active = models.find((model) => normalizedLocalModel(model.model) === currentName);
+  if (active) active.isCurrent = true;
+  const selected = items.find((item) => normalizedLocalModel(item.name) === currentName);
+  return { ...config, provider: "local", status: selected?.status || (config?.model ? "MISSING" : "NOT_INSTALLED"), models };
+}
+
+function updateWhisperModelOptions() {
+  const select = $("#whisperCurrentModel");
+  if (!select) return;
+  const selected = settings.whisper?.model || "";
+  const items = whisperInventory.filter((item) => item.status === "READY");
+  const options = items.map((item) => {
+    const option = document.createElement("option");
+    option.value = `local:${item.name}`;
+    option.textContent = item.label || item.name;
+    return option;
+  });
+  const selectedItem = whisperInventory.find((item) => normalizedLocalModel(item.name) === normalizedLocalModel(selected));
+  const readyCurrent = items.some((item) => `local:${item.name}` === selected);
+  if (selected && !readyCurrent) {
+    const option = document.createElement("option");
+    const status = String(selectedItem?.status || settings.whisper?.status || "MISSING").toUpperCase();
+    const statusLabel = {
+      ERROR: "检查失败",
+      DOWNLOADING: "下载中",
+      MISSING: "缺失",
+      NOT_INSTALLED: "未安装",
+    }[status] || "缺失";
+    const displayName = selectedItem?.label || selectedItem?.name || selected;
+    option.value = selected;
+    option.textContent = `${displayName} · 当前模型${statusLabel}`;
+    option.disabled = true;
+    option.selected = true;
+    options.unshift(option);
+  }
+  select.replaceChildren(...options);
+  select.value = selected;
+  const hint = $("#whisperSettingsHint");
+  if (hint) hint.textContent = readyCurrent ? "当前模型已就绪" : selected ? "当前模型缺失或未就绪，请选择一个已就绪模型" : "请选择一个已就绪的本地模型";
+}
+
+function setWhisperFeedback(message, isError = false) {
+  const feedback = $("#whisperSettingsFeedback");
+  if (!feedback) return;
+  feedback.hidden = !message;
+  feedback.textContent = message;
+  feedback.setAttribute("role", isError ? "alert" : "status");
+}
+
+function acceptWhisperInventory(items = [], authoritativeWhisper = null) {
+  whisperInventory = Array.isArray(items) ? items : [];
+  const previousModel = settings.whisper?.model;
+  if (authoritativeWhisper && typeof authoritativeWhisper === "object") {
+    settings.whisper = normalizeModelSettings({ whisper: authoritativeWhisper }).whisper;
+  }
+  settings.whisper = mergeWhisperInventory(settings.whisper);
+  if (!whisperFormDirty) fillForm("whisper");
+  else if (previousModel !== settings.whisper.model) {
+    const modelControl = $('[data-model-form="whisper"] [name="model"]');
+    if (modelControl) modelControl.value = settings.whisper.model;
+    const current = settings.whisper.models?.find((model) => model.isCurrent);
+    const meta = $("#modelMetaWhisper");
+    if (meta) meta.textContent = `当前模型：${current?.name || settings.whisper.model || "未选择模型"} · ${settings.whisper.status === "READY" ? "已就绪" : settings.whisper.status === "ERROR" ? "检查失败" : settings.whisper.status === "DOWNLOADING" ? "下载中" : "当前模型不可用"} · 本地运行参数由此页管理`;
+  }
+  applyStatus("whisper");
+  updateWhisperModelOptions();
+}
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -51,8 +148,13 @@ function setStatus(kind, state, text) {
 
 function statusFor(kind, config) {
   if (config?.enabled === false) return ["unconfigured", "未启用"];
-  if (kind === "whisper" && config?.provider === "local") {
-    return [String(config.status || "unknown").toLowerCase() === "ready" ? "available" : "unknown", String(config.status || "待检查").toLowerCase() === "ready" ? "已就绪" : "待检查"];
+  if (kind === "whisper") {
+    const status = String(config?.status || "NOT_INSTALLED").toUpperCase();
+    if (status === "READY") return ["available", "已就绪"];
+    if (status === "ERROR") return ["unavailable", "检查失败"];
+    if (status === "DOWNLOADING") return ["checking", "下载中"];
+    if (status === "MISSING") return ["unavailable", "当前模型缺失"];
+    return ["unknown", "未安装"];
   }
   if (kind === "tts" && config?.provider === "kokoro") return ["available", "本地可用"];
   return [config?.hasApiKey || kind === "whisper" ? "available" : "unconfigured", config?.hasApiKey || kind === "whisper" ? "已配置" : "待配置"];
@@ -82,8 +184,15 @@ function fillForm(kind) {
   }
   const meta = $(`#modelMeta${kind[0].toUpperCase()}${kind.slice(1)}`);
   if (meta) {
-    const keyNote = ["llm", "tts"].includes(kind) && config.hasApiKey ? "API Key 已配置" : "未保存新的密钥";
-    meta.textContent = config.updatedAt ? `上次更新 ${new Date(config.updatedAt).toLocaleString()} · ${keyNote}` : keyNote;
+    if (kind === "whisper") {
+      const current = config.models?.find((model) => model.isCurrent || normalizedLocalModel(model.model) === normalizedLocalModel(config.model));
+      const name = current?.name || config.model || "未选择模型";
+      const readiness = String(current?.status || config.status || "").toUpperCase() === "READY" ? "已就绪" : "需检查本地模型库";
+      meta.textContent = `当前模型：${name} · ${readiness} · 本地运行参数由此页管理`;
+    } else {
+      const keyNote = config.hasApiKey ? "API Key 已配置" : "未保存新的密钥";
+      meta.textContent = config.updatedAt ? `上次更新 ${new Date(config.updatedAt).toLocaleString()} · ${keyNote}` : keyNote;
+    }
   }
   applyStatus(kind);
   renderCatalog(kind);
@@ -91,7 +200,7 @@ function fillForm(kind) {
 
 function modelStatus(kind, model) {
   if (model.enabled === false) return ["unconfigured", "未启用"];
-  if (kind === "whisper" && model.provider === "local") return ["available", "本地可用"];
+  if (kind === "whisper") return [model.status === "READY" ? "available" : "unknown", model.status === "READY" ? "已就绪" : "未安装"];
   if (kind === "tts" && model.provider === "kokoro") return ["available", "本地可用"];
   return model.hasApiKey || model.apiKey ? ["available", "已接入"] : ["unconfigured", "待配置"];
 }
@@ -122,6 +231,7 @@ function escapeHtml(value) {
 }
 
 export async function selectCatalogModel(kind, id) {
+  if (kind === "whisper") return selectWhisperModel(id);
   const model = settings[kind]?.models?.find((item) => item.id === id);
   if (!model) return;
   const previous = clone(settings[kind]);
@@ -138,6 +248,62 @@ export async function selectCatalogModel(kind, id) {
     setStatus(kind, "unavailable", "保存失败");
     toast(error.message || `保存 ${LABELS[kind]} 当前模型失败`, "ph-warning-circle");
   }
+}
+
+function cleanWhisperPayload(config) {
+  const allowed = new Set(["enabled", "provider", "model", "language", "device", "threads", "wordTimestamps", "baseUrl", "models"]);
+  const fields = Object.fromEntries(Object.entries(config).filter(([key]) => allowed.has(key)));
+  const modelFields = new Set(["id", "name", "provider", "model", "enabled", "isCurrent", "language", "device", "threads", "wordTimestamps"]);
+  const models = (config.models || []).map((model) => Object.fromEntries(Object.entries(model).filter(([key]) => modelFields.has(key))));
+  return { ...fields, provider: "local", models };
+}
+
+async function saveWhisper(nextConfig, successLabel = "Whisper 设置已保存") {
+  if (whisperSaving) return false;
+  whisperSaving = true;
+  const selector = $("#whisperCurrentModel");
+  if (selector) selector.disabled = true;
+  const saveEpoch = ++whisperSaveEpoch;
+  refreshEpoch += 1;
+  const previous = clone(settings.whisper);
+  const clean = cleanWhisperPayload(nextConfig);
+  try {
+    const response = await Api.updateModelSettings({ whisper: clean });
+    if (saveEpoch !== whisperSaveEpoch) return false;
+    if (!response?.whisper) throw new Error("服务器未返回 Whisper 设置，无法确认保存结果");
+    const authoritative = normalizeModelSettings({ ...settings, ...response }).whisper;
+    const target = normalizedLocalModel(clean.model);
+    if (target && normalizedLocalModel(authoritative.model) !== target) throw new Error("服务器未确认当前 Whisper 模型，请刷新后重试");
+    settings.whisper = mergeWhisperInventory(authoritative);
+    fillForm("whisper");
+    updateWhisperModelOptions();
+    document.dispatchEvent(new CustomEvent("model-settings-change", { detail: { settings: { whisper: authoritative }, source: "mutation" } }));
+    toast(successLabel, "ph-check-circle");
+    setWhisperFeedback(successLabel);
+    return true;
+  } catch (error) {
+    if (saveEpoch !== whisperSaveEpoch) return false;
+    settings.whisper = previous;
+    fillForm("whisper");
+    updateWhisperModelOptions();
+    setStatus("whisper", "unavailable", "保存失败");
+    setWhisperFeedback(error.message || "保存 Whisper 设置失败", true);
+    toast(error.message || "保存 Whisper 设置失败", "ph-warning-circle");
+    return false;
+  } finally {
+    whisperSaving = false;
+    if (selector) selector.disabled = false;
+  }
+}
+
+async function selectWhisperModel(id) {
+  const model = settings.whisper?.models?.find((item) => item.id === id);
+  if (!model || model.status !== "READY") return;
+  if (settings.whisper?.model === model.model) return;
+  const models = settings.whisper.models.map((item) => ({ ...item, isCurrent: false }));
+  const target = models.find((item) => item.id === id);
+  if (target) target.isCurrent = true;
+  await saveWhisper({ ...settings.whisper, provider: "local", model: model.model, enabled: true, models }, `${model.name} 已设为当前模型`);
 }
 
 function readForm(kind) {
@@ -163,9 +329,11 @@ function readForm(kind) {
   return payload;
 }
 
-function selectKind(kind) {
+function selectKind(kind, { syncStore = true } = {}) {
   if (!KINDS.includes(kind)) return;
   activeKind = kind;
+  if (syncStore) setModelKind(kind);
+  document.dispatchEvent(new CustomEvent("modelkindchange", { detail: { kind } }));
   $$('[data-model-kind]').forEach((button) => {
     const active = button.dataset.modelKind === kind;
     button.classList.toggle("is-active", active);
@@ -191,21 +359,37 @@ function setSummary(text) {
 }
 
 async function refresh() {
-  if (loading) return;
+  if (loading) { refreshPending = true; return; }
+  const epoch = ++refreshEpoch;
   let failed = false;
   setLoading(true);
   KINDS.forEach((kind) => setStatus(kind, "checking", "读取中"));
   try {
-    settings = normalizeModelSettings(await Api.getModelSettings());
+    const [modelSettings, inventory] = await Promise.all([Api.getModelSettings(), Api.listLocalModels()]);
+    if (epoch !== refreshEpoch) return;
+    whisperInventory = Array.isArray(inventory) ? inventory : [];
+    settings = normalizeModelSettings(modelSettings);
+    settings.whisper = mergeWhisperInventory(settings.whisper);
+    document.dispatchEvent(new CustomEvent("model-settings-change", { detail: { settings, source: "refresh" } }));
     KINDS.forEach(fillForm);
+    updateWhisperModelOptions();
   } catch (error) {
+    if (epoch !== refreshEpoch) return;
     failed = true;
+    // A failed refresh must not leave old inventory entries available for activation.
+    whisperInventory = [];
+    settings.whisper = mergeWhisperInventory(settings.whisper);
     KINDS.forEach(fillForm);
     KINDS.forEach((kind) => setStatus(kind, "unavailable", "接口待接入"));
+    updateWhisperModelOptions();
     toast(error.message || "读取模型设置失败", "ph-warning-circle");
   } finally {
     setLoading(false);
     if (failed) setSummary("接口待接入");
+    if (refreshPending && state.view === "model-settings") {
+      refreshPending = false;
+      queueMicrotask(() => void refresh());
+    }
   }
 }
 
@@ -217,6 +401,18 @@ async function save(kind, event) {
   try {
     const values = readForm(kind);
     const current = settings[kind] || DEFAULTS[kind];
+    if (kind === "whisper") {
+      const selected = values.model;
+      if (!selected || !whisperInventory.some((item) => item.status === "READY" && `local:${item.name}` === selected)) {
+        throw new Error("请选择一个已就绪的本地 Whisper 模型");
+      }
+      const models = current.models.map((model) => ({ ...model, isCurrent: false }));
+      const targetId = current.models.find((item) => normalizedLocalModel(item.model) === normalizedLocalModel(selected))?.id;
+      const target = models.find((model) => model.id === targetId);
+      if (target) Object.assign(target, values, { isCurrent: true, model: selected, provider: "local" });
+      await saveWhisper({ ...current, ...values, provider: "local", enabled: values.enabled !== false, model: selected, models });
+      return;
+    }
     const models = current.models || [];
     const activeId = models.find((model) => model.isCurrent)?.id || models[0]?.id;
     const next = {
@@ -237,6 +433,7 @@ async function save(kind, event) {
 }
 
 function openModelDialog(kind, model = null) {
+  if (kind === "whisper") return;
   const dialog = $("#modelCreateDialog");
   const form = $("#modelCreateForm");
   if (!dialog || !form) return;
@@ -245,9 +442,7 @@ function openModelDialog(kind, model = null) {
   $("#modelCreateDialogTitle").textContent = `新增 ${MODEL_NAMES[kind]} 模型`;
   $("#modelCreateDialogIntro").textContent = `填写 ${MODEL_NAMES[kind]} 连接信息，保存后会出现在当前类型的模型卡片中。`;
   const provider = $("#modelCreateProvider");
-  provider.replaceChildren(...(kind === "whisper"
-    ? [["local", "本地模型"], ["replicate", "Replicate 云端"], ["custom", "自定义服务"]]
-    : kind === "tts"
+  provider.replaceChildren(...(kind === "tts"
       ? [["kokoro", "Kokoro · 本地 CPU"], ["openai", "OpenAI 兼容接口"], ["elevenlabs", "ElevenLabs"]]
       : [["openai", "OpenAI 兼容接口"], ["deepseek", "DeepSeek"], ["custom", "自定义服务"]]).map(([value, label]) => { const option = document.createElement("option"); option.value = value; option.textContent = label; return option; }));
   form.reset();
@@ -396,10 +591,31 @@ export function initModelSettings() {
     button.setAttribute("aria-label", collapsed ? "展开模型导航" : "收起模型导航");
     button.title = collapsed ? "展开模型导航" : "收起模型导航";
   });
-  document.addEventListener("viewchange", (event) => {
-    if (event.detail?.view === "model-settings") void refresh();
+  document.addEventListener("whisper-models-change", (event) => acceptWhisperInventory(event.detail?.items, event.detail?.whisper));
+  document.addEventListener("whisper-model-select", async (event) => {
+    const wanted = normalizedLocalModel(event.detail?.name);
+    const model = settings.whisper?.models?.find((item) => normalizedLocalModel(item.model) === wanted && item.status === "READY");
+    if (model) await selectWhisperModel(model.id);
   });
-  selectKind(activeKind);
+  $("#whisperCurrentModel")?.addEventListener("change", async (event) => {
+    const model = settings.whisper?.models?.find((item) => item.model === event.target.value);
+    if (model) await selectWhisperModel(model.id);
+  });
+  subscribe(({ type }) => {
+    if (["model-kind", "legacy-model-navigation"].includes(type) && state.modelKind !== activeKind) selectKind(state.modelKind, { syncStore: false });
+  });
+  document.addEventListener("viewchange", (event) => {
+    if (event.detail?.view !== "model-settings") return;
+    const locationKind = new URLSearchParams(window.location?.search || "").get("kind");
+    const desiredKind = locationKind === "whisper" ? "whisper" : state.modelKind;
+    if (desiredKind !== activeKind) selectKind(desiredKind, { syncStore: false });
+    if (activeKind !== "whisper") void refresh();
+  });
+  selectKind(state.modelKind || activeKind);
   KINDS.forEach(fillForm);
-  if (state.view === "model-settings") void refresh();
+  const whisperForm = $('[data-model-form="whisper"]');
+  whisperForm?.addEventListener("input", () => { whisperFormDirty = true; });
+  whisperForm?.addEventListener("change", () => { whisperFormDirty = true; });
+  whisperForm?.addEventListener("submit", () => { whisperFormDirty = false; });
+  if (state.view === "model-settings" && activeKind !== "whisper") void refresh();
 }

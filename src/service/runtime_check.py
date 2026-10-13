@@ -17,6 +17,7 @@ from src.core.ffmpeg_utils import has_subtitles_filter
 from src.service.translation_model_manager import get_translation_model_manager
 from src.store import DEFAULT_TRANSLATION_ENGINE_ID
 from src.store.model_settings_store import ModelSettingsStore
+from src.service.model_runtime import active_model_card, whisper_effective_config, whisper_inventory_status
 
 
 def _check_binary(command: str) -> str:
@@ -83,11 +84,7 @@ def build_readiness() -> dict[str, Any]:
         for kind, config in model_store.get_all().items():
             models = [item for item in config.get("models", []) if isinstance(item, dict)]
             active = next((item for item in models if item.get("isCurrent")), None)
-            item = dict(config)
-            if active:
-                item.update(active)
-                if not item.get("apiKey") and config.get("apiKey"):
-                    item["apiKey"] = config["apiKey"]
+            item = whisper_effective_config(model_store) if kind == "whisper" else active_model_card(model_store, kind) or dict(config)
             model_settings_status[kind] = {
                 "runtimeManaged": bool(config.get("_runtimeManaged")),
                 "enabled": bool(item.get("enabled", True)),
@@ -96,6 +93,11 @@ def build_readiness() -> dict[str, Any]:
                 "hasApiKey": bool(item.get("apiKey") or item.get("api_key")),
                 "cardId": active.get("id") if active else None,
             }
+            if kind == "whisper":
+                from src.service.model_manager import model_manager
+                model_settings_status[kind]["status"] = whisper_inventory_status(
+                    item, model_manager.list_models(), missing_uninstalled=bool(config.get("_runtimeManaged")),
+                )
     except Exception:
         model_settings_status = {}
 
@@ -116,19 +118,10 @@ def build_readiness() -> dict[str, Any]:
             ready = bool(status.get("hasApiKey") and status.get("provider") and status.get("model"))
             if not ready:
                 reason = "missing_api_key_or_model"
-        elif kind == "whisper" and managed:
-            provider = str(status.get("provider") or "local").lower()
-            if provider in {"local", "local_whisper", "whisper", "faster_whisper"}:
-                try:
-                    from src.service.model_manager import model_manager
-                    ready = model_manager.is_ready(str(status.get("model") or "").removeprefix("local:"))
-                except Exception:
-                    ready = False
-                if not ready:
-                    reason = "local_model_not_ready"
-            else:
-                ready = False
-                reason = "unsupported_provider"
+        elif kind == "whisper":
+            ready = status.get("status") == "READY"
+            if not ready:
+                reason = "unsupported_provider" if status.get("status") == "UNAVAILABLE" else "local_model_not_ready"
         elif kind == "tts" and managed:
             provider = str(status.get("provider") or "").lower()
             ready = provider in {"kokoro", "local"}

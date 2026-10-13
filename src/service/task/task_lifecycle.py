@@ -13,7 +13,8 @@ from typing import Any, Callable, List, Literal, Optional
 
 from fastapi import Depends, File, Form, Header, HTTPException, Query, UploadFile
 
-from src.config import SOURCE_VIDEO_STEM
+from src.config import SOURCE_VIDEO_STEM, settings as default_settings
+from src.config.config import settings_scope
 from src.handler.deps import get_probe_store, get_store, get_translation_engine_store, require_api_token
 from src.handler.schemas import (
     ErrorDetail,
@@ -29,6 +30,7 @@ from src.handler.schemas import (
     to_out,
 )
 from src.service.probe_batch import probe_batch_manager
+from src.service.plugin_plan import parse_plugin_plan, resolve_plugin_plan, serialize_plugin_plan
 from src.store import DEFAULT_TRANSLATION_ENGINE_ID, ProbeStore, TaskStore, TranslationEngineStore
 from src.service.asset_resolver import AssetResolver
 from src.service.task.task import task_error_boundary
@@ -52,11 +54,140 @@ class LifecycleConflictError(RuntimeError):
     """Expected lifecycle state conflict suitable for HTTP 409."""
 
 
+def _creation_runtime_inputs(engines: Any) -> tuple[Any, Any | None]:
+    """Pin real engine stores to the aggregate config read used for creation."""
+    if not isinstance(engines, TranslationEngineStore):
+        return engines, None
+    config_snapshot = engines._read()
+    return TranslationEngineStore(
+        provider=engines._provider, snapshot=config_snapshot
+    ), config_snapshot
+
+
 def require(store: Any, task_id: str) -> Any:
     rec = store.get(task_id)
     if rec is None:
         raise LookupError("任务不存在")
     return rec
+
+
+def _resolve_creation_plan(
+    *,
+    source_type: str,
+    source_lang: str,
+    target_lang: str,
+    mode: str,
+    burn: str,
+    model: str,
+    engine: str,
+    need_subtitle: bool,
+    quality: str | None,
+    tts_enabled: bool,
+    tts_voice: str,
+    original_voice_mode: str,
+    settings: Any,
+    engines: Any,
+    ensure_supported_translation_languages: Callable[..., None],
+    ensure_local_model_ready: Callable[..., None],
+    ensure_translation_engine: Callable[..., None],
+    runtime_snapshot: dict[str, Any] | None = None,
+) -> str:
+    """Snapshot the selected plan before checking only its built-in readiness."""
+    plan_settings = settings or default_settings
+
+    def resolve_plan() -> str:
+        return resolve_plugin_plan(
+            source_type=source_type,
+            source_lang=source_lang,
+            target_lang=target_lang,
+            mode=mode,
+            burn=burn,
+            model=model,
+            engine=engine,
+            need_subtitle=need_subtitle,
+            quality=quality,
+            tts_enabled=tts_enabled,
+            tts_voice=tts_voice,
+            original_voice_mode=original_voice_mode,
+            settings=plan_settings,
+            engines=engines,
+        )
+
+    try:
+        if runtime_snapshot:
+            with settings_scope(runtime_snapshot["business"]):
+                plan_json = resolve_plan()
+        else:
+            plan_json = resolve_plan()
+    except ValueError as exc:
+        # Preserve the old create-time 422 for an unknown configured engine;
+        # resolving the plan now happens before readiness checks by design.
+        if str(exc) in {
+            "translation engine configuration does not exist",
+            "translation engine store is required for subtitle tasks",
+        }:
+            raise HTTPException(status_code=422, detail="翻译引擎配置不存在") from exc
+        if str(exc) == "local_ct2 only supports en to zh-CN or zh":
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "UNSUPPORTED_TRANSLATION_LANGUAGE",
+                    "message": "本地翻译模型只支持源语言 en 和目标语言 zh-CN/zh。",
+                },
+            ) from exc
+        raise
+    plan = parse_plugin_plan(plan_json)
+    slots = plan["slots"]
+    if not need_subtitle:
+        return plan_json
+
+    if runtime_snapshot:
+        engine_snapshot = runtime_snapshot["engine"]
+        translate_config = slots["translate"]["config"]
+        provider = engine_snapshot["provider"]
+        translate_config.update({
+            "api_type": "local_ct2" if provider == "local" else (
+                "anthropic_compatible" if provider in {"anthropic", "anthropic_compatible"}
+                else "openai_compatible"
+            ),
+            "base_url": engine_snapshot["baseUrl"],
+            "model": engine_snapshot["model"],
+        })
+        if "tts" in slots:
+            tts_snapshot = runtime_snapshot["tts"]
+            slots["tts"]["config"].update({
+                "speed": tts_snapshot["speed"],
+                "model_id": tts_snapshot["model"] or None,
+                "output_format": tts_snapshot["format"],
+            })
+
+    transcribe = slots["transcribe"]
+    if transcribe["plugin_id"] == "builtin.whisper":
+        snapshot_backend = transcribe["config"].get("backend")
+        # Replicate was removed for the built-in transcriber regardless of its
+        # configured backend; local model readiness applies only to local mode.
+        if str(model or "").partition(":")[0].strip().lower() == "replicate":
+            ensure_local_model_ready(model)
+        elif snapshot_backend == "local_whisper":
+            ensure_local_model_ready(f"local:{transcribe['config'].get('model', '')}")
+
+    translate = slots["translate"]
+    if translate["plugin_id"] == "builtin.translation_engine":
+        ensure_supported_translation_languages(engine, need_subtitle, source_lang, target_lang)
+        # resolve_runtime already validated a real engine store against the
+        # same aggregate snapshot. Re-reading it here could observe a newer
+        # Redis revision after the task snapshot was captured.
+        if not (runtime_snapshot and isinstance(engines, TranslationEngineStore)):
+            ensure_translation_engine(engine, need_subtitle, engines)
+    else:
+        # Every subtitle plan still captures an existing, enabled engine record;
+        # a custom translator owns runtime-specific dependency validation.
+        engine_record = engines.get(engine) if engines is not None else None
+        if engine_record is None:
+            raise HTTPException(status_code=422, detail="翻译引擎配置不存在")
+        if not engine_record.enabled:
+            raise HTTPException(status_code=422, detail="翻译引擎已停用")
+    return serialize_plugin_plan(plan) if runtime_snapshot else plan_json
 
 
 def create_url_task(
@@ -69,14 +200,16 @@ def create_url_task(
     ensure_translation_engine: Callable[..., None],
     resolve_runtime: Callable[..., Any] | None = None,
     task_origin: str = "web",
+    settings: Any = None,
 ) -> tuple[Any, bool]:
     """校验并创建 URL 任务；入队由 HTTP 门面在冲突检查后完成。"""
 
-    ensure_supported_translation_languages(
-        body.engine, body.needSubtitle, body.sourceLang, body.targetLang
-    )
+    runtime_snapshot = None
+    runtime_config_json = None
+    runtime_engines = engines
     if resolve_runtime is not None:
-        runtime = resolve_runtime(
+        runtime_engines, config_snapshot = _creation_runtime_inputs(engines)
+        runtime_kwargs = dict(
             engine=body.engine,
             need_subtitle=body.needSubtitle,
             request_model=body.model,
@@ -84,14 +217,34 @@ def create_url_task(
             target_lang=body.targetLang,
             tts_enabled=body.ttsEnabled,
             tts_voice=body.ttsVoice,
-            engines=engines,
+            engines=runtime_engines,
             ensure_local_model_ready=ensure_local_model_ready,
         )
-        runtime_config_json = json.dumps(runtime.snapshot, ensure_ascii=False, separators=(",", ":"))
-    else:
-        ensure_local_model_ready(body.model)
-        ensure_translation_engine(body.engine, body.needSubtitle, engines)
-        runtime_config_json = None
+        if config_snapshot is not None:
+            runtime_kwargs["config_snapshot"] = config_snapshot
+        runtime_snapshot = resolve_runtime(**runtime_kwargs).snapshot
+        runtime_config_json = json.dumps(runtime_snapshot, ensure_ascii=False, separators=(",", ":"))
+
+    plugin_plan_json = _resolve_creation_plan(
+        source_type="url",
+        source_lang=body.sourceLang,
+        target_lang=body.targetLang,
+        mode=body.mode,
+        burn=body.burn,
+        model=(runtime_snapshot or {}).get("whisper", {}).get("model") or body.model,
+        engine=body.engine,
+        need_subtitle=body.needSubtitle,
+        quality=body.quality,
+        tts_enabled=body.ttsEnabled,
+        tts_voice=(runtime_snapshot or {}).get("tts", {}).get("voice") or body.ttsVoice,
+        original_voice_mode=body.originalVoiceMode,
+        settings=settings or default_settings,
+        engines=runtime_engines,
+        ensure_supported_translation_languages=ensure_supported_translation_languages,
+        ensure_local_model_ready=ensure_local_model_ready,
+        ensure_translation_engine=ensure_translation_engine,
+        runtime_snapshot=runtime_snapshot,
+    )
     return store.create_if_no_recent_active(
         url=body.url,
         source_lang=body.sourceLang,
@@ -106,6 +259,7 @@ def create_url_task(
         tts_enabled=body.ttsEnabled,
         tts_voice=body.ttsVoice,
         original_voice_mode=body.originalVoiceMode,
+        plugin_plan_json=plugin_plan_json,
         runtime_config_json=runtime_config_json,
     )
 
@@ -143,9 +297,12 @@ def create_upload_task(
 
     max_upload_bytes = settings.max_upload_mb * 1024 * 1024
     filename = (file.filename or "").strip()
-    ensure_supported_translation_languages(engine, need_subtitle, source_lang, target_lang)
+    runtime_snapshot = None
+    runtime_config_json = None
+    runtime_engines = engines
     if resolve_runtime is not None:
-        runtime = resolve_runtime(
+        runtime_engines, config_snapshot = _creation_runtime_inputs(engines)
+        runtime_kwargs = dict(
             engine=engine,
             need_subtitle=need_subtitle,
             request_model=model,
@@ -153,15 +310,13 @@ def create_upload_task(
             target_lang=target_lang,
             tts_enabled=tts_enabled,
             tts_voice=tts_voice,
-            engines=engines,
+            engines=runtime_engines,
             ensure_local_model_ready=ensure_local_model_ready,
         )
-        runtime_config_json = json.dumps(runtime.snapshot, ensure_ascii=False, separators=(",", ":"))
-    else:
-        ensure_translation_engine(engine, need_subtitle, engines)
-        ensure_local_model_ready(model)
-        runtime_config_json = None
-
+        if config_snapshot is not None:
+            runtime_kwargs["config_snapshot"] = config_snapshot
+        runtime_snapshot = resolve_runtime(**runtime_kwargs).snapshot
+        runtime_config_json = json.dumps(runtime_snapshot, ensure_ascii=False, separators=(",", ":"))
     if tts_enabled and not need_subtitle:
         raise UploadTaskError(422, "配音需要启用字幕翻译")
     if tts_enabled and not target_lang.lower().startswith(("zh", "en")):
@@ -190,6 +345,26 @@ def create_upload_task(
             suggestion="请将视频转换为受支持的格式后重新上传。",
         )
 
+    plugin_plan_json = _resolve_creation_plan(
+        source_type="upload",
+        source_lang=source_lang,
+        target_lang=target_lang,
+        mode=mode,
+        burn=burn,
+        model=(runtime_snapshot or {}).get("whisper", {}).get("model") or model,
+        engine=engine,
+        need_subtitle=need_subtitle,
+        quality="480p",
+        tts_enabled=tts_enabled,
+        tts_voice=(runtime_snapshot or {}).get("tts", {}).get("voice") or tts_voice,
+        original_voice_mode=original_voice_mode,
+        settings=settings,
+        engines=runtime_engines,
+        ensure_supported_translation_languages=ensure_supported_translation_languages,
+        ensure_local_model_ready=ensure_local_model_ready,
+        ensure_translation_engine=ensure_translation_engine,
+        runtime_snapshot=runtime_snapshot,
+    )
     rec = store.create(
         url=filename,
         source_lang=source_lang,
@@ -204,6 +379,7 @@ def create_upload_task(
         tts_enabled=tts_enabled,
         tts_voice=tts_voice,
         original_voice_mode=original_voice_mode,
+        plugin_plan_json=plugin_plan_json,
         runtime_config_json=runtime_config_json,
     )
 
@@ -345,6 +521,10 @@ def retry_task(
     rec = require(store, task_id)
     if rec.status not in {"FAILED", "CANCELLED"}:
         raise LifecycleConflictError("只有失败或已取消任务可以重试")
+    # Leave legacy NULL plans untouched so Runner can capture the migration
+    # boundary before ensure_plan materializes their first plugin snapshot.
+    if rec.plugin_plan_json is not None:
+        parse_plugin_plan(rec.plugin_plan_json)
     updated = store.update(
         task_id, status="PENDING", progress=0, current_step=None, error=None
     )
@@ -375,6 +555,7 @@ def create_task_route(
         ensure_translation_engine=compat._ensure_translation_engine,
         resolve_runtime=compat.resolve_runtime,
         task_origin=task_origin,
+        settings=compat.settings,
     )
     if not created:
         raise HTTPException(
@@ -589,7 +770,10 @@ def cancel_task_route(task_id: str, store: TaskStore = Depends(get_store)) -> Ta
 
 @router.post("/{task_id}/retry", response_model=TaskOut, dependencies=[Depends(require_api_token)])
 @task_error_boundary
-def retry_task_route(task_id: str, store: TaskStore = Depends(get_store)) -> TaskOut:
+def retry_task_route(
+    task_id: str,
+    store: TaskStore = Depends(get_store),
+) -> TaskOut:
     from src.handler import tasks as compat
 
     rec = compat._task_lifecycle.require(store, task_id)

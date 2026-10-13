@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import wave
 from pathlib import Path
 
 import pytest
@@ -179,6 +180,7 @@ def test_extract_audio_real(tmp_path, monkeypatch):
     )
 
     out_dir = tmp_path / "out"
+    out_dir.mkdir()
     monkeypatch.setattr(ax, "ensure_task_dir", _ensure(out_dir))
 
     progress = []
@@ -210,3 +212,51 @@ def test_extract_audio_real(tmp_path, monkeypatch):
     # 至少产生过一次进度回调
     assert progress
     assert all(isinstance(p, AudioProgress) for p in progress)
+
+
+@pytest.mark.skipif(not _FFMPEG_OK, reason="需要 ffmpeg / ffprobe")
+def test_extract_audio_explicit_dubbing_path_keeps_asr_audio_separate(tmp_path, monkeypatch):
+    src = tmp_path / "source.mp4"
+    subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=0.8",
+            "-f", "lavfi", "-i", "testsrc=duration=0.8:size=128x72:rate=10",
+            "-shortest", str(src),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    monkeypatch.setattr(ax, "ensure_task_dir", _ensure(out_dir))
+    asr_audio = out_dir / "audio.wav"
+    asr_audio.write_bytes(b"existing ASR artifact")
+
+    result = extract_audio(
+        src,
+        "task1",
+        sample_rate=48000,
+        channels=2,
+        output_path=out_dir / "tts_source.wav",
+    )
+
+    assert result.audio_path == out_dir / "tts_source.wav"
+    assert result.sample_rate == 48000
+    assert result.channels == 2
+    assert result.duration is not None and 0.7 <= result.duration <= 0.9
+    assert asr_audio.read_bytes() == b"existing ASR artifact"
+    probe = subprocess.run(
+        [
+            "ffprobe", "-v", "error",
+            "-show_entries", "stream=codec_name,sample_rate,channels",
+            "-of", "default=noprint_wrappers=1",
+            str(result.audio_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "pcm_s16le" in probe.stdout
+    assert "sample_rate=48000" in probe.stdout
+    assert "channels=2" in probe.stdout

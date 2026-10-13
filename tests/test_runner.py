@@ -44,7 +44,8 @@ def test_enqueue_submits_to_executor(monkeypatch):
 def test_run_writes_progress_and_success(store, monkeypatch):
     tid = _make_task(store)
 
-    def fake_pipeline(params, on_event, *, api_key=None):
+    def fake_pipeline(params, on_event, **kwargs):
+        assert {"plugin_manager", "plugin_plan", "credential_resolver", "legacy_cache"}.issubset(kwargs)
         on_event(PipelineEvent("DOWNLOADING", 10, "DOWNLOADING"))
         on_event(PipelineEvent("TRANSCRIBING", 50, "TRANSCRIBING"))
         on_event(PipelineEvent(
@@ -71,7 +72,7 @@ def test_run_passes_params_from_record(store, monkeypatch):
     )
     seen = {}
 
-    def fake_pipeline(params, on_event, *, api_key=None):
+    def fake_pipeline(params, on_event, **kwargs):
         seen["url"] = params.url
         seen["target"] = params.target_lang
         seen["mode"] = params.mode
@@ -89,7 +90,7 @@ def test_run_passes_params_from_record(store, monkeypatch):
 def test_run_failure_persists_failed(store, monkeypatch):
     tid = _make_task(store)
 
-    def boom(params, on_event, *, api_key=None):
+    def boom(params, on_event, **kwargs):
         on_event(PipelineEvent("DOWNLOADING", 5, "DOWNLOADING"))
         on_event(PipelineEvent("FAILED", 5, "DOWNLOADING", error="下载失败", error_code="download_failed"))
         raise RuntimeError("下载失败")
@@ -107,7 +108,7 @@ def test_run_failure_fallback_when_no_event(store, monkeypatch):
     """run_pipeline 直接抛异常、没发 FAILED 事件时，兜底也要写 FAILED。"""
     tid = _make_task(store)
 
-    def boom(params, on_event, *, api_key=None):
+    def boom(params, on_event, **kwargs):
         raise RuntimeError("意外崩溃")
 
     monkeypatch.setattr(runner, "run_pipeline", boom)
@@ -121,27 +122,29 @@ def test_run_failure_fallback_when_no_event(store, monkeypatch):
 def test_run_cancelled_resource_error_marks_resources_missing(store, monkeypatch):
     tid = _make_task(store)
 
-    def cancelled_resource_error(params, on_event, *, api_key=None):
+    def cancelled_resource_error(params, on_event, **kwargs):
+        store.update(tid, status="CANCELLED", error="用户取消")
         runner.set_cancelled_signal(tid)
         raise runner.ResourceError("源文件缺失", runner.ResourceState.DELETED)
 
     monkeypatch.setattr(runner, "run_pipeline", cancelled_resource_error)
     runner._run(tid)
 
-    assert store.get(tid).resource_status == "MISSING"
+    assert store.get(tid).status == "CANCELLED"
 
 
 def test_run_cancelled_exception_marks_resources_missing(store, monkeypatch):
     tid = _make_task(store)
 
-    def cancelled_exception(params, on_event, *, api_key=None):
+    def cancelled_exception(params, on_event, **kwargs):
+        store.update(tid, status="CANCELLED", error="用户取消")
         runner.set_cancelled_signal(tid)
         raise RuntimeError("取消时异常")
 
     monkeypatch.setattr(runner, "run_pipeline", cancelled_exception)
     runner._run(tid)
 
-    assert store.get(tid).resource_status == "MISSING"
+    assert store.get(tid).status == "CANCELLED"
 
 
 def test_run_missing_task_skips(store, monkeypatch):
@@ -183,12 +186,12 @@ def test_cancel_pipeline_cleans_up_partial_artifacts(store, tmp_path, monkeypatc
     ok = runner.cancel_pipeline(tid)
     assert ok is True
 
-    # Check that output.mp4 is deleted, while previous completed step files are retained
+    # Published outputs are retained; only invocation-owned partial files are removed.
     assert (task_dir_path / "source.mp4").exists()
     assert (task_dir_path / "audio.wav").exists()
     assert (task_dir_path / "original.srt").exists()
     assert (task_dir_path / "translated.srt").exists()
-    assert not (task_dir_path / "output.mp4").exists()
+    assert (task_dir_path / "output.mp4").exists()
 
 
 def test_retry_cancelled_task_clears_signal_and_resumes(store, monkeypatch):
@@ -197,7 +200,7 @@ def test_retry_cancelled_task_clears_signal_and_resumes(store, monkeypatch):
 
     seen_cancellation_state = []
 
-    def fake_pipeline(params, on_event, *, api_key=None):
+    def fake_pipeline(params, on_event, **kwargs):
         from src.service.orchestrator import is_cancelled_signal
         seen_cancellation_state.append(is_cancelled_signal(params.task_id))
         on_event(PipelineEvent("SUCCESS", 100, None, title="Retry Done"))
@@ -217,7 +220,7 @@ def test_run_does_not_overwrite_cancelled_status(store, monkeypatch):
     tid = _make_task(store)
     store.update(tid, status="CANCELLED", error="用户取消")
 
-    def boom(params, on_event, *, api_key=None):
+    def boom(params, on_event, **kwargs):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(runner, "run_pipeline", boom)
@@ -226,6 +229,101 @@ def test_run_does_not_overwrite_cancelled_status(store, monkeypatch):
     rec = store.get(tid)
     assert rec.status == "CANCELLED"
     assert rec.error == "用户取消"
+
+
+def test_run_registration_and_cancel_are_serialized(store, monkeypatch):
+    """Cancellation arriving after row-read cannot be cleared by signal registration."""
+    import threading
+
+    tid = _make_task(store)
+    entered_ensure = threading.Event()
+    continue_ensure = threading.Event()
+    called = []
+    original_ensure = runner.ensure_plan
+
+    def blocking_ensure(*args, **kwargs):
+        entered_ensure.set()
+        assert continue_ensure.wait(timeout=2)
+        return original_ensure(*args, **kwargs)
+
+    def pipeline(params, on_event, **kwargs):
+        called.append(True)
+        if runner.is_cancelled_signal(tid):
+            raise runner.PipelineCancelledError("cancelled")
+
+    monkeypatch.setattr(runner, "ensure_plan", blocking_ensure)
+    monkeypatch.setattr(runner, "run_pipeline", pipeline)
+    worker = threading.Thread(target=runner._run, args=(tid,))
+    worker.start()
+    assert entered_ensure.wait(timeout=2)
+
+    cancelled = []
+    cancel_worker = threading.Thread(
+        target=lambda: cancelled.append(runner.cancel_pipeline(tid))
+    )
+    cancel_worker.start()
+    continue_ensure.set()
+    worker.join(timeout=2)
+    cancel_worker.join(timeout=2)
+
+    assert not worker.is_alive() and not cancel_worker.is_alive()
+    assert cancelled == [True]
+    assert store.get(tid).status == "CANCELLED"
+
+
+def test_plugin_cooperative_cancel_marks_task_cancelled(store, monkeypatch):
+    tid = _make_task(store)
+
+    def cooperative_cancel(params, on_event, **kwargs):
+        raise runner.PipelineCancelledError("plugin requested cancellation")
+
+    monkeypatch.setattr(runner, "run_pipeline", cooperative_cancel)
+    runner._run(tid)
+
+    rec = store.get(tid)
+    assert rec.status == "CANCELLED"
+    assert rec.error_code == "cancelled"
+
+
+def test_runner_resolves_cookie_path_setting_for_download_plugin(store, monkeypatch, tmp_path):
+    import json
+    from types import SimpleNamespace
+
+    from src.plugin_system import DownloadResult
+    import src.plugins
+
+    tid = _make_task(store)
+    cookie_path = tmp_path / "cookies.txt"
+    cookie_path.write_text("cookie data")
+    monkeypatch.setattr(runner, "settings", SimpleNamespace(cookies_file=cookie_path))
+    store.update(tid, need_subtitle=0, plugin_plan_json=json.dumps({
+        "schema_version": 1,
+        "slots": {
+            "download": {
+                "plugin_id": "builtin.ytdlp",
+                "implementation_version": "1",
+                "config": {"quality": "480p", "cookies_ref": "settings:cookies_file"},
+            },
+        },
+    }))
+
+    class Manager:
+        def __init__(self):
+            self.cookie = None
+
+        def run(self, plugin_id, version, request, config, context):
+            self.cookie = context.resolve_credential(config["cookies_ref"])
+            output = request.target_dir / "source.mp4"
+            output.write_bytes(b"source")
+            return DownloadResult(output, title="source")
+
+    manager = Manager()
+    monkeypatch.setattr(src.plugins, "get_plugin_manager", lambda: manager)
+    monkeypatch.setattr(runner, "ensure_plan", lambda rec, *_args: rec)
+    runner._run(tid)
+
+    assert manager.cookie == str(cookie_path)
+    assert store.get(tid).status == "SUCCESS"
 
 
 def test_recover_interrupted_tasks_requeues_only_non_terminal(store, monkeypatch):
@@ -348,7 +446,7 @@ def test_on_event_db_write_throttling(store, monkeypatch):
 
     monkeypatch.setattr(store, "update", tracked_update)
 
-    def fake_pipeline(params, on_event, *, api_key=None):
+    def fake_pipeline(params, on_event, **kwargs):
         # DOWNLOADING (status changed -> write 1)
         on_event(PipelineEvent("DOWNLOADING", 1, "DOWNLOADING"))
         # DOWNLOADING 2..9 (same decade, same status -> skipped)
@@ -404,7 +502,7 @@ def test_cancel_pipeline_cleans_up_partial_artifacts(store, tmp_path, monkeypatc
     ok = runner.cancel_pipeline(tid)
     assert ok is True
 
-    assert not out_mp4.exists()
+    assert out_mp4.exists()
     assert not part_file.exists()
     assert not tmp_file.exists()
     assert source_file.exists()
@@ -425,7 +523,7 @@ def test_run_finally_terminates_procs_and_cleans_artifacts(store, tmp_path, monk
     mock_proc = MagicMock(spec=subprocess.Popen)
     mock_proc.poll.return_value = None
 
-    def fake_pipeline(params, on_event, *, api_key=None):
+    def fake_pipeline(params, on_event, **kwargs):
         runner.register_process(tid, mock_proc)
         runner.set_cancelled_signal(tid)
         raise runner.PipelineCancelledError("cancelled")
@@ -434,4 +532,4 @@ def test_run_finally_terminates_procs_and_cleans_artifacts(store, tmp_path, monk
     runner._run(tid)
 
     mock_proc.terminate.assert_called_once()
-    assert not out_mp4.exists()
+    assert out_mp4.exists()
