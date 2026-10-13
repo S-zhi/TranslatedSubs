@@ -8,6 +8,7 @@ import os
 import re
 from collections.abc import Mapping
 from types import MappingProxyType
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -399,6 +400,7 @@ def ensure_plan(
     store: Any,
     engines: Any,
     settings: Any = None,
+    runtime_snapshot: dict[str, Any] | None = None,
 ) -> Any:
     """Return a record with its existing plan or atomically materialize a legacy plan.
 
@@ -410,6 +412,31 @@ def ensure_plan(
     if current_json:
         parse_plugin_plan(current_json)
         return record
+    plan_engines = engines
+    engine_snapshot = (runtime_snapshot or {}).get("engine")
+    if isinstance(engine_snapshot, dict) and engine_snapshot.get("source") != "disabled":
+        engine_id = str(engine_snapshot.get("id") or record.engine)
+        provider = str(engine_snapshot.get("provider") or "").strip().lower()
+        api_type = (
+            "anthropic_compatible"
+            if provider in {"anthropic", "anthropic_compatible"}
+            else "local_ct2" if provider == "local" else "openai_compatible"
+        )
+        snapshot_engine = SimpleNamespace(
+            id=engine_id,
+            api_type=api_type,
+            base_url=str(engine_snapshot.get("baseUrl") or ""),
+            model=str(engine_snapshot.get("model") or ""),
+        )
+
+        class _SnapshotEngineStore:
+            def get(self, requested_id: str) -> Any:
+                if requested_id == engine_id:
+                    return snapshot_engine
+                return engines.get(requested_id) if engines is not None else None
+
+        plan_engines = _SnapshotEngineStore()
+
     plan_json = resolve_plugin_plan(
         source_type=record.source_type,
         source_lang=record.source_lang,
@@ -424,8 +451,65 @@ def ensure_plan(
         tts_voice=record.tts_voice,
         original_voice_mode=record.original_voice_mode,
         settings=settings,
-        engines=engines,
+        engines=plan_engines,
     )
+    if isinstance(runtime_snapshot, dict):
+        decoded = json.loads(plan_json)
+        slots = decoded["slots"]
+
+        engine = runtime_snapshot.get("engine") or {}
+        translate = slots.get("translate")
+        if engine.get("source") == "disabled":
+            slots.pop("translate", None)
+            slots.pop("render.subtitle", None)
+        elif translate:
+            provider = str(engine.get("provider") or "").strip().lower()
+            translate["config"].update({
+                "engine_id": str(engine.get("id") or record.engine),
+                "api_type": (
+                    "anthropic_compatible"
+                    if provider in {"anthropic", "anthropic_compatible"}
+                    else "local_ct2" if provider == "local" else "openai_compatible"
+                ),
+                "base_url": str(engine.get("baseUrl") or ""),
+                "model": str(engine.get("model") or ""),
+            })
+            if translate["config"]["api_type"] == "local_ct2":
+                translate["config"]["credential_ref"] = None
+            else:
+                translate["config"]["credential_ref"] = (
+                    f"translation_engine:{translate['config']['engine_id']}:api_key"
+                )
+
+        whisper = runtime_snapshot.get("whisper") or {}
+        transcribe = slots.get("transcribe")
+        if whisper.get("source") == "disabled":
+            slots.pop("transcribe", None)
+        elif transcribe:
+            backend, model = _effective_transcriber_model(
+                str(whisper.get("model") or record.model), whisper.get("provider")
+            )
+            transcribe["config"]["backend"] = backend
+            transcribe["config"]["model"] = model
+
+        tts = runtime_snapshot.get("tts") or {}
+        tts_slot = slots.get("tts")
+        if not tts.get("enabled"):
+            for purpose in (
+                "tts", "extract.dubbing", "separate.dubbing", "render.dub_mux"
+            ):
+                slots.pop(purpose, None)
+        elif tts_slot:
+            tts_config = tts_slot["config"]
+            if tts.get("model") is not None:
+                tts_config["model_id"] = tts["model"]
+            if tts.get("voice") is not None:
+                tts_config["voice"] = tts["voice"]
+            if tts.get("speed") is not None:
+                tts_config["speed"] = tts["speed"]
+            if tts.get("format") is not None:
+                tts_config["output_format"] = tts["format"]
+        plan_json = serialize_plugin_plan(decoded)
     updated = store.ensure_plugin_plan(record.id, plan_json)
     if updated is None:
         raise LookupError("task disappeared while materializing its plugin plan")

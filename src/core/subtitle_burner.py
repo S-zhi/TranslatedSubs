@@ -148,7 +148,7 @@ def burn_subtitles(
         run_ffmpeg(
             cmd, _tick,
             error_cls=BurnError,
-            not_found_msg=f"找不到 ffmpeg（{settings.ffmpeg_bin}）。请安装 ffmpeg 或设置 SUBTRANS_FFMPEG。",
+            not_found_msg=f"找不到 ffmpeg（{settings.ffmpeg_bin}）。请在业务设置/API 配置 FFmpeg 可执行文件，或安装 ffmpeg。",
             cwd=cwd,
             task_id=task_id,
         )

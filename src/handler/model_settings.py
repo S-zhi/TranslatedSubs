@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import RootModel
 
 from src.config import settings
+from src.config.model_schema import validate_models
 from src.core.translation_engines import TranslationEngineError, make_engine_client
 from src.handler.deps import require_api_token
 from src.service.model_manager import model_manager
@@ -33,8 +34,6 @@ def _public_model(item: dict[str, Any], *, current: dict[str, Any]) -> dict[str,
     snake_secret = result.pop("api_key", None)
     secret = camel_secret or snake_secret
     is_current = bool(result.get("isCurrent", current.get("model") == result.get("model")))
-    if not secret and is_current:
-        secret = current.get("apiKey") or current.get("api_key")
     result["hasApiKey"] = bool(secret)
     result.setdefault("isCurrent", is_current)
     result.setdefault("enabled", True)
@@ -47,11 +46,18 @@ def _public_model(item: dict[str, Any], *, current: dict[str, Any]) -> dict[str,
 
 def _public_config(kind: str, config: dict[str, Any], store: ModelSettingsStore | None = None) -> dict[str, Any]:
     result = dict(config)
+    models = list(config.get("models") or [])
+    current_model = next(
+        (item for item in models if isinstance(item, dict) and item.get("isCurrent")),
+        None,
+    )
     result.pop("apiKey", None)
     result.pop("api_key", None)
     result.pop("_runtimeManaged", None)
-    result["hasApiKey"] = bool(config.get("apiKey") or config.get("api_key"))
-    result["models"] = [_public_model(item, current=config) for item in list(config.get("models") or [])]
+    result["hasApiKey"] = bool(
+        (current_model or {}).get("apiKey") or (current_model or {}).get("api_key")
+    )
+    result["models"] = [_public_model(item, current=config) for item in models]
     if kind == "whisper":
         result["runtimeManaged"] = bool(config.get("_runtimeManaged"))
         inventory = {item["name"]: item for item in model_manager.list_models()}
@@ -79,13 +85,6 @@ def _whisper_status(
 
 def _public_all(store: ModelSettingsStore) -> dict[str, dict[str, Any]]:
     all_values = store.get_all()
-    # The legacy environment key is a compatibility source for the default
-    # DeepSeek card.  Keep it in memory for this response; a read must not
-    # mutate the persisted model or silently activate unified runtime mode.
-    deepseek_key = getattr(settings, "deepseek_api_key", None)
-    if deepseek_key and not all_values["llm"].get("apiKey"):
-        all_values = {kind: dict(value) for kind, value in all_values.items()}
-        all_values["llm"]["apiKey"] = deepseek_key
     return {kind: _public_config(kind, all_values[kind], store) for kind in KINDS}
 
 
@@ -116,7 +115,9 @@ def update_model_settings(body: SettingsPayload) -> dict[str, dict[str, Any]]:
     # mode is enabled.
     values = {kind: _strip_readonly(value) for kind, value in values.items()}
     values = {kind: value for kind, value in values.items() if _has_writable_change(value)}
-    prepared = store.prepare(values)
+    if not values:
+        return _public_all(store)
+    prepared, revision = store.prepare_versioned(values)
     if "whisper" in values:
         if prepared["whisper"].get("enabled", True):
             cards = values["whisper"].get("models")
@@ -126,9 +127,11 @@ def update_model_settings(body: SettingsPayload) -> dict[str, dict[str, Any]]:
                 raise HTTPException(status_code=422, detail="启用 Whisper 设置时必须指定唯一当前模型")
         _validate_saved_whisper(prepared["whisper"])
     try:
-        store.update(values, prepared=prepared)
+        store.update(values, prepared=prepared, expected_revision=revision)
     except KeyError as exc:
         raise HTTPException(status_code=422, detail=f"不支持的模型类型: {exc.args[0]}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _public_all(store)
 
 
@@ -187,12 +190,12 @@ def create_model(kind: str, body: SettingsPayload) -> dict[str, Any]:
         if str(payload.get("provider") or "").lower() == "local" and payload.get("model"):
             payload["model"] = canonical_whisper_model(str(payload.get("model") or ""))
     try:
-        item, config = store.prepare_create(kind, payload)
+        item, config, revision = store.prepare_create_versioned(kind, payload)
         if kind == "whisper":
             _validate_saved_whisper(config)
             item = next(model for model in config["models"] if model.get("id") == item["id"])
-        store.update({kind: config}, prepared={kind: config})
-    except (KeyError, TypeError) as exc:
+        store.update({kind: config}, prepared={kind: config}, expected_revision=revision)
+    except (KeyError, TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     public_model = _public_model(item, current=config)
     if kind == "whisper":
@@ -209,15 +212,21 @@ def _validate(kind: str, payload: dict[str, Any], store: ModelSettingsStore) -> 
     if kind == "whisper":
         config = store.prepare({kind: payload})[kind]
     candidate = dict(config)
-    if kind != "whisper":
-        candidate.update(payload)
+    candidate.update(payload)
+    try:
+        validate_models({kind: candidate})
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     provider = str(candidate.get("provider") or "").strip().lower()
     model = str(candidate.get("model") or "").strip()
-    api_key = candidate.get("apiKey") or config.get("apiKey")
-    if kind == "llm" and provider == "deepseek":
-        api_key = api_key or getattr(settings, "deepseek_api_key", None)
-    if not api_key and kind == "llm":
-        api_key = getattr(settings, "deepseek_api_key", None)
+    current_cards = [item for item in config.get("models", []) if isinstance(item, dict)]
+    selected_id = next((item.get("id") for item in current_cards if item.get("isCurrent")), None)
+    if isinstance(payload.get("models"), list):
+        requested_cards = [item for item in payload["models"] if isinstance(item, dict)]
+        selected = next((item for item in requested_cards if item.get("isCurrent")), None)
+        selected_id = (selected or {}).get("id") or selected_id
+    saved_card = next((item for item in current_cards if str(item.get("id")) == str(selected_id)), None)
+    api_key = payload.get("apiKey") or (saved_card or {}).get("apiKey")
     if kind == "llm":
         if provider not in {"deepseek", "openai", "openai_compatible", "anthropic", "anthropic_compatible", "custom"}:
             return {"ok": False, "message": f"不支持的 LLM Provider: {provider}"}

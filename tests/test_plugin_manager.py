@@ -381,4 +381,3 @@ def test_probe_uses_download_capability_and_does_not_require_artifact(tmp_path):
     )
     assert result.ok is True
     assert factory.created[0].close_count == 1
-

@@ -33,6 +33,16 @@ Plataformas de vídeo compatíveis:
 
 ## Compilar a partir do código-fonte
 
+### Dependências necessárias
+
+Para executar a partir do código-fonte, são necessários Python 3.10–3.12, `uv`, Git (somente para clonar o repositório), FFmpeg/FFprobe com o filtro `subtitles` (libass) para gravar legendas no vídeo e um serviço Redis em execução. `uv sync` instala as bibliotecas Python, incluindo o cliente Redis (`redis>=5`), mas não instala nem inicia o servidor Redis. Se já tiver um Redis remoto, configure o endereço em `redis.url` no `config.local.json` e não instale outro servidor. Go 1.23 ou posterior é necessário apenas para o sidecar do Google Drive; Node.js é usado apenas nos testes do frontend. Esses recursos opcionais não são necessários para iniciar; instale somente os que for usar (é possível combinar várias opções em um único comando):
+
+- `uv sync --extra local-translation`: tradução local, de inglês para chinês por padrão.
+- `uv sync --extra hf-models`: modelos Whisper do Hugging Face.
+- `uv sync --extra tts`: dublagem com Kokoro; também exige `espeak-ng` instalado no sistema (consulte [TTS](../tts.md)).
+
+A instalação dos pacotes Python não inclui os pesos dos modelos: antes da primeira tarefa, baixe ou importe em Configurações os modelos de tradução local e Whisper e verifique se estão prontos. O Kokoro baixa os pesos na primeira geração de voz. Instale o Demucs separadamente apenas se habilitar a separação de voz.
+
 ### Build no macOS
 
 Para executar o projeto localmente no macOS, você precisa do Python 3.10–3.12, do `uv` e do FFmpeg com suporte a libass. A API também serve a interface web, então não é necessário instalar o Node.js separadamente.
@@ -42,19 +52,23 @@ Execute estes comandos em um diretório adequado:
 ```sh
 git clone https://github.com/S-zhi/TranslatedSubs.git
 cd TranslatedSubs
-brew install uv
+brew install uv redis
 brew tap homebrew-ffmpeg/ffmpeg
 brew install ffmpeg-full
 uv sync
-cp .env.example .env
+cp config.example.json config.local.json
+brew services start redis
+redis-cli ping
 ```
 
-Você pode adicionar ao `.env` as chaves de API na nuvem necessárias ou configurá-las depois de iniciar o serviço, que é a opção recomendada.
+O último comando deve responder `PONG`. Execute-o antes de iniciar a API.
+
+Configure as credenciais dos modelos e as opções do serviço após iniciar, em Configurações ou pela API. Elas são salvas no Redis e aplicadas sem reiniciar.
 
 Inicie a API e a interface web:
 
 ```sh
-uv run uvicorn src.handler.app:app --port 8000
+uv run python -m src.cli
 ```
 
 Abra <http://127.0.0.1:8000/>. Verifique o serviço e confirme que o FFmpeg tem o filtro de legendas embutidas:
@@ -91,15 +105,24 @@ No Windows 10 ou 11, você pode executar o TranslatedSubs a partir do código-fo
    cd TranslatedSubs
    uv python install 3.12
    uv sync --python 3.12 --locked
-   Copy-Item .env.example .env
+   Copy-Item config.example.json config.local.json
    ```
 
-   Você pode adicionar ao `.env` as chaves de API na nuvem necessárias ou configurá-las depois de iniciar o serviço, que é a opção recomendada.
+4. Prepare o Redis com o Docker Desktop configurado para contêineres Linux. Se já tiver um Redis remoto, configure o endereço em `redis.url` no `config.local.json` e pule esta etapa.
+
+   ```powershell
+   docker run -d --name translatedsubs-redis --restart unless-stopped -p 127.0.0.1:6379:6379 -v translatedsubs-redis-data:/data redis:7-alpine redis-server --appendonly yes
+   docker exec translatedsubs-redis redis-cli ping
+   ```
+
+   O segundo comando deve responder `PONG`.
+
+   Configure as credenciais dos modelos e as opções do serviço após iniciar, em Configurações ou pela API. Elas são salvas no Redis e aplicadas sem reiniciar.
 
 Inicie a API e a interface web:
 
 ```powershell
-uv run --locked uvicorn src.handler.app:app --host 127.0.0.1 --port 8000
+uv run --locked python -m src.cli --host 127.0.0.1 --port 8000
 ```
 
 Abra <http://127.0.0.1:8000/>. Verifique o serviço com:
@@ -114,12 +137,36 @@ curl.exe http://127.0.0.1:8000/api/health/ready
 Execute os comandos na raiz do repositório:
 
 ```bash
-cp .env.example .env
-# O tradutor local padrão não precisa de uma chave de API; configure chaves de nuvem apenas quando necessário.
-docker build -t translatedsubs:local . && docker run -d --name translatedsubs --restart unless-stopped -p 8000:8000 --env-file .env -e SUBTRANS_DATA_DIR=/data -e SUBTRANS_DB=/data/db/app.db -v translatedsubs-data:/data translatedsubs:local
+cp config.example.json config.local.json
 ```
 
-Ao atualizar um contêiner existente, substitua `translatedsubs-data` pelo nome do volume atual para preservar o banco de dados de tarefas e os arquivos gerados. As variáveis de ambiente `SUBTRANS_*` continuam disponíveis.
+Edite `config.local.json` para que a API use o serviço Redis do Compose e os caminhos `/data`:
+
+```json
+{
+  "redis": {
+    "url": "redis://redis:6379/0",
+    "namespace": "translatedsubs-local"
+  },
+  "paths": {
+    "dataDir": "/data",
+    "dbPath": "/data/db/app.db"
+  },
+  "http": {
+    "host": "0.0.0.0",
+    "port": 8000
+  }
+}
+```
+
+Em seguida, inicie os serviços:
+
+```bash
+# O tradutor local padrão não precisa de uma chave de API; configure chaves de nuvem apenas quando necessário.
+docker compose up -d --build
+```
+
+O Compose baixa e inicia a API e o Redis; não é necessário instalar Redis, Python, `uv` ou FFmpeg no host. Preserve os volumes persistentes de Redis e dados durante as atualizações. A imagem padrão contém apenas as dependências básicas; para usar extras opcionais, instale os extras e pacotes de sistema necessários no `Dockerfile` e reconstrua a imagem. Os pesos dos modelos são baixados separadamente. Para migrar de uma versão que usava `.env`, siga primeiro o guia de [migração a partir de .env](../local-quick-start.md), antes de iniciar a API.
 
 Acesse <http://localhost:8000/>. Execute `curl http://127.0.0.1:8000/api/health` para confirmar que a API está ativa; a resposta normal contém `"ok":true`. `/api/health/ready` também informa o estado da chave de tradução, do FFmpeg, do armazenamento e do filtro de legendas gravadas. Para desenvolvimento local e implantação no Linux, consulte o [índice da documentação (em chinês)](../README.md).
 
@@ -141,23 +188,16 @@ Legendas separadas podem ser ativadas ou desativadas no player. Legendas gravada
 
 ## Configuração e dados
 
-Copie `.env.example` e inicie sem uma chave de API. O tradutor padrão é local, usa CPU e traduz inglês → chinês simplificado; instale as dependências com `uv sync --extra local-translation` e baixe o modelo nas configurações. Preencha `SUBTRANS_DEEPSEEK_API_KEY` somente se escolher DeepSeek. O [modelo de variáveis de ambiente](../../.env.example) lista todos os ajustes e valores padrão. Os mais usados são:
+Copie `config.example.json` para `config.local.json` e inicie o Redis. Configure as credenciais dos modelos e as opções do serviço em Configurações ou pela API de configuração. Os valores são salvos no Redis e aplicados às novas solicitações sem reiniciar o serviço.
 
-| Ajuste | Finalidade |
-| --- | --- |
-| `SUBTRANS_DEEPSEEK_API_KEY` | Chave opcional da DeepSeek para o caminho explícito de compatibilidade em nuvem. |
-| `SUBTRANS_DATA_DIR`, `SUBTRANS_DB` | Locais dos arquivos e do banco SQLite de tarefas; o exemplo Docker guarda ambos em um volume persistente. |
-| `SUBTRANS_COOKIES` | Arquivo de cookies para sites que exigem login ou verificação de idade. |
-| `SUBTRANS_WORKERS`, `SUBTRANS_DOWNLOAD_WORKERS` | Limites de concorrência do processamento e dos downloads. |
-
-Reutilize o volume existente ao atualizar o contêiner e preserve o banco SQLite junto com os resultados. Não envie `.env`, cookies, credenciais OAuth ou mídia de testes ao repositório. Google Drive exige um sidecar separado; consulte o [início rápido local (em chinês)](../local-quick-start.md).
+O arquivo bootstrap guarda as opções locais de Redis, caminhos de dados e escuta. Preserve os volumes de dados e Redis durante atualizações. Não envie `config.local.json`, `.env`, cookies, credenciais OAuth nem mídias geradas por testes ao repositório. Google Drive exige um sidecar separado; consulte o [início rápido local (em chinês)](../local-quick-start.md).
 
 ## Problemas comuns
 
 - A API responde, mas as tarefas não começam: examine `checks` e `capabilities` em `/api/health/ready` para verificar a chave, FFmpeg/FFprobe, yt-dlp e armazenamento.
 - `MODEL_NOT_READY`: baixe e verifique o modelo Whisper selecionado nas configurações de modelos locais.
 - Não é possível gravar legendas no vídeo: instale FFmpeg com libass ou selecione legendas separadas. Verifique o filtro com `ffmpeg -hide_banner -filters | grep ' subtitles '`.
-- O download do endereço falha: use primeiro o teste de download; se o site pedir login, configure `SUBTRANS_COOKIES` conforme o [guia local (em chinês)](../local-quick-start.md).
+- O download do endereço falha: use primeiro o teste de download; se o site pedir login, configure cookie file setting conforme o [guia local (em chinês)](../local-quick-start.md).
 
 ## Documentação
 
@@ -172,7 +212,7 @@ A maioria dos guias abaixo está em chinês; o protocolo do serviço de transcri
 
 ## Desenvolvimento
 
-O projeto usa Python 3.10–3.12, FastAPI, FFmpeg e JavaScript nativo. Para desenvolver localmente, execute `uv sync` e depois `uv run uvicorn src.handler.app:app --port 8000`; o mesmo serviço hospeda a interface web. Execute os testes Python com `uv run pytest -q` e os testes do frontend com `npm test` em `web/`. Testes com serviços reais exigem ativação explícita; consulte [AGENTS.md (em chinês)](../../AGENTS.md).
+O projeto usa Python 3.10–3.12, FastAPI, FFmpeg e JavaScript nativo. Para desenvolver localmente, execute `uv sync` e depois `uv run python -m src.cli`; o mesmo serviço hospeda a interface web. Execute os testes Python com `uv run pytest -q` e os testes do frontend com `npm test` em `web/`. Testes com serviços reais exigem ativação explícita; consulte [AGENTS.md (em chinês)](../../AGENTS.md).
 
 `src/handler/` oferece a API HTTP; `src/core/` processa downloads, transcrição e legendas; `src/service/` e `src/store/` gerenciam tarefas e armazenamento; `src/mcp_server/` oferece MCP; e `web/` contém a interface. Consulte [CONTRIBUTING.md (em chinês)](../../.github/CONTRIBUTING.md). Comunique problemas de segurança de forma privada conforme [SECURITY.md](../../.github/SECURITY.md), nunca por uma issue pública.
 

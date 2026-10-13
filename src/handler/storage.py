@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from collections import OrderedDict
@@ -31,6 +30,7 @@ from src.config import (
     settings,
     task_dir,
 )
+from src.config.config_repository import get_config_provider
 from src.handler.deps import get_probe_store, get_store, require_api_token
 from src.handler.subtitle_editor import release_lock
 from src.handler.tasks import _DELETED_MESSAGE, _mark_resource_missing, scan_missing_terminal
@@ -210,9 +210,7 @@ class DriveSyncRequest(BaseModel):
     artifactNames: Optional[List[str]] = None
 
 
-# ---------- 保留策略配置（轻量：落到本地 JSON） ----------
-# Issue 描述允许"简化版即可"；用 settings.data_dir/.retention.json 持久化，
-# 避免拉新依赖/库表。
+# ---------- Redis 保留策略 ----------
 
 _RETENTION_FILE = ".retention.json"
 
@@ -222,37 +220,35 @@ def _retention_path() -> Path:
 
 
 def _load_retention() -> RetentionOut:
-    p = _retention_path()
-    if not p.exists():
-        return RetentionOut()
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return RetentionOut()
-    if not isinstance(data, dict):
-        return RetentionOut()
-    days = data["days"] if "days" in data else DEFAULT_RETENTION_DAYS
+    snapshot = get_config_provider().read()
+    business = snapshot.values.get("business", {})
+    days = business.get("retention_days", DEFAULT_RETENTION_DAYS)
     return RetentionOut(
         days=days,
-        updatedAt=data.get("updatedAt"),
-        lastRunAt=data.get("lastRunAt"),
+        updatedAt=snapshot.updated_at or int(time.time() * 1000),
+        lastRunAt=business.get("retention_last_run_at"),
     )
 
 
-def _save_retention(out: RetentionOut) -> None:
-    p = _retention_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(
-        json.dumps(
-            {
-                "days": out.days,
-                "updatedAt": out.updatedAt,
-                "lastRunAt": out.lastRunAt,
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
+def _save_retention(out: RetentionOut) -> RetentionOut:
+    def apply(document: dict) -> None:
+        business = document.setdefault("business", {})
+        business["retention_days"] = out.days
+
+    snapshot = get_config_provider().mutate(apply)
+    business = snapshot.values.get("business", {})
+    return RetentionOut(
+        days=business.get("retention_days", DEFAULT_RETENTION_DAYS),
+        updatedAt=snapshot.updated_at or int(time.time() * 1000),
+        lastRunAt=business.get("retention_last_run_at"),
     )
+
+
+def _record_retention_run(timestamp_ms: int) -> None:
+    def apply(document: dict) -> None:
+        document.setdefault("business", {})["retention_last_run_at"] = timestamp_ms
+
+    get_config_provider().mutate(apply)
 
 
 # ---------- 工具 ----------
@@ -720,13 +716,9 @@ def get_retention() -> RetentionOut:
 )
 def put_retention(body: RetentionIn) -> RetentionOut:
     """写入产物保留策略。自动清理只删除产物并保留任务记录。"""
-    current = _load_retention()
-    out = RetentionOut(
+    out = _save_retention(RetentionOut(
         days=body.days,
-        updatedAt=int(time.time() * 1000),
-        lastRunAt=current.lastRunAt,
-    )
-    _save_retention(out)
+    ))
 
     if body.days is not None and body.days > 0:
         from src.service.retention_scheduler import trigger_retention_cleanup_async

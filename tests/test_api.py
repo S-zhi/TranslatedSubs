@@ -16,21 +16,26 @@ from fastapi.testclient import TestClient
 from src.handler import tasks as tasks_routes
 from src.handler import srt as srt_routes
 from src.handler.app import app
-from src.handler.deps import get_probe_store, get_store
+from src.handler.deps import get_probe_store, get_store, reset_singletons
 from src.store import RESOURCE_STATUS_AVAILABLE, RESOURCE_STATUS_MISSING, TaskStore
 
 from src.handler.schemas import to_out
 from src.core.downloader import ProbeResult
-from src.store import ProbeStore, TaskStore, TaskRecord
+from src.store import ProbeStore, TaskStore, TaskRecord, TranslationEngineStore
+from src.config.config_repository import get_config_provider
 
 
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     import dataclasses
+    reset_singletons()
     db_path = tmp_path / "test.db"
     store = TaskStore(db_path)
     probe_store = ProbeStore(db_path)
+    engine_store = TranslationEngineStore()
+    engine_store.ensure_default_deepseek()
+    engine_store.update("deepseek", api_key="sk-mock-key", availability="AVAILABLE")
     # 覆盖 store 依赖 -> 临时库
     app.dependency_overrides[get_store] = lambda: store
     app.dependency_overrides[get_probe_store] = lambda: probe_store
@@ -45,11 +50,11 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(tasks_routes, "_ensure_local_model_ready", lambda model: None)
     # 默认 mock probe_duration 返回 10 秒，避免单元测试依赖系统 ffprobe 命令
     monkeypatch.setattr(tasks_routes, "probe_duration", lambda path, bin_path: 10.0)
-    # 默认 mock 提供 DeepSeek Key 及临时 data_dir，确保其它 Task 创建测试不受影响
+    # 临时目录仍由测试替换；DeepSeek key位于显式 Memory provider中。
     monkeypatch.setattr(
         tasks_routes,
         "settings",
-        dataclasses.replace(tasks_routes.settings, deepseek_api_key="sk-mock-key", data_dir=tmp_path),
+        dataclasses.replace(tasks_routes.settings, data_dir=tmp_path),
     )
     with TestClient(app) as c:
         c._store = store
@@ -57,6 +62,7 @@ def client(tmp_path, monkeypatch):
         c._tmp = tmp_path
         yield c
     app.dependency_overrides.clear()
+    reset_singletons()
 
 
 def _payload(**over):
@@ -121,7 +127,11 @@ def test_tts_failure_keeps_regular_video_output(client):
 # ---------- API Token 鉴权 ----------
 
 def test_api_token_auth_when_token_configured(client, monkeypatch):
-    """配置 SUBTRANS_API_TOKEN 时，变更接口必须校验 Authorization / X-API-Token / URL Token。"""
+    """Redis API Token 设置后，变更接口校验 Authorization / X-API-Token。"""
+    get_config_provider().mutate(lambda document: document["business"].update(
+        {"api_token": "secret-token-123"},
+    ))
+    # Runtime environment values do not override the Redis setting.
     monkeypatch.setenv("SUBTRANS_API_TOKEN", "secret-token-123")
 
     # 未提供 Token -> 401
@@ -144,7 +154,6 @@ def test_api_token_auth_when_token_configured(client, monkeypatch):
 
 def test_api_token_auth_read_and_download_endpoints(client, monkeypatch):
     """配置 SUBTRANS_API_TOKEN 时，数据读取和删除接口均受保护。"""
-    monkeypatch.delenv("SUBTRANS_API_TOKEN", raising=False)
     cid = client.post("/api/tasks", json=_payload()).json()["id"]
     client._store.update(cid, status="SUCCESS", progress=100)
     d = client._tmp / cid
@@ -153,7 +162,9 @@ def test_api_token_auth_read_and_download_endpoints(client, monkeypatch):
     (d / "output.mp4").write_bytes(b"OUT")
     (d / "translated.srt").write_text("1\n00:00:00,000 --> 00:00:01,000\nhi\n", encoding="utf-8")
 
-    monkeypatch.setenv("SUBTRANS_API_TOKEN", "secret-token-123")
+    get_config_provider().mutate(lambda document: document["business"].update(
+        {"api_token": "secret-token-123"},
+    ))
 
     endpoints_get = [
         "/api/tasks",
@@ -202,6 +213,9 @@ def test_api_token_auth_read_and_download_endpoints(client, monkeypatch):
 def test_api_token_auth_when_token_unset(client, monkeypatch):
     """未配置 SUBTRANS_API_TOKEN 时，读取和修改接口无须鉴权直接通过。"""
     monkeypatch.delenv("SUBTRANS_API_TOKEN", raising=False)
+    get_config_provider().mutate(lambda document: document["business"].update(
+        {"api_token": None},
+    ))
 
     r = client.post("/api/tasks", json=_payload())
     assert r.status_code == 201
@@ -211,7 +225,15 @@ def test_api_token_auth_when_token_unset(client, monkeypatch):
     assert client.get(f"/api/tasks/{cid}").status_code == 200
 
 
-def test_create_defaults_when_minimal(client):
+def test_create_defaults_when_minimal(client, monkeypatch):
+    class UnavailableLocalModel:
+        @staticmethod
+        def is_ready():
+            return False
+
+    monkeypatch.setattr(
+        tasks_routes, "get_translation_model_manager", lambda: UnavailableLocalModel()
+    )
     r = client.post("/api/tasks", json={"url": "https://x/y"})
     # Minimal requests use the local CPU engine by default.  Until its model
     # has been downloaded and converted, task creation must fail explicitly
@@ -273,12 +295,9 @@ def test_retry_rejects_historical_replicate_task(client, monkeypatch):
 
 def test_create_task_rejects_missing_deepseek_api_key(client, monkeypatch):
     """DeepSeek 引擎在需要字幕且未配置 API Key 时应返回 422 拒绝。"""
-    import dataclasses
-    monkeypatch.setattr(
-        tasks_routes,
-        "settings",
-        dataclasses.replace(tasks_routes.settings, deepseek_api_key=None),
-    )
+    get_config_provider().mutate(lambda document: document["engines"]["byId"]["deepseek"].update(
+        api_key=None, availability="UNCONFIGURED",
+    ))
 
     # 1. POST /api/tasks
     r1 = client.post("/api/tasks", json=_payload(engine="deepseek", needSubtitle=True))
@@ -293,12 +312,9 @@ def test_create_task_rejects_missing_deepseek_api_key(client, monkeypatch):
 
 def test_create_task_allows_missing_deepseek_api_key_when_need_subtitle_false(client, monkeypatch):
     """不需要字幕（needSubtitle=False）时，即使未配置 DeepSeek Key 也能创建任务。"""
-    import dataclasses
-    monkeypatch.setattr(
-        tasks_routes,
-        "settings",
-        dataclasses.replace(tasks_routes.settings, deepseek_api_key=None),
-    )
+    get_config_provider().mutate(lambda document: document["engines"]["byId"]["deepseek"].update(
+        api_key=None, availability="UNCONFIGURED",
+    ))
 
     r = client.post("/api/tasks", json=_payload(engine="deepseek", needSubtitle=False))
     assert r.status_code == 201
@@ -306,12 +322,9 @@ def test_create_task_allows_missing_deepseek_api_key_when_need_subtitle_false(cl
 
 def test_create_task_succeeds_when_deepseek_api_key_present(client, monkeypatch):
     """已配置 DeepSeek Key 时，创建任务成功。"""
-    import dataclasses
-    monkeypatch.setattr(
-        tasks_routes,
-        "settings",
-        dataclasses.replace(tasks_routes.settings, deepseek_api_key="sk-valid-key"),
-    )
+    get_config_provider().mutate(lambda document: document["engines"]["byId"]["deepseek"].update(
+        api_key="sk-valid-key", availability="AVAILABLE",
+    ))
 
     r = client.post("/api/tasks", json=_payload(engine="deepseek", needSubtitle=True))
     assert r.status_code == 201

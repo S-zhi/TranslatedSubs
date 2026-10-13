@@ -8,7 +8,7 @@
 
 进度通过 on_progress 回调透传（解析 ffmpeg 的 -progress 输出），供编排层转 SSE。
 
-依赖：ffmpeg、ffprobe（需在 PATH 中，或用 SUBTRANS_FFMPEG / SUBTRANS_FFPROBE 指定）。
+依赖：ffmpeg、ffprobe（需在 PATH 中，或在设置页/API 的业务配置中指定命令路径）。
 """
 
 from __future__ import annotations
@@ -188,7 +188,7 @@ def _run_ffmpeg(
             ))
 
     not_found_msg = (
-        f"找不到 ffmpeg（{cmd[0]}）。请安装 ffmpeg-full 或设置 SUBTRANS_FFMPEG。"
+        f"找不到 ffmpeg（{cmd[0]}）。请安装 ffmpeg-full，或在设置页/API 配置 ffmpeg 路径。"
         " MAC用户请使用  brew install ffmpeg-full,请注意不要下载 ffmpeg，"
         "ffmpeg-full 是 ffmpeg 的完整版本，仅下载ffmpeg可能会导致字幕无法烧录到视频"
     )

@@ -7,7 +7,6 @@ API Key 的实际内容。
 from __future__ import annotations
 
 import importlib.util
-import os
 import shutil
 import time
 from pathlib import Path
@@ -45,13 +44,8 @@ def build_readiness() -> dict[str, Any]:
     ``ok`` 表示默认的完整流水线（含硬字幕）所需的基础环境是否可用。
     下载能力和硬字幕能力单独暴露，便于 MCP 给出精确的下一步提示。
     """
-    env_file = settings.backend_dir / ".env"
-
-    deepseek_ready = _has_value(
-        os.getenv("SUBTRANS_DEEPSEEK_API_KEY")
-        or os.getenv("DEEPSEEK_API_KEY")
-        or settings.deepseek_api_key
-    )
+    deepseek_ready = False
+    config_file = settings.backend_dir / "config.local.json"
     local_engine = None
     local_engine_enabled = False
     local_model_ready = False
@@ -74,7 +68,7 @@ def build_readiness() -> dict[str, Any]:
         )
     except Exception:
         # Readiness remains useful when the translation-engine database is
-        # temporarily unavailable; the legacy DeepSeek check is still reported.
+        # temporarily unavailable; active engine status is reported separately.
         local_translation_ready = False
         local_dependencies = {"ready": False, "missing": []}
         local_engine = None
@@ -109,8 +103,7 @@ def build_readiness() -> dict[str, Any]:
 
     active_llm = model_settings_status.get("llm")
     if active_llm and active_llm.get("runtimeManaged") and active_llm.get("enabled"):
-        # A saved unified key is an active credential source even when the
-        # legacy environment variable is absent.
+        # A saved unified key is the active credential source.
         deepseek_ready = bool(deepseek_ready or active_llm.get("hasApiKey"))
 
     # Keep a small, redacted view of the configuration that a new task would
@@ -148,9 +141,9 @@ def build_readiness() -> dict[str, Any]:
             "reason": reason,
         }
 
-    # The local engine is the default execution path.  A configured DeepSeek
-    # key remains visible for compatibility, but it must not make the default
-    # readiness check pass while the local model is absent or broken.
+    # The local engine is the default execution path. A saved cloud engine
+    # credential remains visible for compatibility, but it must not make the
+    # default readiness check pass while local translation is absent or broken.
     translation_ready = local_translation_ready
     ffmpeg_status = _check_binary(settings.ffmpeg_bin)
     ffprobe_status = _check_binary(settings.ffprobe_bin)
@@ -195,9 +188,9 @@ def build_readiness() -> dict[str, Any]:
     if yt_dlp_status != "available":
         missing.append("yt-dlp")
     if data_dir_status != "writable":
-        missing.append("SUBTRANS_DATA_DIR 可写权限")
+        missing.append("数据目录可写权限（检查 config.local.json 的 paths.dataDir）")
     if db_dir_status != "writable":
-        missing.append("SUBTRANS_DB 所在目录可写权限")
+        missing.append("数据库目录可写权限（检查 config.local.json 的 paths.dbPath）")
     if ffmpeg_status == "available" and not hard_burn_ready:
         missing.append("FFmpeg subtitles 滤镜（通常由 libass 提供）")
 
@@ -236,8 +229,8 @@ def build_readiness() -> dict[str, Any]:
     return {
         "ok": hard_pipeline_ready,
         "initialized": full_pipeline_ready,
-        "config_file": str(env_file),
-        "config_file_present": env_file.is_file(),
+        "config_file": str(config_file),
+        "config_file_present": config_file.is_file(),
         "required_environment": [],
         "model_settings": model_settings_status,
         "effective": effective_models,

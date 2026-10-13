@@ -31,13 +31,13 @@ get_task_artifacts
 `restart_required`：
 
 - `agent_action=continue`：可以继续调用后续工具。
-- `agent_action=ask_user_to_configure`：不要调用处理工具。根据 `missing` 的内容安装本地翻译依赖/模型，或按 `config_file` 指向的固定位置补齐云端配置；仅修改 `.env` 后才需要重启业务 FastAPI 服务。
+- `agent_action=ask_user_to_configure`：不要调用处理工具。根据 `missing` 的内容安装本地翻译依赖/模型，或通过业务设置页面/API 补齐配置；保存后无需重启业务 FastAPI 服务。
 - `agent_action=use_soft_burn_or_install_libass`：基础流水线已就绪，但硬字幕不可用。询问用户是否改用 `burn=soft`，或提示用户安装带 libass 字幕滤镜的 FFmpeg。
 - `error_code=BUSINESS_UNAVAILABLE`：业务 API 没有运行，请用户先启动业务服务。
 
 Agent 不得：
 
-- 要求用户把 `SUBTRANS_DEEPSEEK_API_KEY` 或 `DEEPSEEK_API_KEY` 作为 MCP 工具参数传入；
+- 要求用户把 API Key 作为 MCP 工具参数传入；
 - 在对话、工具结果或日志中打印密钥实际内容；
 - 自行生成、猜测或覆盖密钥；
 - 在 setup 未就绪时反复调用 `start_subtitle_pipeline`。
@@ -76,7 +76,7 @@ Agent 不得：
 | --- | --- |
 | `INVALID_URL` | 请求用户提供合法的 `http://` 或 `https://` 视频页面地址。 |
 | `PROBE_FAILED` | 把预检查错误告知用户，请求新的 URL；不要直接启动流水线。 |
-| `NOT_INITIALIZED` | 根据 `missing` 安装本地依赖/模型或配置云端环境；修改 `.env` 后再重启业务服务。 |
+| `NOT_INITIALIZED` | 根据 `missing` 安装本地依赖/模型或通过业务设置/API 配置；无需重启业务服务。 |
 | `LOCAL_TRANSLATION_MODEL_NOT_READY` | 提示用户在设置中下载并转换本地模型。 |
 | `LOCAL_TRANSLATION_DEPENDENCY_MISSING` | 运行 `uv sync --extra local-translation`，无需重启服务。 |
 | `HARD_BURN_UNAVAILABLE` | 询问是否改用 `burn=soft`，或提示安装带 libass 的 FFmpeg。 |

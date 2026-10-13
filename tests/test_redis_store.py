@@ -5,6 +5,7 @@ import json
 import pytest
 
 from src.config.redis_store import (
+    ConfigUnavailable,
     RedisInvalidationSubscriber,
     RedisJsonConfigStore,
     RevisionConflict,
@@ -75,8 +76,10 @@ def test_json_roundtrip_revision_and_invalidation():
 def test_unavailable_redis_is_non_blocking():
     store = RedisJsonConfigStore()
     assert store.available is False
-    assert store.get("llm") is None
-    assert store.set("llm", {}) is None
+    with pytest.raises(ConfigUnavailable):
+        store.get("llm")
+    with pytest.raises(ConfigUnavailable):
+        store.set("llm", {})
     assert RedisInvalidationSubscriber(store, lambda *_: None).start() is False
 
 

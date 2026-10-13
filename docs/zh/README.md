@@ -38,6 +38,17 @@ TranslatedSubs 是视频与音频字幕处理工作台，支持媒体下载、�
 
 ## 从源码构建
 
+必需依赖：Python 3.10–3.12、`uv`、用于克隆源码的 Git、FFmpeg/FFprobe（硬字幕需要含 `subtitles`/libass 滤镜）以及正在运行的 Redis 服务。`uv sync` 会安装 Python 库，包括 Redis 客户端（`redis>=5`），但不会安装或启动 Redis 服务端。
+
+仅为需要使用的功能安装可选依赖：
+
+- 本地英译中：`uv sync --extra local-translation`（之后在设置中下载并转换模型）。
+- Hugging Face Whisper 模型：`uv sync --extra hf-models`。
+- Kokoro 配音：`uv sync --extra tts`，并安装系统包 `espeak-ng`；模型在运行时下载。系统依赖见[配音指南](../tts.md)。
+- Demucs 需单独安装。Google Drive sidecar 才需要 Go 1.23 或更新版本；运行前端测试时才需要 Node.js。
+
+如果要启用多个 Python extras，请在同一条 `uv sync` 命令中列出，例如 `uv sync --extra local-translation --extra hf-models --extra tts`。
+
 ### macOS 构建
 
 macOS 本地运行需要 Python 3.10–3.12、`uv` 和启用 libass 的 FFmpeg。网页工作台由 API 一并提供，不需要单独安装 Node.js。
@@ -51,17 +62,22 @@ cd TranslatedSubs
 brew install uv
 brew tap homebrew-ffmpeg/ffmpeg
 brew install ffmpeg-full
+brew install redis
+brew services start redis
+redis-cli ping
 uv sync
 
-cp .env.example .env
+cp config.example.json config.local.json
 ```
 
-可以将需要的云端 API Key 填入 `.env`，也可以在启动后再配置；项目推荐在启动后配置。
+Redis 检查应输出 `PONG`。如果已有其他 Redis 服务正在运行，可将其地址写入 `config.local.json` 的 `redis.url`，无需另装 Redis。
+
+云端模型凭据和业务设置在服务启动后通过 Web 工作台或配置 API 管理，保存到 Redis 后无需重启即可生效。
 
 启动业务 API 和网页工作台：
 
 ```sh
-uv run uvicorn src.handler.app:app --port 8000
+uv run python -m src.cli
 ```
 
 然后打开 <http://127.0.0.1:8000/>。可用下面的命令检查服务状态，以及 FFmpeg 是否支持硬字幕：
@@ -98,15 +114,27 @@ git clone https://github.com/S-zhi/TranslatedSubs.git
 cd TranslatedSubs
 uv python install 3.12
 uv sync --python 3.12 --locked
-Copy-Item .env.example .env
+Copy-Item config.example.json config.local.json
 ```
 
-可以将需要的云端 API Key 填入 `.env`，也可以在启动后再配置；项目推荐在启动后配置。
+请先启动启用 Linux 容器的 Docker Desktop，再在 PowerShell 中用这一行启动独立 Redis 服务：
+
+```powershell
+docker run -d --name translatedsubs-redis --restart unless-stopped -p 127.0.0.1:6379:6379 -v translatedsubs-redis-data:/data redis:7-alpine redis-server --appendonly yes
+```
+
+检查 Redis 返回 `PONG`：
+
+```powershell
+docker exec translatedsubs-redis redis-cli ping
+```
+
+如果已有其他 Redis 服务，可将 `config.local.json` 的 `redis.url` 改为对应地址。`uv sync` 安装的是 Python Redis 客户端，不是 Redis 服务端。云端模型凭据和业务设置在服务启动后通过 Web 工作台或配置 API 管理。
 
 启动 API 和网页工作台：
 
 ```powershell
-uv run --locked uvicorn src.handler.app:app --host 127.0.0.1 --port 8000
+uv run --locked python -m src.cli --host 127.0.0.1 --port 8000
 ```
 
 打开 <http://127.0.0.1:8000/> 使用工作台。可通过以下命令检查服务：
@@ -121,12 +149,32 @@ curl.exe http://127.0.0.1:8000/api/health/ready
 在仓库根目录执行：
 
 ```bash
-cp .env.example .env
-# 在 .env 中填写 SUBTRANS_DEEPSEEK_API_KEY
-docker build -t translatedsubs:local . && docker run -d --name translatedsubs --restart unless-stopped -p 8000:8000 --env-file .env -e SUBTRANS_DATA_DIR=/data -e SUBTRANS_DB=/data/db/app.db -v translatedsubs-data:/data translatedsubs:local
+cp config.example.json config.local.json
+docker compose up -d --build
 ```
 
-从旧容器升级时，把 `translatedsubs-data` 换成原有数据卷名，保留任务数据库和产物。现有 `SUBTRANS_*` 环境变量继续使用。
+启动 Compose 前，先编辑 `config.local.json`，让 API 容器连接 Compose Redis 并使用持久化数据卷。将其中的 `redis`、`paths` 和 `http` 值改为：
+
+```json
+{
+  "redis": {
+    "url": "redis://redis:6379/0",
+    "namespace": "translatedsubs-local"
+  },
+  "paths": {
+    "dataDir": "/data",
+    "dbPath": "/data/db/app.db"
+  },
+  "http": {
+    "host": "0.0.0.0",
+    "port": 8000
+  }
+}
+```
+
+Compose 会自动拉取并启动 Redis，因此宿主机部署 Compose 时无需安装 Redis、Python、`uv` 或 FFmpeg。API 和 Redis 使用独立持久化卷，Redis 已启用 AOF 持久化。升级时保留这两个卷。
+
+Docker 镜像只安装基础 Python 依赖。若要在容器中使用本地翻译、Hugging Face Whisper、Kokoro 配音或 Demucs，需要在 Docker 镜像中添加对应可选依赖和系统工具后重新构建；配音还需要 `espeak-ng`。模型文件仍需在工作台中单独下载。
 
 打开 <http://localhost:8000/>。用 `curl http://127.0.0.1:8000/api/health` 检查 API 是否启动，正常响应包含 `"ok":true`；`/api/health/ready` 还会列出翻译密钥、FFmpeg、存储目录和硬字幕滤镜的就绪状态。本地开发、Linux 部署和容器升级说明见[文档目录](../README.md)。
 
@@ -149,29 +197,23 @@ docker build -t translatedsubs:local . && docker run -d --name translatedsubs --
 
 ## 关键配置与数据
 
-先复制 `.env.example` 即可启动服务；默认翻译引擎是本地 CPU 英语 → 简体中文。先执行 `uv sync --extra local-translation`，再在设置中下载并转换模型。只有显式选择 DeepSeek 时才需要配置 `SUBTRANS_DEEPSEEK_API_KEY`。完整字段和默认值以[环境变量模板](../../.env.example)为准；日常最常调整的是：
+将 `config.example.json` 复制为 `config.local.json` 并启动 Redis。模型凭据和业务设置通过 Web 工作台的设置页面或配置 API 管理，保存到 Redis 后会立即用于新请求，无需重启服务。
 
-| 配置                                            | 用途                                                                        |
-| ----------------------------------------------- | --------------------------------------------------------------------------- |
-| `SUBTRANS_DEEPSEEK_API_KEY`                     | 可选的 DeepSeek 密钥；默认本地翻译不需要它。                                |
-| `SUBTRANS_DATA_DIR`、`SUBTRANS_DB`              | 视频、字幕和 SQLite 任务数据库的位置；Docker 示例把两者放在持久化数据卷中。 |
-| `SUBTRANS_TRANSCRIBER_BACKEND`                  | 默认 `local_whisper`；也可接入兼容 HTTP 服务。             |
-| `SUBTRANS_COOKIES`                              | 仅在目标网站要求登录或年龄验证时配置 Cookie 文件。                          |
-| `SUBTRANS_WORKERS`、`SUBTRANS_DOWNLOAD_WORKERS` | 控制流水线和下载的并发数，按机器资源调整。                                  |
+引导文件只保存本机 Redis、数据路径和监听设置。升级时保留数据卷与 Redis 卷；不要提交 `config.local.json`、旧版 `.env`、Cookie、OAuth 凭据或测试媒体。Google Drive 需要单独启动 sidecar，见[本地快速启动](../local-quick-start.md)。
 
-升级容器时复用原数据卷；不要只迁移视频文件而丢掉 SQLite 数据库。不要提交 `.env`、Cookie、OAuth 凭据或测试生成的媒体文件。Google Drive 需要额外启动 sidecar，见[本地快速启动](../local-quick-start.md)。
+已有部署首次启动新版 API 前，应先启动并检查 Redis、准备好 `config.local.json`，再执行显式迁移；应用不会自动导入旧版 `.env` 或 SQLite 配置。请按[迁移步骤](../local-quick-start.md#从旧版-env-迁移)操作。
 
 ## 常见问题
 
 - API 可访问但任务无法开始：查看 `/api/health/ready` 的 `checks` 和 `capabilities`，确认密钥、FFmpeg/FFprobe、yt-dlp 与数据目录状态。
 - 提示 `MODEL_NOT_READY`：先在“本地模型”下载并检查所选 Whisper 模型，再提交字幕任务。
 - 硬字幕不可用：安装带 libass 的 FFmpeg，或在任务中选择软字幕；检查命令为 `ffmpeg -hide_banner -filters | grep ' subtitles '`。
-- 链接下载失败：先运行“下载测试”；需要登录的网站再按[本地启动说明](../local-quick-start.md)配置 `SUBTRANS_COOKIES`。
+- 链接下载失败：先运行“下载测试”；需要登录的网站再按[本地启动说明](../local-quick-start.md)配置 cookie file setting。
 
 ## 文档
 
 - [文档目录](../README.md)：按场景查找部署和扩展说明
-- [本地快速启动](../local-quick-start.md)：macOS/Linux 本地运行、环境变量和 Google Drive sidecar
+- [本地快速启动](../local-quick-start.md)：macOS/Linux 本地运行、Redis/机器引导配置和 Google Drive sidecar
 - [Linux 部署](../quick-start-linux.md)：Ubuntu/Debian 一键安装、systemd、反向代理和排障
 - [MCP Server](../mcp-server.md)：stdio、Streamable HTTP 和工具说明
 - [MCP Agent 指南](../mcp-agent-guide.md)：Agent 调用顺序、状态处理和错误处理
@@ -180,7 +222,7 @@ docker build -t translatedsubs:local . && docker run -d --name translatedsubs --
 
 ## 开发
 
-项目使用 Python 3.10–3.12、FastAPI、FFmpeg 和原生 JavaScript 前端。本地开发可运行 `uv sync` 安装依赖，再运行 `uv run uvicorn src.handler.app:app --port 8000`；前端由同一服务提供。后端测试使用 `uv run pytest -q`，前端测试在 `web/` 目录运行 `npm test`。真实云服务和下载测试需显式启用，参见 [AGENTS.md](../../AGENTS.md)。
+项目使用 Python 3.10–3.12、FastAPI、FFmpeg 和原生 JavaScript 前端。本地开发可运行 `uv sync` 安装依赖，再运行 `uv run python -m src.cli`；前端由同一服务提供。后端测试使用 `uv run pytest -q`，前端测试在 `web/` 目录运行 `npm test`。真实云服务和下载测试需显式启用，参见 [AGENTS.md](../../AGENTS.md)。
 
 `src/handler/` 提供 HTTP API，`src/core/` 处理下载、转写与字幕，`src/service/` 和 `src/store/` 管理任务与持久化，`src/mcp_server/` 提供 MCP 接入，`web/` 是浏览器工作台。开发规范见 [CONTRIBUTING.md](../../.github/CONTRIBUTING.md)；安全问题请按 [SECURITY.md](../../.github/SECURITY.md) 私下报告，不要提交公开 Issue。
 

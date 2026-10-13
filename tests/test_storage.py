@@ -464,7 +464,10 @@ def test_cleanup_re_validates_status_before_delete(client, monkeypatch):
 
 def test_retention_roundtrip(client):
     """保留策略的 get / put 闭环。"""
-    assert client.get("/api/storage/retention").json() == {"days": 30, "updatedAt": None, "lastRunAt": None}
+    initial = client.get("/api/storage/retention").json()
+    assert initial["days"] == 30
+    assert initial["updatedAt"] > 0
+    assert initial["lastRunAt"] is None
 
     r = client.put("/api/storage/retention", json={"days": 7})
     assert r.status_code == 200

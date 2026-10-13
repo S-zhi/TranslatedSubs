@@ -1,7 +1,7 @@
 """保留策略后台调度器服务。
 
 定期（默认每小时）或在修改保留配置时，自动执行离线产物清理，
-并将上次清理执行时间 lastRunAt 回写到 .retention.json。
+并将上次清理执行时间 lastRunAt 回写到 Redis 业务配置。
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ def execute_retention_cleanup(
     from src.handler.storage import (
         CleanupPreviewRequest,
         _load_retention,
-        _save_retention,
+        _record_retention_run,
         execute_cleanup,
     )
 
@@ -46,8 +46,7 @@ def execute_retention_cleanup(
     res = execute_cleanup(req, task_store, probe_store)
 
     now_ms = int(time.time() * 1000)
-    ret.lastRunAt = now_ms
-    _save_retention(ret)
+    _record_retention_run(now_ms)
 
     logger.info(
         "保留策略自动清理完成: days=%d, cleaned_task_artifacts=%d, deleted_bytes=%d",

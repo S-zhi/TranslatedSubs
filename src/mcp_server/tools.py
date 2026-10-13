@@ -280,8 +280,8 @@ def register_tools(server: Any, api: BusinessApiClient | None = None) -> Subtitl
         description=(
             "只读检查业务 API、必要密钥、FFmpeg、yt-dlp 和存储目录是否就绪。"
             "这是处理视频前的必做步骤；不会返回任何密钥内容。若 error_code 为 "
-            "NOT_INITIALIZED，请根据 config_file 和 missing 提醒用户在业务项目的 .env "
-            "中配置并重启业务服务；若 agent_action 为 continue，才继续后续工具。"
+            "NOT_INITIALIZED，请根据 config_file 和 missing 提醒用户在业务设置或 API 中配置；"
+            "若 agent_action 为 continue，才继续后续工具。"
         ),
     )
     async def check_subtitle_setup() -> dict[str, Any]:
@@ -318,7 +318,7 @@ def register_tools(server: Any, api: BusinessApiClient | None = None) -> Subtitl
             "调用前必须先执行 check_subtitle_setup；需要时可先执行 probe_video。"
             "成功后只使用返回的 task_id 调用 get_task_status 轮询，状态为 SUCCESS 后才能调用 "
             "get_task_artifacts。初始化失败时不要把密钥作为参数传入，按返回的 config_file、missing "
-            "和 agent_action 指引用户配置业务服务。"
+            "和 agent_action 指引用户通过业务设置或 API 配置服务。"
         ),
     )
     async def start_subtitle_pipeline(

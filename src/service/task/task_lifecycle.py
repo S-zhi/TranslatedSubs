@@ -14,6 +14,7 @@ from typing import Any, Callable, List, Literal, Optional
 from fastapi import Depends, File, Form, Header, HTTPException, Query, UploadFile
 
 from src.config import SOURCE_VIDEO_STEM, settings as default_settings
+from src.config.config import settings_scope
 from src.handler.deps import get_probe_store, get_store, get_translation_engine_store, require_api_token
 from src.handler.schemas import (
     ErrorDetail,
@@ -53,6 +54,16 @@ class LifecycleConflictError(RuntimeError):
     """Expected lifecycle state conflict suitable for HTTP 409."""
 
 
+def _creation_runtime_inputs(engines: Any) -> tuple[Any, Any | None]:
+    """Pin real engine stores to the aggregate config read used for creation."""
+    if not isinstance(engines, TranslationEngineStore):
+        return engines, None
+    config_snapshot = engines._read()
+    return TranslationEngineStore(
+        provider=engines._provider, snapshot=config_snapshot
+    ), config_snapshot
+
+
 def require(store: Any, task_id: str) -> Any:
     rec = store.get(task_id)
     if rec is None:
@@ -82,8 +93,10 @@ def _resolve_creation_plan(
     runtime_snapshot: dict[str, Any] | None = None,
 ) -> str:
     """Snapshot the selected plan before checking only its built-in readiness."""
-    try:
-        plan_json = resolve_plugin_plan(
+    plan_settings = settings or default_settings
+
+    def resolve_plan() -> str:
+        return resolve_plugin_plan(
             source_type=source_type,
             source_lang=source_lang,
             target_lang=target_lang,
@@ -96,9 +109,16 @@ def _resolve_creation_plan(
             tts_enabled=tts_enabled,
             tts_voice=tts_voice,
             original_voice_mode=original_voice_mode,
-            settings=settings,
+            settings=plan_settings,
             engines=engines,
         )
+
+    try:
+        if runtime_snapshot:
+            with settings_scope(runtime_snapshot["business"]):
+                plan_json = resolve_plan()
+        else:
+            plan_json = resolve_plan()
     except ValueError as exc:
         # Preserve the old create-time 422 for an unknown configured engine;
         # resolving the plan now happens before readiness checks by design.
@@ -154,7 +174,11 @@ def _resolve_creation_plan(
     translate = slots["translate"]
     if translate["plugin_id"] == "builtin.translation_engine":
         ensure_supported_translation_languages(engine, need_subtitle, source_lang, target_lang)
-        ensure_translation_engine(engine, need_subtitle, engines)
+        # resolve_runtime already validated a real engine store against the
+        # same aggregate snapshot. Re-reading it here could observe a newer
+        # Redis revision after the task snapshot was captured.
+        if not (runtime_snapshot and isinstance(engines, TranslationEngineStore)):
+            ensure_translation_engine(engine, need_subtitle, engines)
     else:
         # Every subtitle plan still captures an existing, enabled engine record;
         # a custom translator owns runtime-specific dependency validation.
@@ -182,8 +206,10 @@ def create_url_task(
 
     runtime_snapshot = None
     runtime_config_json = None
+    runtime_engines = engines
     if resolve_runtime is not None:
-        runtime_snapshot = resolve_runtime(
+        runtime_engines, config_snapshot = _creation_runtime_inputs(engines)
+        runtime_kwargs = dict(
             engine=body.engine,
             need_subtitle=body.needSubtitle,
             request_model=body.model,
@@ -191,9 +217,12 @@ def create_url_task(
             target_lang=body.targetLang,
             tts_enabled=body.ttsEnabled,
             tts_voice=body.ttsVoice,
-            engines=engines,
+            engines=runtime_engines,
             ensure_local_model_ready=ensure_local_model_ready,
-        ).snapshot
+        )
+        if config_snapshot is not None:
+            runtime_kwargs["config_snapshot"] = config_snapshot
+        runtime_snapshot = resolve_runtime(**runtime_kwargs).snapshot
         runtime_config_json = json.dumps(runtime_snapshot, ensure_ascii=False, separators=(",", ":"))
 
     plugin_plan_json = _resolve_creation_plan(
@@ -210,7 +239,7 @@ def create_url_task(
         tts_voice=(runtime_snapshot or {}).get("tts", {}).get("voice") or body.ttsVoice,
         original_voice_mode=body.originalVoiceMode,
         settings=settings or default_settings,
-        engines=engines,
+        engines=runtime_engines,
         ensure_supported_translation_languages=ensure_supported_translation_languages,
         ensure_local_model_ready=ensure_local_model_ready,
         ensure_translation_engine=ensure_translation_engine,
@@ -270,8 +299,10 @@ def create_upload_task(
     filename = (file.filename or "").strip()
     runtime_snapshot = None
     runtime_config_json = None
+    runtime_engines = engines
     if resolve_runtime is not None:
-        runtime_snapshot = resolve_runtime(
+        runtime_engines, config_snapshot = _creation_runtime_inputs(engines)
+        runtime_kwargs = dict(
             engine=engine,
             need_subtitle=need_subtitle,
             request_model=model,
@@ -279,9 +310,12 @@ def create_upload_task(
             target_lang=target_lang,
             tts_enabled=tts_enabled,
             tts_voice=tts_voice,
-            engines=engines,
+            engines=runtime_engines,
             ensure_local_model_ready=ensure_local_model_ready,
-        ).snapshot
+        )
+        if config_snapshot is not None:
+            runtime_kwargs["config_snapshot"] = config_snapshot
+        runtime_snapshot = resolve_runtime(**runtime_kwargs).snapshot
         runtime_config_json = json.dumps(runtime_snapshot, ensure_ascii=False, separators=(",", ":"))
     if tts_enabled and not need_subtitle:
         raise UploadTaskError(422, "配音需要启用字幕翻译")
@@ -325,7 +359,7 @@ def create_upload_task(
         tts_voice=(runtime_snapshot or {}).get("tts", {}).get("voice") or tts_voice,
         original_voice_mode=original_voice_mode,
         settings=settings,
-        engines=engines,
+        engines=runtime_engines,
         ensure_supported_translation_languages=ensure_supported_translation_languages,
         ensure_local_model_ready=ensure_local_model_ready,
         ensure_translation_engine=ensure_translation_engine,
@@ -633,7 +667,7 @@ def probe_task_route(
             detail=ErrorDetail(
                 code="BROWSER_COOKIES_DISABLED",
                 message="浏览器 Cookie 探测未启用",
-                suggestion="请在后端同一台可信机器上设置 SUBTRANS_ALLOW_COOKIES_FROM_BROWSER=1 后重试。",
+                suggestion="请在 Redis 业务配置中启用 allow_cookies_from_browser 后重试。",
             ).model_dump(exclude_none=True),
         )
     result, _record = compat._task_runtime.probe_and_record(

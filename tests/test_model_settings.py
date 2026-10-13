@@ -2,8 +2,28 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from src.config.redis_store import RevisionConflict
 from src.handler.app import app
 from src.handler.model_settings import _store
+from src.config.config_repository import MemoryConfigProvider
+from src.store.model_settings_store import ModelSettingsStore
+
+
+def test_prepared_model_update_rejects_a_stale_revision():
+    provider = MemoryConfigProvider()
+    store = ModelSettingsStore(provider=provider)
+    candidate = {"llm": {"model": "prepared-model"}}
+    prepared, revision = store.prepare_versioned(candidate)
+
+    store.update({"llm": {"model": "concurrent-model"}})
+    try:
+        store.update(candidate, prepared=prepared, expected_revision=revision)
+    except RevisionConflict:
+        pass
+    else:
+        raise AssertionError("stale prepared model settings should fail revision check")
+
+    assert store.get("llm")["model"] == "concurrent-model"
 
 
 def test_model_settings_defaults_and_masked_key(tmp_path, monkeypatch):
@@ -13,6 +33,7 @@ def test_model_settings_defaults_and_masked_key(tmp_path, monkeypatch):
     result = _store().get_all()
     assert set(result) == {"llm", "whisper", "tts"}
     assert result["llm"]["models"][0]["id"] == "llm-deepseek"
+    assert not result["llm"]["models"][0]["apiKey"]
     assert result["tts"]["voice"] == "auto"
 
 
@@ -25,13 +46,13 @@ def test_model_settings_routes_partial_update_and_create(tmp_path, monkeypatch):
     with TestClient(app) as client:
         response = client.get("/api/settings/models")
         assert response.status_code == 200
-        assert response.json()["llm"]["hasApiKey"] is True
+        assert response.json()["llm"]["hasApiKey"] is False
         assert "apiKey" not in response.json()["llm"]
 
         updated = client.put("/api/settings/models", json={"llm": {"model": "deepseek-reasoner", "apiKey": ""}})
         assert updated.status_code == 200
         assert updated.json()["llm"]["model"] == "deepseek-reasoner"
-        assert updated.json()["llm"]["hasApiKey"] is True
+        assert updated.json()["llm"]["hasApiKey"] is False
 
         created = client.post("/api/settings/models/tts", json={
             "id": "client-supplied-id", "name": "Demo", "provider": "kokoro",

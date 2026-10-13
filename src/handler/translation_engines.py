@@ -137,10 +137,13 @@ def create_engine(
     if not body.baseUrl.strip():
         raise HTTPException(status_code=422, detail="翻译引擎 Base URL 不能为空")
     key = body.apiKey.strip() if body.apiKey and body.apiKey.strip() else None
-    rec = store.create(
-        name=body.name, api_type=body.apiType, base_url=body.baseUrl,
-        model=body.model, api_key=key, enabled=body.enabled,
-    )
+    try:
+        rec = store.create(
+            name=body.name, api_type=body.apiType, base_url=body.baseUrl,
+            model=body.model, api_key=key, enabled=body.enabled,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     background_tasks.add_task(_validate_engine, rec.id, store)
     return _out(rec)
 
@@ -172,7 +175,10 @@ def update_engine(
     # 空值表示保持原密钥不变；创建配置时则自然表示未配置。
     if body.apiKey is not None:
         fields["api_key"] = body.apiKey.strip() if body.apiKey.strip() else ""
-    updated = store.update(engine_id, **fields)
+    try:
+        updated = store.update(engine_id, **fields)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _out(updated or rec)
 
 

@@ -31,7 +31,7 @@ cp config.example.json config.local.json
 go run ./cmd/server -config ./config.local.json
 ```
 
-服务默认只监听 `127.0.0.1:8787`。Python 服务默认地址为 `http://127.0.0.1:8000`；如果 Python 服务配置了 `SUBTRANS_API_TOKEN`，把同一个值填入 `python_api_token`，导入操作会通过 `X-API-Token` 调用 `/api/tasks/upload`。Python 导入请求超时可由 `python_timeout_seconds` 配置（默认 1800 秒 / 30 分钟），与控制 Drive API 请求超时的 `request_timeout_seconds` 区分开。
+服务默认只监听 `127.0.0.1:8787`。Python 服务默认地址为 `http://127.0.0.1:8000`；如果 Python 业务设置启用了 API Token，把该值填入 sidecar 的 `python_api_token`，导入操作会通过 `X-API-Token` 调用 `/api/tasks/upload`。Python 导入请求超时可由 `python_timeout_seconds` 配置（默认 1800 秒 / 30 分钟），与控制 Drive API 请求超时的 `request_timeout_seconds` 区分开。
 
 ## API
 

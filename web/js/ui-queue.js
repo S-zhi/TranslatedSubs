@@ -216,7 +216,7 @@ function fillError(dyn, t) {
 
 function errorHint(msg, code) {
   if (code === "unauthorized" || code === "missing_api_key")
-    return `API Key 无效或未设置，请检查 .env 配置或翻译引擎设置`;
+    return `API Key 无效或未设置，请检查设置页中的业务配置或翻译引擎设置`;
   if (code === "rate_limited")
     return `翻译 API 达到调用频率限制，请稍后重试或更换 API Key`;
   if (code === "network_error")
@@ -230,7 +230,7 @@ function errorHint(msg, code) {
   if (m.includes("模型") || m.includes("whisper"))
     return `请在本地模型设置中下载并检查 Whisper 模型`;
   if (m.includes("deepseek") || m.includes("api key"))
-    return `检查 .env 中的 <code>SUBTRANS_DEEPSEEK_API_KEY</code> 或翻译引擎配置`;
+    return `检查设置页中的模型密钥或已保存的翻译引擎配置`;
   if (m.includes("libass") || m.includes("ffmpeg"))
     return `检查 ffmpeg 是否安装且带 <code>libass</code>`;
   if (m.includes("下载") || m.includes("download") || m.includes("404"))

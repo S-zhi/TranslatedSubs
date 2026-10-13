@@ -105,12 +105,12 @@ class RedisJsonConfigStore:
 
     def get(self, key: str) -> ConfigSnapshot | None:
         if not self.available:
-            return None
+            raise ConfigUnavailable("Redis client is not configured")
         try:
             return _decode(self.client.get(self._key(key)))
         except Exception as exc:
             logger.warning("读取 Redis 配置失败 key=%s: %s", key, exc)
-            return None
+            raise ConfigUnavailable(str(exc)) from exc
 
     def set(
         self,
@@ -122,7 +122,7 @@ class RedisJsonConfigStore:
     ) -> ConfigSnapshot | None:
         """Write a value and publish invalidation after a successful write."""
         if not self.available:
-            return None
+            raise ConfigUnavailable("Redis client is not configured")
         redis_key = self._key(key)
         try:
             snapshot = self._set_cas(redis_key, value, expected_revision, updated_by)

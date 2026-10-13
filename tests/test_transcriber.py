@@ -10,7 +10,6 @@ from src.core.transcriber import HttpTranscriber, LocalWhisperTranscriber, Trans
 @pytest.fixture(autouse=True)
 def isolate_task_output(monkeypatch, tmp_path):
     monkeypatch.setattr(transcriber, "ensure_task_dir", lambda _task_id: tmp_path)
-    monkeypatch.setattr(transcriber, "_load_env", lambda: None)
 
 def make_audio(tmp_path):
     path = tmp_path / "test.wav"; path.write_bytes(b"fake audio"); return path

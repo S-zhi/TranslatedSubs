@@ -13,10 +13,12 @@ import pytest
 import src.handler.tasks  # noqa: F401
 from fastapi import HTTPException
 
+from src.config.config import settings as runtime_settings
+from src.service import model_runtime
 from src.handler.schemas import to_out
 from src.service.plugin_plan import ensure_plan, parse_plugin_plan
 from src.service.task.task_lifecycle import create_upload_task, create_url_task, retry_task
-from src.store import TaskStore
+from src.store import TaskStore, TranslationEngineStore
 
 
 def _settings(**overrides):
@@ -222,6 +224,58 @@ def test_custom_transcriber_does_not_require_local_whisper_model(tmp_path, monke
     assert created
     assert calls == ["language", "translation-ready"]
     assert parse_plugin_plan(record.plugin_plan_json)["slots"]["transcribe"]["plugin_id"] == "custom.asr"
+
+
+def test_url_creation_uses_one_config_revision_for_runtime_and_plugin_plan(
+    tmp_path, memory_config_provider
+):
+    engine_store = TranslationEngineStore(provider=memory_config_provider)
+    engine = engine_store.create(
+        name="Cloud", api_type="openai_compatible",
+        base_url="https://old.example/v1", model="old-model", api_key="test-key",
+    )
+    engine_store.update(engine.id, availability="AVAILABLE")
+    memory_config_provider.mutate(
+        lambda document: document["business"].update({"download_retries": 13})
+    )
+    pinned_revision = memory_config_provider.read().revision
+    store = TaskStore(tmp_path / "tasks.db")
+
+    def resolve_then_change_config(**kwargs):
+        assert kwargs["config_snapshot"].revision == pinned_revision
+        runtime = model_runtime.resolve_runtime(**kwargs)
+
+        def change(document):
+            document["business"]["download_retries"] = 99
+            current = document["engines"]["byId"][engine.id]
+            current["base_url"] = "https://new.example/v1"
+            current["model"] = "new-model"
+
+        memory_config_provider.mutate(change)
+        return runtime
+
+    record, created = create_url_task(
+        body=_body(engine=engine.id, needSubtitle=True),
+        store=store,
+        engines=engine_store,
+        ensure_supported_translation_languages=_noop,
+        ensure_local_model_ready=_noop,
+        ensure_translation_engine=lambda *_: (_ for _ in ()).throw(
+            AssertionError("runtime resolution already validated the pinned engine")
+        ),
+        resolve_runtime=resolve_then_change_config,
+        settings=runtime_settings,
+    )
+
+    assert created
+    runtime_snapshot = json.loads(record.runtime_config_json)
+    assert runtime_snapshot["configRevision"] == pinned_revision
+    assert runtime_snapshot["engine"]["model"] == "old-model"
+    plan = parse_plugin_plan(record.plugin_plan_json)
+    assert plan["slots"]["download"]["config"]["retries"] == 13
+    translate_config = plan["slots"]["translate"]["config"]
+    assert translate_config["model"] == "old-model"
+    assert translate_config["base_url"] == "https://old.example/v1"
 
 
 def test_builtin_whisper_readiness_error_keeps_url_409_and_creates_nothing(tmp_path):

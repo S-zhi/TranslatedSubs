@@ -138,8 +138,8 @@ def test_start_pipeline_reports_initialization_failure():
             return {
                 "ok": False,
                 "capabilities": {"download": False, "full_pipeline": False},
-                "config_file": "/project/.env",
-                "missing": ["SUBTRANS_DEEPSEEK_API_KEY 或 DEEPSEEK_API_KEY"],
+                "config_file": "/project/config.local.json",
+                "missing": ["请先在业务设置/API 配置翻译引擎"],
             }
 
     result = _run(SubtitleMcpTools(NotReadyApi()).start_subtitle_pipeline(
@@ -148,4 +148,4 @@ def test_start_pipeline_reports_initialization_failure():
 
     assert result["ok"] is False
     assert result["error_code"] == "NOT_INITIALIZED"
-    assert result["missing"] == ["SUBTRANS_DEEPSEEK_API_KEY 或 DEEPSEEK_API_KEY"]
+    assert result["missing"] == ["请先在业务设置/API 配置翻译引擎"]

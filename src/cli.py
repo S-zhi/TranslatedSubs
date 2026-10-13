@@ -6,6 +6,7 @@ import argparse
 from typing import Sequence
 
 import uvicorn
+from src.config.bootstrap import load_bootstrap
 
 
 def _port(value: str) -> int:
@@ -19,6 +20,7 @@ def _port(value: str) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    http = load_bootstrap().get("http", {})
     parser = argparse.ArgumentParser(
         prog="python -m src.cli",
         description="启动 TranslatedSubs API 和 Web 工作台。",
@@ -30,14 +32,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--host",
-        default="127.0.0.1",
-        help="监听地址（默认：127.0.0.1）",
+        default=str(http.get("host", "127.0.0.1")),
+        help="监听地址（默认从 config.local.json 读取）",
     )
     parser.add_argument(
         "--port",
         type=_port,
-        default=8000,
-        help="监听端口（默认：8000）",
+        default=_port(str(http.get("port", 8000))),
+        help="监听端口（默认从 config.local.json 读取）",
     )
     parser.add_argument(
         "--reload",

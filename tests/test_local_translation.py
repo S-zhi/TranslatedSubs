@@ -195,7 +195,7 @@ def test_runtime_uses_local_tokenizer_and_cpu_int8(monkeypatch, tmp_path):
     manager._executor.shutdown(wait=True)
 
 
-def test_runtime_cpu_thread_counts_can_be_overridden(monkeypatch, tmp_path):
+def test_runtime_cpu_thread_counts_can_be_overridden(memory_config_provider, monkeypatch, tmp_path):
     captured = {}
 
     class MarianTokenizer:
@@ -213,12 +213,23 @@ def test_runtime_cpu_thread_counts_can_be_overridden(monkeypatch, tmp_path):
     transformers.MarianTokenizer = MarianTokenizer
     monkeypatch.setitem(sys.modules, "ctranslate2", ctranslate2)
     monkeypatch.setitem(sys.modules, "transformers", transformers)
-    monkeypatch.setenv("SUBTRANS_LOCAL_CT2_INTER_THREADS", "2")
-    monkeypatch.setenv("SUBTRANS_LOCAL_CT2_INTRA_THREADS", "6")
-
+    memory_config_provider.mutate(
+        lambda doc: doc["business"].update({
+            "local_ct2_inter_threads": 2,
+            "local_ct2_intra_threads": 6,
+        })
+    )
     manager = TranslationModelManager(tmp_path / "model")
-    manager._load_runtime(tmp_path / "model")
+    manager._get_runtime()
     assert captured["threads"] == (2, 6)
+    memory_config_provider.mutate(
+        lambda doc: doc["business"].update({
+            "local_ct2_inter_threads": 3,
+            "local_ct2_intra_threads": 7,
+        })
+    )
+    manager._get_runtime()
+    assert captured["threads"] == (3, 7)
     manager._executor.shutdown(wait=True)
 
 
@@ -779,8 +790,6 @@ def test_readiness_accepts_enabled_ready_local_engine_without_deepseek_key(monke
     from src.handler import deps
     from src.service import runtime_check
 
-    monkeypatch.delenv("SUBTRANS_DEEPSEEK_API_KEY", raising=False)
-    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     from dataclasses import replace
     monkeypatch.setattr(runtime_check, "settings", replace(runtime_check.settings, deepseek_api_key=""))
     monkeypatch.setattr(runtime_check, "_check_binary", lambda _command: "available")

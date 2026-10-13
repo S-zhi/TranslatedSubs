@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib.util
 import logging
-import os
 import shutil
 import tempfile
 import threading
@@ -57,13 +56,6 @@ _LOCAL_CT2_BEAM_SIZE = 2
 _LOCAL_CT2_MAX_DECODING_LENGTH = 512
 
 
-def _positive_env_int(name: str, default: int) -> int:
-    try:
-        return max(1, int(os.getenv(name, str(default))))
-    except (TypeError, ValueError):
-        return default
-
-
 class TranslationModelError(RuntimeError):
     def __init__(self, message: str, *, code: str = "translation_model_error"):
         super().__init__(message)
@@ -109,6 +101,7 @@ class TranslationModelManager:
         self._future: Optional[Future] = None
         self._warm_future: Optional[Future] = None
         self._runtime: Optional[tuple[object, object]] = None
+        self._runtime_key: tuple[str, int, int] | None = None
         self._status = MODEL_STATUS_READY if self._installed(self.model_dir) else MODEL_STATUS_NOT_INSTALLED
         self._error: Optional[str] = None
         self._working_dir: Optional[Path] = None
@@ -376,11 +369,25 @@ class TranslationModelManager:
 
     def _get_runtime(self) -> tuple[object, object]:
         with self._runtime_lock:
-            if self._runtime is None:
-                self._runtime = self._load_runtime(self.model_dir)
+            inter_threads = max(1, int(settings.local_ct2_inter_threads))
+            intra_threads = max(1, int(settings.local_ct2_intra_threads))
+            runtime_key = (str(self.model_dir), inter_threads, intra_threads)
+            if self._runtime is None or self._runtime_key != runtime_key:
+                self._runtime = self._load_runtime(
+                    self.model_dir,
+                    inter_threads=inter_threads,
+                    intra_threads=intra_threads,
+                )
+                self._runtime_key = runtime_key
             return self._runtime
 
-    def _load_runtime(self, model_dir: Path) -> tuple[object, object]:
+    def _load_runtime(
+        self,
+        model_dir: Path,
+        *,
+        inter_threads: int | None = None,
+        intra_threads: int | None = None,
+    ) -> tuple[object, object]:
         try:
             if self._runtime_factory is not None:
                 return self._runtime_factory(str(model_dir))
@@ -392,12 +399,8 @@ class TranslationModelManager:
                 str(model_dir),
                 device="cpu",
                 compute_type="int8",
-                inter_threads=_positive_env_int(
-                    "SUBTRANS_LOCAL_CT2_INTER_THREADS", _LOCAL_CT2_INTER_THREADS
-                ),
-                intra_threads=_positive_env_int(
-                    "SUBTRANS_LOCAL_CT2_INTRA_THREADS", _LOCAL_CT2_INTRA_THREADS
-                ),
+                inter_threads=max(1, int(inter_threads or settings.local_ct2_inter_threads)),
+                intra_threads=max(1, int(intra_threads or settings.local_ct2_intra_threads)),
             )
             return tokenizer, translator
         except ImportError as exc:

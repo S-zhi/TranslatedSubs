@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import logging
 import math
-import os
 import threading
 import wave
 from dataclasses import dataclass
@@ -103,21 +102,6 @@ class TranscriberService(Protocol):
 TranscriberBackend = TranscriberService
 
 _LOCAL_WHISPER_SERVICES: dict[tuple[str, str, str, Optional[str], int], "LocalWhisperTranscriber"] = {}
-
-def _load_env():
-    """手动加载项目根 .env（不依赖 python-dotenv）。"""
-    env_path = Path(__file__).resolve().parents[2] / ".env"
-    if not env_path.exists():
-        return
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, val = line.partition("=")
-        key, val = key.strip(), val.strip().strip('"').strip("'")
-        if key and val and key not in os.environ:
-            os.environ[key] = val
-
 
 def _safe_callback(hook: ProgressHook, pct: Optional[float], status: str) -> None:
     try:
@@ -363,7 +347,7 @@ def _build_transcriber_service(backend: Optional[str] = None) -> TranscriberServ
     if backend in {"http", "custom", "custom_http"}:
         url = getattr(settings, "transcriber_url", None)
         if not url:
-            raise TranscribeError("自定义识别服务未配置 SUBTRANS_TRANSCRIBER_URL", code="missing_service_config")
+            raise TranscribeError("未配置自定义转写服务地址，请先在设置页/API 配置", code="missing_service_config")
         return HttpTranscriber(url=url, api_key=getattr(settings, "transcriber_api_key", None), timeout=getattr(settings, "transcriber_timeout", 1800))
     if backend in {"local_whisper", "local", "whisper", "faster_whisper"}:
         config = (getattr(settings, "local_whisper_model", "small"), getattr(settings, "local_whisper_device", "cpu"), getattr(settings, "local_whisper_compute_type", "int8"), getattr(settings, "local_whisper_download_root", None), getattr(settings, "local_whisper_beam_size", 5))
@@ -388,9 +372,8 @@ def transcribe(
 ) -> TranscribeResult:
     """把音频识别为原文字幕 data/{task_id}/original.srt。
 
-    服务由 ``SUBTRANS_TRANSCRIBER_BACKEND`` 选择，默认使用本地 Whisper；
-    ``http``/``custom`` 使用 ``SUBTRANS_TRANSCRIBER_URL`` 接入符合
-    :class:`TranscriberService` 数据协议的自定义节点。
+    服务由当前 Redis 业务配置选择，默认使用本地 Whisper；``http``/``custom``
+    使用已配置的 URL 接入符合 :class:`TranscriberService` 数据协议的自定义节点。
 
     Args:
         audio_path: 输入音频（通常是 audio.wav）；支持本地路径和 HTTP(S) URL。
@@ -398,9 +381,8 @@ def transcribe(
         on_progress: 可选进度回调。
         language: 源语言代码；None / "" / "auto" 表示自动检测。
         model_name: Whisper 模型名，如 "tiny.en" / "small"。
-        service: 可选的进程内 TranscriberService；传入时优先于环境变量选择。
+        service: 可选的进程内 TranscriberService；传入时优先于业务配置选择。
     """
-    _load_env()
     lang = None if language in (None, "", "auto") else language
 
     out_dir = ensure_task_dir(task_id)

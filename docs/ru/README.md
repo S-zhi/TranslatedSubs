@@ -33,6 +33,16 @@ TranslatedSubs — рабочая среда для понимания виде�
 
 ## Сборка из исходного кода
 
+### Обязательные зависимости
+
+Для запуска из исходного кода нужны Python 3.10–3.12, `uv`, Git (только для клонирования репозитория), FFmpeg/FFprobe с фильтром `subtitles` (libass) для встраивания субтитров и работающий сервис Redis. `uv sync` устанавливает библиотеки Python, включая клиент Redis (`redis>=5`), но не устанавливает и не запускает сервер Redis. Если у вас уже есть удалённый Redis, укажите его адрес в `redis.url` файла `config.local.json` и не устанавливайте ещё один сервер. Go 1.23 или новее нужен только для sidecar Google Drive; Node.js — только для тестов frontend. Эти функции не нужны для запуска; устанавливайте только необходимые (несколько extras можно объединить в одной команде):
+
+- `uv sync --extra local-translation` — локальный перевод, по умолчанию с английского на китайский.
+- `uv sync --extra hf-models` — модели Whisper от Hugging Face.
+- `uv sync --extra tts` — озвучивание Kokoro; также установите в системе `espeak-ng` (см. [TTS](../tts.md)).
+
+Установка пакетов Python не включает веса моделей: перед первой задачей скачайте или импортируйте модели локального перевода и Whisper в настройках и проверьте их готовность. Kokoro скачивает веса при первой генерации речи. Demucs устанавливается отдельно, только если включено разделение голоса.
+
 ### Сборка на macOS
 
 Для локального запуска проекта на macOS нужны Python 3.10–3.12, `uv` и FFmpeg с поддержкой libass. API также раздаёт веб-интерфейс, поэтому отдельно устанавливать Node.js не требуется.
@@ -42,19 +52,23 @@ TranslatedSubs — рабочая среда для понимания виде�
 ```sh
 git clone https://github.com/S-zhi/TranslatedSubs.git
 cd TranslatedSubs
-brew install uv
+brew install uv redis
 brew tap homebrew-ffmpeg/ffmpeg
 brew install ffmpeg-full
 uv sync
-cp .env.example .env
+cp config.example.json config.local.json
+brew services start redis
+redis-cli ping
 ```
 
-Нужные ключи облачных API можно добавить в `.env` или настроить после запуска; рекомендуется второй вариант.
+Последняя команда должна вывести `PONG`. Выполните её до запуска API.
+
+Настройте учетные данные моделей и параметры службы после запуска в настройках или через API. Они сохраняются в Redis и применяются без перезапуска.
 
 Запустите API и веб-интерфейс:
 
 ```sh
-uv run uvicorn src.handler.app:app --port 8000
+uv run python -m src.cli
 ```
 
 Откройте <http://127.0.0.1:8000/>. Проверьте работу сервиса и наличие в FFmpeg фильтра для встроенных субтитров:
@@ -91,15 +105,24 @@ ffmpeg -hide_banner -filters | grep " subtitles "
    cd TranslatedSubs
    uv python install 3.12
    uv sync --python 3.12 --locked
-   Copy-Item .env.example .env
+   Copy-Item config.example.json config.local.json
    ```
 
-   Нужные ключи облачных API можно добавить в `.env` или настроить после запуска; рекомендуется второй вариант.
+4. Подготовьте Redis с помощью Docker Desktop для Linux-контейнеров. Если у вас уже есть удалённый Redis, укажите его адрес в `redis.url` файла `config.local.json` и пропустите этот шаг.
+
+   ```powershell
+   docker run -d --name translatedsubs-redis --restart unless-stopped -p 127.0.0.1:6379:6379 -v translatedsubs-redis-data:/data redis:7-alpine redis-server --appendonly yes
+   docker exec translatedsubs-redis redis-cli ping
+   ```
+
+   Вторая команда должна вывести `PONG`.
+
+   Настройте учетные данные моделей и параметры службы после запуска в настройках или через API. Они сохраняются в Redis и применяются без перезапуска.
 
 Запустите API и веб-интерфейс:
 
 ```powershell
-uv run --locked uvicorn src.handler.app:app --host 127.0.0.1 --port 8000
+uv run --locked python -m src.cli --host 127.0.0.1 --port 8000
 ```
 
 Откройте <http://127.0.0.1:8000/>. Проверьте работу сервиса:
@@ -114,12 +137,36 @@ curl.exe http://127.0.0.1:8000/api/health/ready
 Выполните команды в корне репозитория:
 
 ```bash
-cp .env.example .env
-# Локальный переводчик по умолчанию не требует API-ключа; облачные ключи настраиваются только при необходимости.
-docker build -t translatedsubs:local . && docker run -d --name translatedsubs --restart unless-stopped -p 8000:8000 --env-file .env -e SUBTRANS_DATA_DIR=/data -e SUBTRANS_DB=/data/db/app.db -v translatedsubs-data:/data translatedsubs:local
+cp config.example.json config.local.json
 ```
 
-При обновлении существующего контейнера замените `translatedsubs-data` именем используемого тома, чтобы сохранить базу задач и созданные файлы. Переменные окружения `SUBTRANS_*` по-прежнему поддерживаются.
+Измените `config.local.json`, чтобы API использовала Redis из Compose и пути `/data`:
+
+```json
+{
+  "redis": {
+    "url": "redis://redis:6379/0",
+    "namespace": "translatedsubs-local"
+  },
+  "paths": {
+    "dataDir": "/data",
+    "dbPath": "/data/db/app.db"
+  },
+  "http": {
+    "host": "0.0.0.0",
+    "port": 8000
+  }
+}
+```
+
+Затем запустите сервисы:
+
+```bash
+# Локальный переводчик по умолчанию не требует API-ключа; облачные ключи настраиваются только при необходимости.
+docker compose up -d --build
+```
+
+Compose скачивает и запускает API и Redis; устанавливать Redis, Python, `uv` и FFmpeg на хосте не нужно. При обновлении сохраняйте постоянные тома Redis и данных. В образ по умолчанию входят только базовые зависимости; чтобы использовать дополнительные функции, добавьте нужные extras и системные пакеты в `Dockerfile` и пересоберите образ. Веса моделей скачиваются отдельно. Для перехода с версии, использовавшей `.env`, сначала выполните инструкции по [миграции с .env](../local-quick-start.md), затем запустите API.
 
 Откройте <http://localhost:8000/>. Проверьте доступность API командой `curl http://127.0.0.1:8000/api/health`: успешный ответ содержит `"ok":true`. Эндпоинт `/api/health/ready` также показывает состояние ключа перевода, FFmpeg, хранилища и фильтра для встроенных субтитров. Подробности локальной разработки и развёртывания см. в [указателе документации (на китайском языке)](../README.md).
 
@@ -141,23 +188,16 @@ docker build -t translatedsubs:local . && docker run -d --name translatedsubs --
 
 ## Основные настройки и данные
 
-Скопируйте `.env.example` и запустите сервис без API-ключа. Переводчик по умолчанию работает локально на CPU и переводит с английского на упрощённый китайский; установите зависимости через `uv sync --extra local-translation` и скачайте модель в настройках. Укажите `SUBTRANS_DEEPSEEK_API_KEY` только при явном выборе DeepSeek. Все параметры и значения по умолчанию перечислены в [шаблоне переменных окружения](../../.env.example). Основные параметры:
+Скопируйте `config.example.json` в `config.local.json` и запустите Redis. Настройте учетные данные моделей и параметры службы в настройках или через API конфигурации. Значения хранятся в Redis и применяются к новым запросам без перезапуска службы.
 
-| Параметр | Назначение |
-| --- | --- |
-| `SUBTRANS_DEEPSEEK_API_KEY` | Необязательный ключ DeepSeek для явного облачного совместимого пути. |
-| `SUBTRANS_DATA_DIR`, `SUBTRANS_DB` | Пути к файлам и базе задач SQLite; в примере Docker они находятся в постоянном томе. |
-| `SUBTRANS_COOKIES` | Файл cookie для сайтов, требующих входа или подтверждения возраста. |
-| `SUBTRANS_WORKERS`, `SUBTRANS_DOWNLOAD_WORKERS` | Число параллельных задач обработки и скачивания. |
-
-При обновлении контейнера используйте прежний том и сохраняйте базу SQLite вместе с результатами. Не добавляйте в репозиторий `.env`, cookie, данные OAuth и тестовые медиафайлы. Для Google Drive требуется отдельный sidecar; см. [локальный запуск (на китайском языке)](../local-quick-start.md).
+Файл bootstrap содержит локальные параметры Redis, путей данных и прослушивания. При обновлении сохраняйте тома данных и Redis. Не добавляйте `config.local.json`, `.env`, cookie, данные OAuth и тестовые медиафайлы в репозиторий. Для Google Drive требуется отдельный sidecar; см. [локальный запуск (на китайском языке)](../local-quick-start.md).
 
 ## Частые проблемы
 
 - API отвечает, но задачи не запускаются: проверьте `checks` и `capabilities` в `/api/health/ready`, включая ключ, FFmpeg/FFprobe, yt-dlp и хранилище.
 - `MODEL_NOT_READY`: скачайте и проверьте выбранную модель Whisper в настройках локальных моделей.
 - Встроенные субтитры недоступны: установите FFmpeg с libass или выберите отдельные субтитры. Проверка фильтра: `ffmpeg -hide_banner -filters | grep ' subtitles '`.
-- Ссылка не скачивается: сначала запустите тест загрузки; если нужен вход на сайт, настройте `SUBTRANS_COOKIES` по [локальному руководству (на китайском языке)](../local-quick-start.md).
+- Ссылка не скачивается: сначала запустите тест загрузки; если нужен вход на сайт, настройте cookie file setting по [локальному руководству (на китайском языке)](../local-quick-start.md).
 
 ## Документация
 
@@ -172,7 +212,7 @@ docker build -t translatedsubs:local . && docker run -d --name translatedsubs --
 
 ## Разработка
 
-Проект использует Python 3.10–3.12, FastAPI, FFmpeg и обычный JavaScript. Для локальной разработки выполните `uv sync`, затем `uv run uvicorn src.handler.app:app --port 8000`; тот же сервер отдаёт веб-интерфейс. Запустите тесты Python командой `uv run pytest -q`, а тесты интерфейса — `npm test` из каталога `web/`. Проверки с реальными облачными сервисами включаются отдельно; см. [AGENTS.md (на китайском языке)](../../AGENTS.md).
+Проект использует Python 3.10–3.12, FastAPI, FFmpeg и обычный JavaScript. Для локальной разработки выполните `uv sync`, затем `uv run python -m src.cli`; тот же сервер отдаёт веб-интерфейс. Запустите тесты Python командой `uv run pytest -q`, а тесты интерфейса — `npm test` из каталога `web/`. Проверки с реальными облачными сервисами включаются отдельно; см. [AGENTS.md (на китайском языке)](../../AGENTS.md).
 
 `src/handler/` предоставляет HTTP API; `src/core/` выполняет скачивание, распознавание и обработку субтитров; `src/service/` и `src/store/` управляют задачами и данными; `src/mcp_server/` предоставляет MCP; в `web/` находится интерфейс. Правила разработки см. в [CONTRIBUTING.md (на китайском языке)](../../.github/CONTRIBUTING.md). О проблемах безопасности сообщайте конфиденциально согласно [SECURITY.md](../../.github/SECURITY.md), а не через публичную issue.
 

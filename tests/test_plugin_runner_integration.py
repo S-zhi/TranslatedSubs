@@ -13,6 +13,7 @@ from fastapi import FastAPI
 
 from src.handler import tasks as task_compat
 from src.mcp_server.business_client import BusinessApiClient, BusinessApiConfig
+from src.config.config_repository import get_config_provider
 from src.service import runner
 from src.service.orchestrator import PipelineEvent
 from src.service.plugin_plan import parse_plugin_plan
@@ -144,6 +145,134 @@ def test_credential_resolver_uses_fixed_engine_id_and_current_key(stores, monkey
     assert result == ({"missing": True} if delete_key else {"key": "key-rotated"})
 
 
+def test_v2_snapshot_materializes_missing_plan_from_frozen_routes(stores, monkeypatch):
+    task_store, _engine_store, _engine = stores
+    provider = get_config_provider()
+
+    def save_llm(config):
+        config["models"]["llm"] = {
+            "enabled": True,
+            "provider": "deepseek",
+            "model": "model-A",
+            "baseUrl": "https://model-a.example/v1",
+            "apiKey": "key-at-create",
+            "_runtimeManaged": True,
+            "models": [{
+                "id": "card-a", "name": "Model A", "provider": "deepseek",
+                "model": "model-A", "baseUrl": "https://model-a.example/v1",
+                "enabled": True, "isCurrent": True, "apiKey": "key-at-create",
+            }],
+        }
+
+    provider.mutate(save_llm)
+    created_config = provider.read()
+    runtime_snapshot = {
+        "schemaVersion": 2,
+        "configRevision": created_config.revision,
+        "business": runner.settings.capture_business_snapshot(config_snapshot=created_config),
+        "engine": {
+            "source": "unified_llm", "id": "deepseek", "cardId": "card-a",
+            "provider": "deepseek", "model": "model-A",
+            "baseUrl": "https://model-a.example/v1",
+            "params": {"temperature": 0.3, "maxTokens": 4096, "timeout": 120, "concurrency": 1},
+        },
+        "whisper": {
+            "source": "request", "cardId": None, "provider": "local", "model": "local:tiny",
+        },
+        "tts": {
+            "enabled": False, "source": "request", "cardId": None, "provider": "",
+            "model": "", "voice": "auto", "speed": 1.0, "format": "wav",
+        },
+    }
+    record = task_store.create(
+        url="https://video.example/watch?v=v2-null-plan",
+        source_lang="en", target_lang="zh-CN", mode="mono", burn="soft",
+        model="local:tiny", engine="deepseek", plugin_plan_json=None,
+        runtime_config_json=json.dumps(runtime_snapshot),
+    )
+
+    def rotate_llm(config):
+        card = config["models"]["llm"]["models"][0]
+        card.update(model="model-B", baseUrl="https://model-b.example/v2", apiKey="key-current")
+        config["models"]["llm"].update(
+            model="model-B", baseUrl="https://model-b.example/v2", apiKey="key-current"
+        )
+
+    provider.mutate(rotate_llm)
+    captured = {}
+
+    def inspect(_params, kwargs):
+        translate = kwargs["plugin_plan"]["slots"]["translate"]["config"]
+        captured["model"] = translate["model"]
+        captured["base_url"] = translate["base_url"]
+        captured["key"] = kwargs["credential_resolver"](
+            "translation_engine:deepseek:api_key"
+        )
+
+    _run_with_capture(monkeypatch, record.id, inspect)
+    persisted = task_store.get(record.id)
+    assert persisted.plugin_plan_json is not None
+    assert captured == {
+        "model": "model-A",
+        "base_url": "https://model-a.example/v1",
+        "key": "key-current",
+    }
+
+
+def test_null_snapshot_with_existing_plan_keeps_engine_key_source_on_retry(stores, monkeypatch):
+    task_store, _engine_store, engine = stores
+    record, _ = _create_url_task(task_store, _engine_store, engine.id)
+    saved_plan = record.plugin_plan_json
+    provider = get_config_provider()
+
+    def save_routes(config):
+        config["engines"]["byId"][engine.id] = {
+            "id": engine.id, "name": engine.name, "api_type": engine.api_type,
+            "base_url": engine.base_url, "model": engine.model,
+            "api_key": "legacyengineKey", "enabled": 1,
+            "availability": "AVAILABLE", "last_checked_at": None,
+            "last_error": None, "api_key_rotated_at": None,
+            "created_at": 1, "updated_at": 1,
+        }
+        config["models"]["llm"] = {
+            "enabled": True, "provider": "deepseek", "model": "unified-model",
+            "baseUrl": "https://unified.example/v1", "apiKey": "unified-card-key",
+            "_runtimeManaged": True,
+            "models": [{
+                "id": "unified-card", "name": "Unified", "provider": "deepseek",
+                "model": "unified-model", "baseUrl": "https://unified.example/v1",
+                "enabled": True, "isCurrent": True, "apiKey": "unified-card-key",
+            }],
+        }
+
+    provider.mutate(save_routes)
+    task_store.update(record.id, runtime_config_json=None)
+    observed_keys = []
+
+    def inspect(_params, kwargs):
+        observed_keys.append(kwargs["credential_resolver"](
+            f"translation_engine:{engine.id}:api_key"
+        ))
+
+    _run_with_capture(monkeypatch, record.id, inspect)
+    persisted_snapshot = json.loads(task_store.get(record.id).runtime_config_json)
+    assert persisted_snapshot["engine"]["source"] == "translation_store"
+    assert persisted_snapshot["engine"]["id"] == engine.id
+    assert task_store.get(record.id).plugin_plan_json == saved_plan
+
+    task_store.update(record.id, status="FAILED", error="retry test")
+    queued = []
+    task_lifecycle.retry_task(
+        store=task_store, task_id=record.id,
+        enqueue_pipeline=lambda task_id: queued.append(task_id),
+        to_out=lambda item: item,
+    )
+    assert queued == [record.id]
+    _run_with_capture(monkeypatch, record.id, inspect)
+    assert observed_keys == ["legacyengineKey", "legacyengineKey"]
+    assert task_store.get(record.id).plugin_plan_json == saved_plan
+
+
 def test_only_download_does_not_resolve_engine_or_create_translation_slot(stores, monkeypatch):
     task_store, engine_store, engine = stores
     record, _ = _create_url_task(
@@ -174,6 +303,11 @@ def test_legacy_null_plan_migrates_once_and_retry_preserves_snapshot(stores, mon
         url="https://video.example/watch?v=legacy-plan",
         source_lang="en", target_lang="zh-CN", mode="mono", burn="soft",
         model="local:tiny", engine=engine.id, plugin_plan_json=None,
+    )
+    redis_engine = engine.__dict__.copy()
+    redis_engine["availability"] = "AVAILABLE"
+    get_config_provider().mutate(
+        lambda document: document["engines"]["byId"].update({engine.id: redis_engine})
     )
     monkeypatch.setenv(
         "SUBTRANS_PIPELINE_PLUGINS",
@@ -271,4 +405,3 @@ def test_mcp_business_client_posts_to_same_rest_create_route_and_hides_plan(
     assert record is not None and record.task_origin == "mcp"
     assert record.plugin_plan_json
     assert "plugin_plan_json" not in response and "pluginPlanJson" not in response
-

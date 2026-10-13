@@ -33,6 +33,17 @@ Supported video platforms:
 
 ## Build from source
 
+Required: Python 3.10–3.12, `uv`, Git to clone the source, FFmpeg/FFprobe (with the `subtitles`/libass filter for hard subtitles), and a running Redis service. `uv sync` installs Python packages, including the Redis client (`redis>=5`); it does not install or start the Redis server.
+
+Install optional dependencies only for the features you use:
+
+- Local English → Simplified Chinese translation: `uv sync --extra local-translation` (then download and convert the model in Settings).
+- Hugging Face Whisper models: `uv sync --extra hf-models`.
+- Kokoro TTS: `uv sync --extra tts`, plus the system `espeak-ng` package; download models at runtime. See the [TTS guide](./docs/tts.md).
+- Demucs must be installed separately. Go 1.23 or later is only needed for the Google Drive sidecar; Node.js is only needed for frontend tests.
+
+If enabling multiple Python extras, include them in one `uv sync` command, for example `uv sync --extra local-translation --extra hf-models --extra tts`.
+
 ### macOS
 
 To run the project locally on macOS, you need Python 3.10–3.12, `uv`, and FFmpeg built with libass support. The API also serves the web workbench, so you do not need to install Node.js separately.
@@ -45,16 +56,21 @@ cd TranslatedSubs
 brew install uv
 brew tap homebrew-ffmpeg/ffmpeg
 brew install ffmpeg-full
+brew install redis
+brew services start redis
+redis-cli ping
 uv sync
-cp .env.example .env
+cp config.example.json config.local.json
 ```
 
-You can add the cloud API keys you need to `.env`, or configure them after startup, which is the recommended approach.
+The Redis check should print `PONG`. If Redis is already running elsewhere, you can use it by setting `redis.url` in `config.local.json`; you do not need to install another Redis server.
+
+`config.local.json` stores this machine's Redis connection and filesystem/listener paths. Configure models and API credentials from Settings after startup; saved settings apply to new requests without restarting the service.
 
 Start the API and web workbench:
 
 ```sh
-uv run uvicorn src.handler.app:app --port 8000
+uv run python -m src.cli
 ```
 
 For local debugging, use the dedicated launcher to skip the fixed website
@@ -101,15 +117,27 @@ On Windows 10 or 11, you can run TranslatedSubs from source in PowerShell. The p
    cd TranslatedSubs
    uv python install 3.12
    uv sync --python 3.12 --locked
-   Copy-Item .env.example .env
+   Copy-Item config.example.json config.local.json
    ```
 
-   You can add the cloud API keys you need to `.env`, or configure them after startup, which is the recommended approach.
+   Start Docker Desktop with Linux containers, then run this single PowerShell command to start Redis as a separate service:
+
+   ```powershell
+   docker run -d --name translatedsubs-redis --restart unless-stopped -p 127.0.0.1:6379:6379 -v translatedsubs-redis-data:/data redis:7-alpine redis-server --appendonly yes
+   ```
+
+   Check that Redis responds with `PONG`:
+
+   ```powershell
+   docker exec translatedsubs-redis redis-cli ping
+   ```
+
+   If you already use a Redis service elsewhere, set `redis.url` in `config.local.json` to its address instead. `uv sync` installs the Python Redis client, not the Redis server.
 
 Start the API and web workbench:
 
 ```powershell
-uv run --locked uvicorn src.handler.app:app --host 127.0.0.1 --port 8000
+uv run --locked python -m src.cli --host 127.0.0.1 --port 8000
 ```
 
 Open <http://127.0.0.1:8000/>. Check the service with:
@@ -124,12 +152,32 @@ curl.exe http://127.0.0.1:8000/api/health/ready
 Run this from the repository root:
 
 ```bash
-cp .env.example .env
-# The default local translator needs no API key. Configure cloud keys only when needed.
-docker build -t translatedsubs:local . && docker run -d --name translatedsubs --restart unless-stopped -p 8000:8000 --env-file .env -e SUBTRANS_DATA_DIR=/data -e SUBTRANS_DB=/data/db/app.db -v translatedsubs-data:/data translatedsubs:local
+cp config.example.json config.local.json
+docker compose up -d --build
 ```
 
-When upgrading an existing container, replace `translatedsubs-data` with the existing volume name to retain jobs and output files. The `SUBTRANS_*` environment variables remain supported.
+Before starting Compose, edit `config.local.json` so the API container can reach the Redis service and use its persistent data volume. Replace its `redis`, `paths`, and `http` values with:
+
+```json
+{
+  "redis": {
+    "url": "redis://redis:6379/0",
+    "namespace": "translatedsubs-local"
+  },
+  "paths": {
+    "dataDir": "/data",
+    "dbPath": "/data/db/app.db"
+  },
+  "http": {
+    "host": "0.0.0.0",
+    "port": 8000
+  }
+}
+```
+
+Compose pulls and starts Redis automatically, so the host does not need Redis, Python, `uv`, or FFmpeg installed for this deployment. The API and Redis use separate persistent volumes; Redis AOF persistence is enabled. Keep both volumes when upgrading so tasks, media, and configuration survive container replacement.
+
+The Docker image installs the base Python dependencies only. To use local translation, Hugging Face Whisper, Kokoro TTS, or Demucs in Docker, add the corresponding optional Python packages and required system tools to the image build before rebuilding; TTS also needs `espeak-ng`. Download model files separately through the workbench as needed.
 
 Open <http://localhost:8000/>. Run `curl http://127.0.0.1:8000/api/health` to check that the API is running; a healthy response contains `"ok":true`. `/api/health/ready` also reports whether the translation key, FFmpeg, storage paths, and hard-subtitle filter are ready. See the [documentation index (Chinese)](./docs/README.md) for local development, Linux deployment, and extensions.
 
@@ -152,25 +200,18 @@ Soft subtitles can be toggled in a player. Hard subtitles are written into the p
 
 ## Key configuration and data
 
-Copy `.env.example` and start the service without an API key. The default translator is the local CPU English → Simplified Chinese model; install it with `uv sync --extra local-translation`, then download and convert it from Settings → Translation engines. Configure `SUBTRANS_DEEPSEEK_API_KEY` only when you explicitly choose DeepSeek. The [environment template](.env.example) lists every setting and its default. Common settings are:
+Copy `config.example.json` to `config.local.json` and start Redis. The default translator is the local CPU English → Simplified Chinese model; install it with `uv sync --extra local-translation`, then download and convert it from Settings → Translation engines. Add model credentials and business settings in Settings or through the configuration API. They are saved to Redis and apply to new requests without a service restart. The bootstrap template lists machine-local Redis, data path, and listener defaults.
 
-| Setting | Purpose |
-| --- | --- |
-| `SUBTRANS_DEEPSEEK_API_KEY` | Optional DeepSeek key for the explicit cloud compatibility path. |
-| `SUBTRANS_DATA_DIR`, `SUBTRANS_DB` | Locations of video and subtitle files and the SQLite job database; the Docker example stores both in a persistent volume. |
-| `SUBTRANS_TRANSCRIBER_BACKEND` | Defaults to `local_whisper`; select a compatible HTTP service explicitly. |
-| `SUBTRANS_COOKIES` | Cookie file for sites that require login or age verification. |
-| `SUBTRANS_WORKERS`, `SUBTRANS_DOWNLOAD_WORKERS` | Pipeline and download concurrency limits; adjust for available resources. |
-| `SUBTRANS_REDIS_URL`, `SUBTRANS_REDIS_NAMESPACE` | Transitional Redis-backed runtime configuration for audio settings; use a unique namespace per deployment. |
+For an existing installation, prepare Redis and `config.local.json`, then run the explicit migration before the new API's first startup; the app does not import old `.env` or SQLite settings automatically. Follow the [migration steps (Chinese)](./docs/local-quick-start.md#从旧版-env-迁移).
 
-Reuse the existing data volume when upgrading a container. Keep the SQLite database along with the output files. Do not commit `.env`, cookies, OAuth credentials, or generated test media. Google Drive requires a separate sidecar; see the [local quick start (Chinese)](./docs/local-quick-start.md).
+Keep the configured data and Redis volumes when upgrading. Do not commit `config.local.json`, `.env`, cookies, OAuth credentials, or generated test media. Google Drive requires a separate sidecar; see the [local quick start (Chinese)](./docs/local-quick-start.md).
 
 ## Troubleshooting
 
 - The API responds, but jobs cannot start: inspect `checks` and `capabilities` from `/api/health/ready` for the key, FFmpeg/FFprobe, yt-dlp, and storage status.
 - `MODEL_NOT_READY`: download and verify the selected Whisper model in Local Models before creating a subtitle job.
 - Hard subtitles are unavailable: install FFmpeg with libass or choose soft subtitles. Check with `ffmpeg -hide_banner -filters | grep ' subtitles '`.
-- A URL fails to download: run the download probe first. If the site requires login, configure `SUBTRANS_COOKIES` as described in the [local setup guide (Chinese)](./docs/local-quick-start.md).
+- A URL fails to download: run the download probe first. If the site requires login, configure the cookie file from Settings as described in the [local setup guide (Chinese)](./docs/local-quick-start.md).
 
 ## Documentation
 
@@ -186,7 +227,7 @@ Most detailed guides below are in Chinese; the transcriber protocol is in Englis
 
 ## Development
 
-The project uses Python 3.10–3.12, FastAPI, FFmpeg, and vanilla JavaScript. For local development, run `uv sync` and then `uv run uvicorn src.handler.app:app --port 8000`; the same service hosts the frontend. Run backend tests with `uv run pytest -q` and frontend tests with `npm test` from `web/`. Tests that use real cloud services and downloads require explicit opt-in; see [AGENTS.md (Chinese)](./AGENTS.md).
+The project uses Python 3.10–3.12, FastAPI, FFmpeg, and vanilla JavaScript. For local development, run `uv sync` and then `uv run python -m src.cli`; the same service hosts the frontend. Run backend tests with `uv run pytest -q` and frontend tests with `npm test` from `web/`. Tests that use real cloud services and downloads require explicit opt-in; see [AGENTS.md (Chinese)](./AGENTS.md).
 
 `src/handler/` serves the HTTP API; `src/core/` handles downloads, transcription, and subtitles; `src/service/` and `src/store/` manage jobs and persistence; `src/mcp_server/` provides MCP; and `web/` is the browser workbench. See [CONTRIBUTING.md (Chinese)](.github/CONTRIBUTING.md) for development guidelines. Report security issues privately through [SECURITY.md](.github/SECURITY.md), not a public issue.
 

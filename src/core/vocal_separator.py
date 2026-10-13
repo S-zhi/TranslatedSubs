@@ -93,7 +93,7 @@ def _run_external(
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
     except FileNotFoundError as exc:
         raise VocalSeparationError(
-            "未找到 Demucs。请安装 demucs，或关闭 SUBTRANS_VOCAL_SEPARATION。"
+            "未找到 Demucs。请安装 demucs，或在设置页/API 关闭人声分离。"
         ) from exc
     try:
         if register_process is not None:
