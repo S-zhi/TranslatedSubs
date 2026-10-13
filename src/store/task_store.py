@@ -84,6 +84,8 @@ class TaskRecord:
     tts_status: str = "DISABLED"
     tts_error: Optional[str] = None
     output_dubbed_video: Optional[str] = None
+    # Non-sensitive runtime routing snapshot captured at task creation.
+    runtime_config_json: Optional[str] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -208,6 +210,8 @@ class TaskStore:
                     conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {declaration}")
             if "output_dubbed_video" not in cols:
                 conn.execute("ALTER TABLE tasks ADD COLUMN output_dubbed_video TEXT")
+            if "runtime_config_json" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN runtime_config_json TEXT")
             # Older versions persisted absolute output paths. Keep only the
             # task-local name so the database survives volume and OS changes.
             for row in conn.execute(
@@ -249,6 +253,7 @@ class TaskStore:
         tts_enabled: bool = False,
         tts_voice: str = "auto",
         original_voice_mode: str = "keep",
+        runtime_config_json: Optional[str] = None,
     ) -> TaskRecord:
         with self._connect() as conn:
             return self._insert(
@@ -268,6 +273,7 @@ class TaskStore:
                 tts_enabled=tts_enabled,
                 tts_voice=tts_voice,
                 original_voice_mode=original_voice_mode,
+                runtime_config_json=runtime_config_json,
             )
 
     def create_if_no_recent_active(
@@ -313,6 +319,7 @@ class TaskStore:
             tts_enabled=int(kwargs.get("tts_enabled", False)),
             tts_voice=kwargs.get("tts_voice", "auto"),
             original_voice_mode=kwargs.get("original_voice_mode", "keep"),
+            runtime_config_json=kwargs.get("runtime_config_json"),
             tts_status="PENDING" if kwargs.get("tts_enabled", False) else "DISABLED",
             status="PENDING",
             progress=0,

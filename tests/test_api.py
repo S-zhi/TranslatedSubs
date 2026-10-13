@@ -258,9 +258,13 @@ def test_replicate_model_is_rejected_with_migration_code():
 
 
 def test_retry_rejects_historical_replicate_task(client, monkeypatch):
-    created = client.post("/api/tasks", json=_payload(model="replicate:tiny"))
-    assert created.status_code == 201
-    rec_id = created.json()["id"]
+    # Historical records may still exist in upgraded databases even though
+    # creating a new Replicate task is now rejected before enqueue.
+    rec = client._store.create(
+        url="https://example.com/legacy", source_lang="en", target_lang="zh-CN",
+        mode="mono", burn="hard", model="replicate:tiny", engine="deepseek",
+    )
+    rec_id = rec.id
     client._store.update(rec_id, status="FAILED", error="legacy")
     response = client.post(f"/api/tasks/{rec_id}/retry")
     assert response.status_code == 409

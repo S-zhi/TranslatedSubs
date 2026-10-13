@@ -879,7 +879,7 @@ const MockApi = (() => {
       const defaults = {
         llm: { enabled: true, provider: "deepseek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat", hasApiKey: false, temperature: 0.3, maxTokens: 4096, timeout: 120, concurrency: 2 },
         whisper: { enabled: true, provider: "local", model: "local:small", language: "auto", device: "cpu", threads: 4, wordTimestamps: true, status: "ready" },
-        tts: { enabled: false, provider: "kokoro", baseUrl: "", model: "kokoro-v1", hasApiKey: false, voice: "af_heart", speed: 1, format: "wav" },
+        tts: { enabled: false, provider: "kokoro", baseUrl: "", model: "kokoro-v1", hasApiKey: false, voice: "auto", speed: 1, format: "wav" },
       };
       try {
         const saved = JSON.parse(localStorage.getItem("subtrans_mock_model_settings_v1") || "null");

@@ -146,53 +146,20 @@ def _ensure_translation_engine(
     need_subtitle: bool,
     engines: TranslationEngineStore,
 ) -> None:
-    # Resolve mutable configuration through the compatibility facade.  Tests
-    # and existing callers patch src.handler.tasks.settings and helpers.
     from src.handler import tasks as compat
+    from src.service.model_runtime import resolve_engine
+    from src.store.model_settings_store import ModelSettingsStore
 
-    settings = compat.settings
-    if not need_subtitle:
-        return
-    if engine == "deepseek":
-        if not (settings.deepseek_api_key and settings.deepseek_api_key.strip()):
-            raise HTTPException(
-                status_code=422,
-                detail="缺少 DeepSeek API Key，请在 .env 配置 SUBTRANS_DEEPSEEK_API_KEY",
-            )
-        return
-
-    rec = engines.get(engine)
-    if rec is None:
-        raise HTTPException(status_code=422, detail="翻译引擎配置不存在")
-    if not rec.enabled:
-        raise HTTPException(status_code=422, detail="翻译引擎已停用")
-    if rec.api_type == "local_ct2":
-        manager = compat.get_translation_model_manager()
-        if not manager.is_ready():
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "code": "LOCAL_TRANSLATION_MODEL_NOT_READY",
-                    "message": "本地英译中模型尚未安装，请先在翻译引擎设置中下载。",
-                },
-            )
-        dependency_status = getattr(manager, "dependency_status", None)
-        if dependency_status is not None:
-            status = dependency_status()
-            if not status.get("ready", False):
-                missing = ", ".join(status.get("missing", []))
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "code": "LOCAL_TRANSLATION_DEPENDENCY_MISSING",
-                        "message": f"本地翻译依赖未安装：{missing}。请运行 uv sync --extra local-translation。",
-                    },
-                )
-        return
-    if not (rec.api_key and rec.api_key.strip()):
-        raise HTTPException(status_code=422, detail="翻译引擎尚未配置 API Key")
-    if rec.availability != "AVAILABLE":
-        raise HTTPException(status_code=422, detail="翻译引擎尚未通过可用性检测")
+    resolve_engine(
+        engine,
+        need_subtitle,
+        engines,
+        model_store=ModelSettingsStore(
+            getattr(engines, "db_path", getattr(compat.settings, "db_path", "translatedsubs.db"))
+        ),
+        compat_settings=compat.settings,
+        translation_model_manager=compat.get_translation_model_manager(),
+    )
 
 
 def _ensure_supported_translation_languages(

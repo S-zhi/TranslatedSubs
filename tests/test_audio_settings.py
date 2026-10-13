@@ -5,15 +5,16 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.handler.app import app
 from src.handler import audio_settings
 from src.handler import deps
+from src.config.redis_store import ConfigUnavailable, RevisionConflict
 
 
 @pytest.fixture
-def audio_client(monkeypatch):
+def audio_client(monkeypatch, tmp_path):
     """隔离 API token 与运行时设置，避免写入真实 data/.runtime-settings.json。"""
     values = {
         "vocal_separation_enabled": False,
@@ -24,9 +25,11 @@ def audio_client(monkeypatch):
         "ffmpeg_bin": "ffmpeg",
     }
     monkeypatch.setattr(audio_settings, "settings", SimpleNamespace(**values))
-    monkeypatch.setattr(deps, "settings", SimpleNamespace(api_token=None))
+    monkeypatch.setattr(deps, "settings", SimpleNamespace(api_token=None, db_path=tmp_path / "test.db"))
     monkeypatch.setattr(audio_settings, "_availability", lambda: (True, True, True, None))
-    with TestClient(app) as client:
+    test_app = FastAPI()
+    test_app.include_router(audio_settings.router)
+    with TestClient(test_app) as client:
         yield client, values
 
 
@@ -131,3 +134,20 @@ def test_put_audio_settings_requires_api_token_when_configured(audio_client, mon
         json={"enabled": True, "model": "htdemucs", "threads": 1, "timeout": 1800},
     )
     assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("error", "status"),
+    [(ConfigUnavailable("down"), 503), (RevisionConflict("stale"), 409)],
+)
+def test_put_audio_settings_maps_redis_failures(audio_client, monkeypatch, error, status):
+    def raise_error(_payload):
+        raise error
+
+    monkeypatch.setattr(audio_settings, "update_runtime_settings", raise_error)
+    client, _ = audio_client
+    response = client.put(
+        "/api/settings/audio",
+        json={"enabled": True, "model": "htdemucs", "threads": 1, "timeout": 1800},
+    )
+    assert response.status_code == status

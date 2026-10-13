@@ -17,6 +17,7 @@ from src.config import settings
 from src.core.ffmpeg_utils import has_subtitles_filter
 from src.service.translation_model_manager import get_translation_model_manager
 from src.store import DEFAULT_TRANSLATION_ENGINE_ID
+from src.store.model_settings_store import ModelSettingsStore
 
 
 def _check_binary(command: str) -> str:
@@ -79,6 +80,80 @@ def build_readiness() -> dict[str, Any]:
         local_engine_enabled = False
         local_model_ready = False
         local_dependency_ready = False
+
+    # Report the effective unified cards without exposing any secret.  Passive
+    # defaults remain informational and do not replace the legacy local checks.
+    model_settings_status: dict[str, dict[str, Any]] = {}
+    try:
+        model_store = ModelSettingsStore(settings.db_path)
+        for kind, config in model_store.get_all().items():
+            models = [item for item in config.get("models", []) if isinstance(item, dict)]
+            active = next((item for item in models if item.get("isCurrent")), None)
+            item = dict(config)
+            if active:
+                item.update(active)
+                if not item.get("apiKey") and config.get("apiKey"):
+                    item["apiKey"] = config["apiKey"]
+            model_settings_status[kind] = {
+                "runtimeManaged": bool(config.get("_runtimeManaged")),
+                "enabled": bool(item.get("enabled", True)),
+                "provider": item.get("provider", ""),
+                "model": item.get("model", ""),
+                "hasApiKey": bool(item.get("apiKey") or item.get("api_key")),
+                "cardId": active.get("id") if active else None,
+            }
+    except Exception:
+        model_settings_status = {}
+
+    active_llm = model_settings_status.get("llm")
+    if active_llm and active_llm.get("runtimeManaged") and active_llm.get("enabled"):
+        # A saved unified key is an active credential source even when the
+        # legacy environment variable is absent.
+        deepseek_ready = bool(deepseek_ready or active_llm.get("hasApiKey"))
+
+    # Keep a small, redacted view of the configuration that a new task would
+    # actually use.  This is deliberately advisory: task creation performs
+    # the stricter provider/model checks before enqueueing.
+    effective_models: dict[str, dict[str, Any]] = {}
+    for kind, status in model_settings_status.items():
+        managed = bool(status.get("runtimeManaged") and status.get("enabled"))
+        ready = True
+        reason = None
+        if kind == "llm":
+            ready = bool(status.get("hasApiKey") and status.get("provider") and status.get("model"))
+            if not ready:
+                reason = "missing_api_key_or_model"
+        elif kind == "whisper" and managed:
+            provider = str(status.get("provider") or "local").lower()
+            if provider in {"local", "local_whisper", "whisper", "faster_whisper"}:
+                try:
+                    from src.service.model_manager import model_manager
+                    ready = model_manager.is_ready(str(status.get("model") or "").removeprefix("local:"))
+                except Exception:
+                    ready = False
+                if not ready:
+                    reason = "local_model_not_ready"
+            else:
+                ready = False
+                reason = "unsupported_provider"
+        elif kind == "tts" and managed:
+            provider = str(status.get("provider") or "").lower()
+            ready = provider in {"kokoro", "local"}
+            if provider in {"kokoro", "local"} and not importlib.util.find_spec("kokoro"):
+                ready = False
+                reason = "kokoro_dependency_missing"
+            elif not ready:
+                reason = "unsupported_provider"
+        effective_models[kind] = {
+            "source": "unified" if managed else "legacy",
+            "provider": status.get("provider", ""),
+            "model": status.get("model", ""),
+            "cardId": status.get("cardId"),
+            "hasApiKey": bool(status.get("hasApiKey")),
+            "enabled": bool(status.get("enabled", True)),
+            "ready": bool(ready),
+            "reason": reason,
+        }
 
     # The local engine is the default execution path.  A configured DeepSeek
     # key remains visible for compatibility, but it must not make the default
@@ -171,9 +246,11 @@ def build_readiness() -> dict[str, Any]:
         "config_file": str(env_file),
         "config_file_present": env_file.is_file(),
         "required_environment": [],
+        "model_settings": model_settings_status,
+        "effective": effective_models,
         "checks": {
             "api_token_required": bool(settings.api_token),
-                    "deepseek_api_key": "available" if deepseek_ready else "missing",
+            "deepseek_api_key": "available" if deepseek_ready else "missing",
             "translation_engine": "available" if translation_ready else "missing",
             "local_translation_model": "available" if local_model_ready else "not_ready",
             "local_translation_dependencies": "available" if local_dependencies.get("ready") else "missing",
@@ -183,6 +260,7 @@ def build_readiness() -> dict[str, Any]:
             "data_directory": data_dir_status,
             "database_directory": db_dir_status,
             "subtitle_filter": "available" if hard_burn_ready else "missing",
+            "model_settings": model_settings_status,
         },
         "capabilities": {
             "download": download_ready,

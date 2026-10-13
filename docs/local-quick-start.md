@@ -29,6 +29,8 @@ cp .env.example .env
 
 默认本地英译中不需要填写 API Key。需要登录或年龄验证的网站，再配置 `SUBTRANS_COOKIES`；完整变量见 [`.env.example`](../.env.example)。如需显式使用 DeepSeek，再配置 `SUBTRANS_DEEPSEEK_API_KEY`。
 
+运行时音频设置可以先接入 Redis：配置 `SUBTRANS_REDIS_URL`，并为共享 Redis 实例设置唯一的 `SUBTRANS_REDIS_NAMESPACE`。音频设置会以带版本号的 JSON 文档保存到 Redis，并通过 Pub/Sub 通知其他 API 进程刷新；Redis 不可用时，启用 Redis 的写入会返回 503。未配置 Redis 时，当前阶段仍使用本地运行时配置文件，便于迁移。
+
 SQLite 数据库默认位于 `data/db/app.db`，SQLite 运行时可能在同一目录创建 `app.db-wal` 和 `app.db-shm`。已有安装如果在 `.env` 中设置了 `SUBTRANS_DB=./app.db`，需要停掉 API 后，将原数据库迁移到新目录并更新该变量。先确认没有进程使用数据库，执行 `mkdir -p data/db`，再把 `app.db` 以及存在的 `app.db-wal`、`app.db-shm` 一起移动到 `data/db/`；不要在服务运行时单独移动这些文件。自定义 `SUBTRANS_DATA_DIR` 时，未设置 `SUBTRANS_DB` 的默认位置是该数据目录下的 `db/app.db`。
 
 启动 API：

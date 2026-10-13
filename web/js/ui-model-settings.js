@@ -10,7 +10,7 @@ const LABELS = { llm: "LLM", whisper: "Whisper", tts: "TTS" };
 const DEFAULTS = {
   llm: { enabled: true, provider: "deepseek", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat", hasApiKey: false, temperature: 0.3, maxTokens: 4096, timeout: 120, concurrency: 2 },
   whisper: { enabled: true, provider: "local", model: "local:small", language: "auto", device: "cpu", threads: 4, wordTimestamps: true, status: "unknown" },
-  tts: { enabled: false, provider: "kokoro", baseUrl: "", model: "kokoro-v1", hasApiKey: false, voice: "af_heart", speed: 1, format: "wav" },
+  tts: { enabled: false, provider: "kokoro", baseUrl: "", model: "kokoro-v1", hasApiKey: false, voice: "auto", speed: 1, format: "wav" },
 };
 
 const MODEL_NAMES = { llm: "LLM", whisper: "Whisper", tts: "TTS" };
@@ -30,7 +30,8 @@ export function normalizeModelSettings(value = {}) {
     const config = { ...clone(DEFAULTS[kind]), ...(value?.[kind] || {}) };
     const fallback = { id: `${kind}-default`, name: config.model || `${MODEL_NAMES[kind]} 默认模型`, ...config, isCurrent: true };
     const models = Array.isArray(config.models) && config.models.length ? config.models : [fallback];
-    result[kind] = { ...config, models: models.map((model, index) => ({ ...model, id: model.id || `${kind}-${index + 1}`, isCurrent: model.isCurrent ?? index === 0 })) };
+    const normalizeVoice = (model) => kind === "tts" && model.voice === "af_heart" ? { ...model, voice: "auto" } : model;
+    result[kind] = { ...normalizeVoice(config), models: models.map((model, index) => ({ ...normalizeVoice(model), id: model.id || `${kind}-${index + 1}`, isCurrent: model.isCurrent ?? index === 0 })) };
     return result;
   }, {});
 }
@@ -69,7 +70,15 @@ function fillForm(kind) {
     const value = config[control.name];
     if (control.name === "apiKey") control.value = "";
     else if (control.type === "checkbox") control.checked = value !== false;
-    else if (value !== undefined && value !== null) control.value = String(value);
+    else if (value !== undefined && value !== null) {
+      if (control.name === "voice" && control.tagName === "SELECT" && !Array.from(control.options || []).some((option) => option.value === String(value))) {
+        const option = document.createElement("option");
+        option.value = String(value);
+        option.textContent = `${value} · 当前保存值`;
+        control.append(option);
+      }
+      control.value = String(value);
+    }
   }
   const meta = $(`#modelMeta${kind[0].toUpperCase()}${kind.slice(1)}`);
   if (meta) {
@@ -112,13 +121,23 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[character]));
 }
 
-function selectCatalogModel(kind, id) {
+export async function selectCatalogModel(kind, id) {
   const model = settings[kind]?.models?.find((item) => item.id === id);
   if (!model) return;
-  settings[kind].models = settings[kind].models.map((item) => ({ ...item, isCurrent: item.id === id }));
-  settings[kind] = { ...settings[kind], ...model, model: model.model, provider: model.provider };
-  fillForm(kind);
-  toast(`${model.name || model.model} 已设为当前模型`, "ph-check-circle");
+  const previous = clone(settings[kind]);
+  const models = settings[kind].models.map((item) => ({ ...item, isCurrent: item.id === id }));
+  settings[kind] = { ...settings[kind], ...model, model: model.model, provider: model.provider, models };
+  try {
+    const response = await Api.updateModelSettings({ [kind]: settings[kind] });
+    settings = normalizeModelSettings({ ...settings, ...response });
+    fillForm(kind);
+    toast(`${model.name || model.model} 已设为当前模型`, "ph-check-circle");
+  } catch (error) {
+    settings[kind] = previous;
+    fillForm(kind);
+    setStatus(kind, "unavailable", "保存失败");
+    toast(error.message || `保存 ${LABELS[kind]} 当前模型失败`, "ph-warning-circle");
+  }
 }
 
 function readForm(kind) {
@@ -196,9 +215,17 @@ async function save(kind, event) {
   const button = form?.querySelector('button[type="submit"]');
   if (button) button.disabled = true;
   try {
-    const next = { ...settings[kind], ...readForm(kind), models: settings[kind]?.models || [] };
-    const response = await Api.updateModelSettings({ ...settings, [kind]: next });
-    settings = normalizeModelSettings(response);
+    const values = readForm(kind);
+    const current = settings[kind] || DEFAULTS[kind];
+    const models = current.models || [];
+    const activeId = models.find((model) => model.isCurrent)?.id || models[0]?.id;
+    const next = {
+      ...current,
+      ...values,
+      models: models.map((model) => ({ ...model, ...(model.id === activeId ? values : {}), isCurrent: model.id === activeId })),
+    };
+    const response = await Api.updateModelSettings({ [kind]: next });
+    settings = normalizeModelSettings({ ...settings, ...response });
     fillForm(kind);
     toast(`${LABELS[kind]} 设置已保存`, "ph-check-circle");
   } catch (error) {
@@ -237,7 +264,7 @@ function openModelDialog(kind, model = null) {
     ? [field("temperature", "Temperature", model?.temperature ?? 0.3, "number"), field("maxTokens", "上下文长度 tokens", model?.maxTokens ?? 4096, "number"), field("timeout", "请求超时（秒）", model?.timeout ?? 120, "number"), field("concurrency", "并发请求数", model?.concurrency ?? 2, "number")]
     : kind === "whisper"
       ? [field("language", "默认语言", model?.language || "auto"), field("device", "计算设备", model?.device || "cpu"), field("threads", "线程数", model?.threads ?? 4, "number"), checkField("wordTimestamps", "生成词级时间戳", model?.wordTimestamps !== false)]
-      : [field("voice", "默认音色", model?.voice || "af_heart"), field("speed", "语速", model?.speed ?? 1, "number"), field("format", "输出格式", model?.format || "wav")]).filter(Boolean));
+      : [field("voice", "默认音色", model?.voice || "auto"), field("speed", "语速", model?.speed ?? 1, "number"), field("format", "输出格式", model?.format || "wav")]).filter(Boolean));
   $("#modelCreateFeedback").hidden = true;
   if (typeof dialog.showModal === "function") dialog.showModal();
   else dialog.setAttribute("open", "");
@@ -309,14 +336,15 @@ async function createModel(event) {
     if (editingId) {
       const current = settings[kind] || DEFAULTS[kind];
       const updatedModel = { ...(current.models || []).find((item) => item.id === editingId), ...payload, id: editingId };
-      const response = await Api.updateModelSettings({ ...settings, [kind]: { ...current, ...payload, models: (current.models || []).map((item) => item.id === editingId ? updatedModel : item) } });
-      settings = normalizeModelSettings(response);
+      const models = (current.models || []).map((item) => item.id === editingId ? updatedModel : item);
+      const response = await Api.updateModelSettings({ [kind]: { models } });
+      settings = normalizeModelSettings({ ...settings, ...response });
       fillForm(kind);
       toast(`${LABELS[kind]} 模型已更新`, "ph-check-circle");
     } else {
       const created = await Api.createModelSettings(kind, payload);
       const current = settings[kind] || DEFAULTS[kind];
-      settings[kind] = { ...current, ...(created.config || {}), models: [...(current.models || []), created.model || created] };
+      settings[kind] = { ...current, ...(created.config || {}) };
       settings[kind].models = settings[kind].models.map((model, index) => ({ ...model, isCurrent: created.model?.id ? model.id === created.model.id : index === settings[kind].models.length - 1 }));
       fillForm(kind);
       setStatus(kind, "available", "已接入");
@@ -375,4 +403,3 @@ export function initModelSettings() {
   KINDS.forEach(fillForm);
   if (state.view === "model-settings") void refresh();
 }
-

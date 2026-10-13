@@ -161,6 +161,7 @@ Copy `.env.example` and start the service without an API key. The default transl
 | `SUBTRANS_TRANSCRIBER_BACKEND` | Defaults to `local_whisper`; select a compatible HTTP service explicitly. |
 | `SUBTRANS_COOKIES` | Cookie file for sites that require login or age verification. |
 | `SUBTRANS_WORKERS`, `SUBTRANS_DOWNLOAD_WORKERS` | Pipeline and download concurrency limits; adjust for available resources. |
+| `SUBTRANS_REDIS_URL`, `SUBTRANS_REDIS_NAMESPACE` | Transitional Redis-backed runtime configuration for audio settings; use a unique namespace per deployment. |
 
 Reuse the existing data volume when upgrading a container. Keep the SQLite database along with the output files. Do not commit `.env`, cookies, OAuth credentials, or generated test media. Google Drive requires a separate sidecar; see the [local quick start (Chinese)](./docs/local-quick-start.md).
 

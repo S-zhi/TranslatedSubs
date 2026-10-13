@@ -56,7 +56,10 @@ def _text_for_translation(translated: str, original: str | None, bilingual: bool
     return re.sub(r"\s*\n+\s*", " ", text).strip()
 
 
-def _pipeline(language: str):
+def _pipeline(language: str, model_id: str | None = None):
+    selected_model = model_id or MODEL_ID
+    if selected_model not in {MODEL_ID, "kokoro-v1"}:
+        raise TTSError(f"不支持的 Kokoro 模型: {selected_model}")
     with _MODEL_LOCK:
         if language in _PIPELINES:
             return _PIPELINES[language]
@@ -99,6 +102,9 @@ def generate_timeline_audio(
     *,
     target_lang: str,
     voice: str,
+    speed: float = 1.0,
+    model_id: str | None = None,
+    output_format: str = "wav",
     bilingual: bool = False,
     duration: float | None = None,
     cancel_check=None,
@@ -110,13 +116,19 @@ def generate_timeline_audio(
         import numpy as np
     except ImportError as exc:
         raise TTSError("生成 Kokoro 配音需要安装 numpy") from exc
+    if output_format.lower() != "wav":
+        raise TTSError("当前 Kokoro 配音只支持 wav 输出格式")
+    if speed <= 0 or speed > 4:
+        raise TTSError("Kokoro 语速必须在 0 到 4 之间")
     lang = "zh" if target_lang.lower().startswith("zh") else "en"
     translated = _blocks(Path(translated_srt))
     originals = _blocks(Path(original_srt))
     if not translated:
         raise TTSError("译文字幕中没有可配音的文本")
     total = max(duration or 0, max(end for _, end, _ in translated))
-    pipeline = _pipeline(lang)
+    # Keep the one-argument hook contract used by existing integrations and
+    # tests when no custom model was requested.
+    pipeline = _pipeline(lang) if model_id is None else _pipeline(lang, model_id=model_id)
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     timeline_path = path.with_suffix(".timeline.f32")
@@ -168,7 +180,7 @@ def generate_timeline_audio(
                         raise
                 sentence_budget = max(1, int((end - start) * SAMPLE_RATE * weight / sum(weights)))
                 generated = []
-                for result in pipeline(sentence, voice=voice, speed=1.0, split_pattern=r"\n+"):
+                for result in pipeline(sentence, voice=voice, speed=speed, split_pattern=r"\n+"):
                     audio_piece = getattr(result, "audio", None)
                     if audio_piece is None and isinstance(result, tuple) and len(result) == 3:
                         audio_piece = result[2]

@@ -24,6 +24,7 @@ from .translation_engine_store import (
     TranslationEngine,
     TranslationEngineStore,
 )
+from .model_settings_store import KINDS as MODEL_KINDS, ModelSettingsStore
 
 __all__ = [
     "ProbeRecord",
@@ -47,4 +48,6 @@ __all__ = [
     "LOCAL_TRANSLATION_MODEL",
     "TranslationEngine",
     "TranslationEngineStore",
+    "MODEL_KINDS",
+    "ModelSettingsStore",
 ]
