@@ -304,3 +304,68 @@ def test_http_save_then_create_persists_runtime_snapshot(tmp_path, monkeypatch):
             assert "sk-http-secret" not in record.runtime_config_json
     finally:
         app.dependency_overrides.clear()
+
+
+def test_http_whisper_snapshot_is_frozen_when_current_card_changes(tmp_path, monkeypatch):
+    db_path = tmp_path / "whisper-state.db"
+    task_store = TaskStore(db_path)
+    engine_store = TranslationEngineStore(db_path)
+    engine_store.ensure_default_deepseek()
+    base_settings = dataclasses.replace(
+        tasks_routes.settings, db_path=db_path, data_dir=tmp_path,
+        deepseek_api_key="sk-test",
+    )
+    monkeypatch.setattr(tasks_routes, "settings", base_settings)
+    monkeypatch.setattr(model_settings_routes, "settings", base_settings)
+    monkeypatch.setattr(deps, "settings", base_settings)
+    monkeypatch.setattr(tasks_routes, "_ensure_local_model_ready", lambda _model: None)
+    monkeypatch.setattr(tasks_routes, "enqueue_pipeline", lambda _task_id: None)
+    monkeypatch.setattr(model_settings_routes.model_manager, "is_ready", lambda _name: True)
+    monkeypatch.setattr(model_settings_routes.model_manager, "list_models", lambda: [
+        {"name": "tiny", "status": "READY"}, {"name": "small", "status": "READY"},
+    ])
+    app.dependency_overrides[deps.get_store] = lambda: task_store
+    app.dependency_overrides[deps.get_translation_engine_store] = lambda: engine_store
+    try:
+        with TestClient(app) as client:
+            saved = client.put("/api/settings/models", json={
+                "llm": {"provider": "openai_compatible", "model": "test-model",
+                        "baseUrl": "https://example.test/v1", "apiKey": "sk-test",
+                        "models": [{"id": "llm-card", "provider": "openai_compatible",
+                                    "model": "test-model", "baseUrl": "https://example.test/v1",
+                                    "isCurrent": True}]},
+                "whisper": {
+                    "enabled": True, "provider": "local", "model": "tiny",
+                    "models": [{"id": "tiny-card", "provider": "local", "model": "tiny",
+                                "enabled": True, "isCurrent": True}],
+                },
+            })
+            assert saved.status_code == 200
+            created = client.post("/api/tasks", json=_body(ttsEnabled=False, model="local:request-model").__dict__)
+            assert created.status_code == 201
+            task_id = created.json()["id"]
+            record = task_store.get(task_id)
+            assert json.loads(record.runtime_config_json)["whisper"]["model"] == "local:tiny"
+            assert "sk-test" not in record.runtime_config_json
+
+            switched = client.put("/api/settings/models", json={"whisper": {
+                "enabled": True, "provider": "local", "model": "local:small",
+                "models": [
+                    {"id": "tiny-card", "provider": "local", "model": "local:tiny", "enabled": True},
+                    {"id": "small-card", "provider": "local", "model": "local:small", "enabled": True, "isCurrent": True},
+                ],
+            }})
+            assert switched.status_code == 200
+
+        observed = {}
+
+        def fake_pipeline(params, on_event, *, api_key=None, engine_config=None):
+            observed["model"] = params.model
+            on_event(PipelineEvent("SUCCESS", 100, None, outputs={}))
+
+        monkeypatch.setattr(runner, "_store", task_store)
+        monkeypatch.setattr(runner, "run_pipeline", fake_pipeline)
+        runner._run(task_id)
+        assert observed["model"] == "local:tiny"
+    finally:
+        app.dependency_overrides.clear()
