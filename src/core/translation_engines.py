@@ -19,9 +19,12 @@ class EngineClient:
     model: str
     api_key: str
     timeout: int = 60
+    temperature: float = 0.3
+    default_max_tokens: int = 4096
 
-    def complete(self, system: str, user: str, *, max_tokens: int = 4096) -> str:
+    def complete(self, system: str, user: str, *, max_tokens: int | None = None) -> str:
         import httpx
+        token_limit = int(max_tokens or self.default_max_tokens)
 
         try:
             if self.api_type == "openai_compatible":
@@ -34,9 +37,9 @@ class EngineClient:
                     json={
                         "model": self.model,
                         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-                        "temperature": 0.3,
+                        "temperature": self.temperature,
                         "stream": False,
-                        "max_tokens": max_tokens,
+                        "max_tokens": token_limit,
                     },
                     timeout=self.timeout,
                 )
@@ -59,7 +62,7 @@ class EngineClient:
                         "model": self.model,
                         "system": system,
                         "messages": [{"role": "user", "content": user}],
-                        "max_tokens": max_tokens,
+                        "max_tokens": token_limit,
                     },
                     timeout=self.timeout,
                 )
@@ -88,4 +91,25 @@ def make_engine_client(config: Any, timeout: int | None = None) -> EngineClient:
         timeout = getattr(config, "timeout", None) or (config.get("timeout") if isinstance(config, dict) else 60) or 60
     if not (api_key and str(api_key).strip()):
         raise TranslationEngineError("未配置 API Key", code="missing_api_key")
-    return EngineClient(api_type=api_type, base_url=base_url, model=model, api_key=str(api_key).strip(), timeout=int(timeout))
+    def _number(name: str, fallback: float) -> float:
+        value = getattr(config, name, None)
+        if value is None and isinstance(config, dict):
+            value = config.get(name)
+        try:
+            return float(value if value is not None else fallback)
+        except (TypeError, ValueError):
+            return fallback
+
+    raw_max = getattr(config, "max_tokens", None)
+    if raw_max is None and isinstance(config, dict):
+        raw_max = config.get("max_tokens", config.get("maxTokens"))
+    try:
+        default_max_tokens = max(1, int(raw_max or 4096))
+    except (TypeError, ValueError):
+        default_max_tokens = 4096
+    return EngineClient(
+        api_type=api_type, base_url=base_url, model=model,
+        api_key=str(api_key).strip(), timeout=int(timeout),
+        temperature=max(0.0, min(2.0, _number("temperature", 0.3))),
+        default_max_tokens=default_max_tokens,
+    )

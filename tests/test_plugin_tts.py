@@ -118,6 +118,26 @@ def test_explicit_voice_is_preserved(tmp_path, monkeypatch):
     assert observed["voice"] == "zf_custom"
 
 
+def test_snapshot_tts_options_reach_audio_generator(tmp_path, monkeypatch):
+    request = _request(tmp_path, target_lang="en", voice="af_maple")
+    observed = {}
+
+    def fake_generate(*args, **kwargs):
+        observed.update(kwargs)
+        _write_wav(args[2])
+        return Path(args[2])
+
+    monkeypatch.setattr(tts_kokoro.tts_core, "generate_timeline_audio", fake_generate)
+    config = {**_config(request), "speed": 1.25, "model_id": "kokoro-v1", "output_format": "wav"}
+    _manager().run(
+        "builtin.kokoro", "1", request, config,
+        FakeContext(task_id="task-a6", task_dir=tmp_path, purpose="tts"),
+    )
+    assert {key: observed[key] for key in ("speed", "model_id", "output_format")} == {
+        "speed": 1.25, "model_id": "kokoro-v1", "output_format": "wav",
+    }
+
+
 def test_config_mismatch_fails_before_loading_tts_core(tmp_path, monkeypatch):
     request = _request(tmp_path)
     called = []

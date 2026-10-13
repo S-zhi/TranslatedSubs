@@ -242,6 +242,7 @@ def test_mcp_business_client_posts_to_same_rest_create_route_and_hides_plan(
     stores, monkeypatch
 ):
     task_store, engine_store, engine = stores
+    engine_store.update(engine.id, availability="AVAILABLE")
     app = FastAPI()
     app.include_router(task_lifecycle.router)
     app.dependency_overrides[task_lifecycle.get_store] = lambda: task_store

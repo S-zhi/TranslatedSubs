@@ -141,17 +141,31 @@ def get_runtime_settings() -> dict[str, Any]:
     """Return persisted runtime overrides (never includes secrets)."""
     _load_runtime_settings()
     with _RUNTIME_SETTINGS_LOCK:
-        return {
+        result = {
             key: value
             for key, value in _RUNTIME_SETTINGS.items()
             if key not in _RUNTIME_SECRET_KEYS
         }
+    try:
+        from .runtime_redis import get_runtime_document
+        configured, remote = get_runtime_document()
+        if configured and remote is not None:
+            return {key: remote[key] for key in _RUNTIME_SETTING_KEYS if key in remote}
+    except Exception:
+        pass
+    return result
 
 
 def update_runtime_settings(values: dict[str, Any]) -> dict[str, Any]:
     """Persist validated runtime overrides and make them immediately effective."""
     _load_runtime_settings()
     clean = {k: values[k] for k in values if k in _RUNTIME_SETTING_KEYS}
+    try:
+        from .runtime_redis import update_runtime_values
+        update_runtime_values(clean)
+    except Exception:
+        if os.getenv("SUBTRANS_REDIS_URL"):
+            raise
     with _RUNTIME_SETTINGS_LOCK:
         for key, value in clean.items():
             # None removes an override so the corresponding environment value
@@ -178,6 +192,14 @@ def update_runtime_settings(values: dict[str, Any]) -> dict[str, Any]:
 
 def _runtime_value(key: str) -> Any:
     _load_runtime_settings()
+    if key in _RUNTIME_SETTING_KEYS:
+        try:
+            from .runtime_redis import get_runtime_document
+            configured, document = get_runtime_document()
+            if configured and document is not None:
+                return document.get(key, _UNSET)
+        except Exception:
+            pass
     with _RUNTIME_SETTINGS_LOCK:
         return _RUNTIME_SETTINGS.get(key, _UNSET)
 

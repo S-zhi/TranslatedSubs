@@ -11,12 +11,13 @@ import importlib.util
 import shutil
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.config import settings
 from src.config.config import update_runtime_settings
 from src.handler.deps import require_api_token
+from src.config.redis_store import ConfigUnavailable, RevisionConflict
 
 
 router = APIRouter(prefix="/api/settings/audio", tags=["audio-settings"])
@@ -83,10 +84,15 @@ def get_audio_settings() -> AudioSettingsOut:
 @router.put("", response_model=AudioSettingsOut, dependencies=[Depends(require_api_token)])
 def put_audio_settings(body: AudioSettingsIn) -> AudioSettingsOut:
     # Explicitly omit backend/command: the deployment controls those values.
-    update_runtime_settings({
-        "vocal_separation_enabled": body.enabled,
-        "vocal_separation_model": body.model,
-        "vocal_separation_threads": body.threads,
-        "vocal_separation_timeout": body.timeout,
-    })
+    try:
+        update_runtime_settings({
+            "vocal_separation_enabled": body.enabled,
+            "vocal_separation_model": body.model,
+            "vocal_separation_threads": body.threads,
+            "vocal_separation_timeout": body.timeout,
+        })
+    except RevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ConfigUnavailable as exc:
+        raise HTTPException(status_code=503, detail="Redis 配置存储不可用") from exc
     return _out()

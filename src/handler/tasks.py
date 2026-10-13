@@ -51,6 +51,8 @@ from src.service.runner import _cleanup_partial_artifacts, cancel_pipeline, enqu
 from src.service.asset_resolver import AssetResolver, ResourceState
 from src.service.probe_batch import probe_batch_manager
 from src.service.translation_model_manager import get_translation_model_manager
+from src.service.model_runtime import resolve_engine as _resolve_engine
+from src.service.model_runtime import resolve_runtime as _resolve_runtime
 from src.service.task import task as _task
 from src.service.task import task_artifacts as _task_artifacts
 from src.service.task import task_lifecycle as _task_lifecycle
@@ -243,9 +245,30 @@ def _ensure_translation_engine(
     need_subtitle: bool,
     engines: TranslationEngineStore,
 ) -> None:
-    # Delegate to shared implementation, which reads compat.settings and
-    # compat.get_translation_model_manager dynamically.
-    return _task._ensure_translation_engine(engine, need_subtitle, engines)
+    # The shared resolver is the validation source for task creation.  Keep
+    # this historic helper for callers/tests that invoke it directly.
+    model_store = None
+    if getattr(engines, "db_path", None) is not None:
+        from src.store.model_settings_store import ModelSettingsStore
+        model_store = ModelSettingsStore(engines.db_path)
+    _resolve_engine(
+        engine, need_subtitle, engines, model_store=model_store,
+        compat_settings=settings,
+        translation_model_manager=get_translation_model_manager(),
+    )
+
+
+def resolve_runtime(**kwargs):
+    """Resolve and snapshot all model routing for a newly created task."""
+    kwargs.setdefault("compat_settings", settings)
+    kwargs.setdefault("translation_model_manager", get_translation_model_manager())
+    if "model_store" not in kwargs:
+        engines = kwargs.get("engines")
+        db_path = getattr(engines, "db_path", getattr(settings, "db_path", None))
+        if db_path is not None:
+            from src.store.model_settings_store import ModelSettingsStore
+            kwargs["model_store"] = ModelSettingsStore(db_path)
+    return _resolve_runtime(**kwargs)
 
 # 确保支持的语言翻译
 def _ensure_supported_translation_languages(

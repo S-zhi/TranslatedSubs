@@ -100,6 +100,10 @@ class PipelineParams:
     quality: Optional[str] = None  # 下载清晰度策略：best/1080p/720p/480p/360p/audio_only
     tts_enabled: bool = False
     tts_voice: str = "auto"
+    tts_speed: float = 1.0
+    tts_format: str = "wav"
+    tts_model: Optional[str] = None
+    tts_provider: str = "kokoro"
     original_voice_mode: str = "keep"
 
 

@@ -45,7 +45,7 @@ _SLOT_CONFIG_KEYS = {
         "engine_id", "api_type", "base_url", "model", "credential_ref",
         "batch_size", "local_batch_size", "timeout_seconds",
     },
-    "tts": {"voice", "target_lang", "bilingual"},
+    "tts": {"voice", "target_lang", "bilingual", "speed", "model_id", "output_format"},
     "render.subtitle": {"mode"},
     "render.dub_mux": {"original_voice_mode"},
 }

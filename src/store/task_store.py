@@ -85,11 +85,14 @@ class TaskRecord:
     tts_error: Optional[str] = None
     output_dubbed_video: Optional[str] = None
     plugin_plan_json: Optional[str] = None
+    # Non-sensitive runtime routing snapshot captured at task creation.
+    runtime_config_json: Optional[str] = None
 
     def to_dict(self) -> dict:
         # The plugin plan is internal execution data, never part of API payloads.
         record = asdict(self)
         record.pop("plugin_plan_json", None)
+        record.pop("runtime_config_json", None)
         return record
 
 
@@ -215,6 +218,8 @@ class TaskStore:
                 conn.execute("ALTER TABLE tasks ADD COLUMN output_dubbed_video TEXT")
             if "plugin_plan_json" not in cols:
                 conn.execute("ALTER TABLE tasks ADD COLUMN plugin_plan_json TEXT")
+            if "runtime_config_json" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN runtime_config_json TEXT")
             # Older versions persisted absolute output paths. Keep only the
             # task-local name so the database survives volume and OS changes.
             for row in conn.execute(
@@ -257,6 +262,7 @@ class TaskStore:
         tts_voice: str = "auto",
         original_voice_mode: str = "keep",
         plugin_plan_json: Optional[str] = None,
+        runtime_config_json: Optional[str] = None,
     ) -> TaskRecord:
         with self._connect() as conn:
             return self._insert(
@@ -277,6 +283,7 @@ class TaskStore:
                 tts_voice=tts_voice,
                 original_voice_mode=original_voice_mode,
                 plugin_plan_json=plugin_plan_json,
+                runtime_config_json=runtime_config_json,
             )
 
     def create_if_no_recent_active(
@@ -322,6 +329,7 @@ class TaskStore:
             tts_enabled=int(kwargs.get("tts_enabled", False)),
             tts_voice=kwargs.get("tts_voice", "auto"),
             original_voice_mode=kwargs.get("original_voice_mode", "keep"),
+            runtime_config_json=kwargs.get("runtime_config_json"),
             tts_status="PENDING" if kwargs.get("tts_enabled", False) else "DISABLED",
             plugin_plan_json=kwargs.get("plugin_plan_json"),
             status="PENDING",

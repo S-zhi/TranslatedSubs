@@ -19,7 +19,8 @@ from src.plugin_system.contracts import PluginConfig
 
 
 PLUGIN_ID = "builtin.kokoro"
-_ALLOWED_CONFIG_KEYS = frozenset({"voice", "target_lang", "bilingual"})
+_REQUIRED_CONFIG_KEYS = frozenset({"voice", "target_lang", "bilingual"})
+_ALLOWED_CONFIG_KEYS = _REQUIRED_CONFIG_KEYS | {"speed", "model_id", "output_format"}
 
 
 class KokoroFactory:
@@ -60,7 +61,7 @@ class KokoroSession:
         if not request.translated_srt.is_file() or not request.original_srt.is_file():
             raise self._error("invalid_input", "subtitle input is missing")
         unknown = set(self._config) - _ALLOWED_CONFIG_KEYS
-        if unknown or set(self._config) != _ALLOWED_CONFIG_KEYS:
+        if unknown or not _REQUIRED_CONFIG_KEYS.issubset(self._config):
             raise self._error("invalid_input", "TTS config is incomplete or unsupported")
         voice = self._config["voice"]
         target_lang = self._config["target_lang"]
@@ -71,6 +72,14 @@ class KokoroSession:
             raise self._error("invalid_input", "TTS target language config is invalid")
         if not isinstance(bilingual, bool):
             raise self._error("invalid_input", "TTS bilingual config must be boolean")
+        speed = self._config.get("speed", 1.0)
+        if isinstance(speed, bool) or not isinstance(speed, (int, float)) or not math.isfinite(speed) or not 0 < speed <= 4:
+            raise self._error("invalid_input", "TTS speed config is invalid")
+        model_id = self._config.get("model_id")
+        if model_id is not None and not isinstance(model_id, str):
+            raise self._error("invalid_input", "TTS model config is invalid")
+        if self._config.get("output_format", "wav") != "wav":
+            raise self._error("invalid_input", "TTS output format is unsupported")
         if (
             request.voice != voice
             or request.target_lang != target_lang
@@ -98,6 +107,9 @@ class KokoroSession:
                 request.output_audio,
                 target_lang=request.target_lang,
                 voice=voice,
+                speed=self._config.get("speed", 1.0),
+                model_id=self._config.get("model_id"),
+                output_format=self._config.get("output_format", "wav"),
                 bilingual=request.bilingual,
                 duration=request.duration_seconds,
                 cancel_check=self._context.check_cancelled,
