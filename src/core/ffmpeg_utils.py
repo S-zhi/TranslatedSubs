@@ -8,6 +8,8 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
+import threading
+from collections import deque
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -117,24 +119,65 @@ def run_ffmpeg(
         except Exception:
             pass
 
+    stderr_lines: deque[str] = deque(maxlen=200)
+
+    def _read_stderr() -> None:
+        if proc.stderr is None:
+            return
+        try:
+            if hasattr(proc.stderr, "__iter__"):
+                for err_line in proc.stderr:
+                    stderr_lines.append(err_line)
+            elif hasattr(proc.stderr, "read"):
+                content = proc.stderr.read()
+                if content:
+                    stderr_lines.extend(content.splitlines(keepends=True))
+        except Exception:
+            pass
+
+    stderr_thread = threading.Thread(target=_read_stderr, daemon=True)
+    stderr_thread.start()
+
     try:
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            line = line.strip()
-            if "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            if key == "out_time_us" and on_tick is not None:
-                try:
-                    on_tick(int(value) / 1_000_000)
-                except (ValueError, TypeError):
-                    pass
+        if proc.stdout is not None:
+            for line in proc.stdout:
+                line = line.strip()
+                if "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                if key == "out_time_us" and on_tick is not None:
+                    try:
+                        on_tick(int(value) / 1_000_000)
+                    except (ValueError, TypeError):
+                        pass
 
         proc.wait()
+        stderr_thread.join(timeout=2.0)
         if proc.returncode != 0:
-            stderr = proc.stderr.read() if proc.stderr else ""
-            raise error_cls(f"ffmpeg 执行失败（退出码 {proc.returncode}）: {stderr.strip()}")
+            stderr_text = "".join(stderr_lines).strip()
+            raise error_cls(f"ffmpeg 执行失败（退出码 {proc.returncode}）: {stderr_text}")
     finally:
+        if hasattr(proc, "poll") and proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=1.0)
+            except Exception:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=1.0)
+                except Exception:
+                    pass
+        if proc.stdout and hasattr(proc.stdout, "close"):
+            try:
+                proc.stdout.close()
+            except Exception:
+                pass
+        if proc.stderr and hasattr(proc.stderr, "close"):
+            try:
+                proc.stderr.close()
+            except Exception:
+                pass
+        stderr_thread.join(timeout=1.0)
         if task_id:
             try:
                 from src.service.runner import unregister_process

@@ -83,7 +83,7 @@ def test_live_pipeline_full(tmp_path, monkeypatch):
     assert audio.filesize and audio.filesize > 0
     print(f"② 提取完成: {audio.filesize/1024/1024:.2f}MB, {audio.duration:.1f}s")
 
-    # ③ 语音识别（Replicate tiny.en；本地文件上传）
+    # ③ 语音识别（本地 tiny.en；本地文件上传）
     tr_progress = []
     subs = transcribe(audio.audio_path, "live", model_name="tiny.en", language="en", on_progress=tr_progress.append)
     assert subs.srt_path.exists()

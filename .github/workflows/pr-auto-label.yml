@@ -1,0 +1,102 @@
+name: 新增PR任务分发(GH1-3.5)
+
+on:
+  pull_request:
+    types: [opened, reopened, edited]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: read
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Label PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          ACTOR: ${{ github.event.pull_request.user.login }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+
+          JULES_BOT="google-labs-jules[bot]"
+          LEVEL_LABELS=("Citizen L1" "Citizen L2" "Citizen L3")
+
+          is_jules=false
+          if [[ "$ACTOR" == "$JULES_BOT" ]]; then
+            is_jules=true
+          fi
+
+          add_label() {
+            local label="$1"
+            gh label create "$label" --force >/dev/null 2>&1 || true
+            gh pr edit "$PR_NUMBER" --add-label "$label"
+          }
+
+          # Jules 开的 PR：只打 Pass，不打 wait-review
+          if [[ "$is_jules" == "true" ]]; then
+            echo "PR by Jules bot → add Pass, skip wait-review"
+            add_label "Pass"
+          else
+            echo "Human/other PR → add wait-review"
+            add_label "wait-review"
+          fi
+
+          # 找关联 Issue：优先 GraphQL 的 closingIssuesReferences，再从 body 里解析 #N
+          ISSUE_NUMBER="$(gh api graphql -f query='
+            query($owner:String!, $name:String!, $number:Int!) {
+              repository(owner:$owner, name:$name) {
+                pullRequest(number:$number) {
+                  closingIssuesReferences(first: 10) {
+                    nodes { number }
+                  }
+                }
+              }
+            }' \
+            -F owner="${GH_REPO%%/*}" \
+            -F name="${GH_REPO#*/}" \
+            -F number="$PR_NUMBER" \
+            --jq '.data.repository.pullRequest.closingIssuesReferences.nodes[0].number // empty' || true)"
+
+          if [[ -z "${ISSUE_NUMBER}" ]]; then
+            ISSUE_NUMBER="$(printf '%s\n' "$PR_BODY" | grep -oE '(^|[^A-Za-z0-9_])(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]+#([0-9]+)' -i | grep -oE '[0-9]+$' | head -n1 || true)"
+          fi
+
+          if [[ -z "${ISSUE_NUMBER}" ]]; then
+            ISSUE_NUMBER="$(printf '%s\n' "$PR_BODY" | grep -oE '#[0-9]+' | head -n1 | tr -d '#' || true)"
+          fi
+
+          if [[ -z "${ISSUE_NUMBER}" ]]; then
+            echo "No linked issue found; skip level sync"
+            exit 0
+          fi
+
+          echo "Linked issue: #$ISSUE_NUMBER"
+
+          ISSUE_LABELS="$(gh issue view "$ISSUE_NUMBER" --json labels --jq '.labels[].name' || true)"
+          if [[ -z "$ISSUE_LABELS" ]]; then
+            echo "Could not read issue labels"
+            exit 0
+          fi
+
+          synced=""
+          while IFS= read -r name; do
+            for level in "${LEVEL_LABELS[@]}"; do
+              if [[ "$name" == "$level" ]]; then
+                synced="$level"
+                break 2
+              fi
+            done
+          done <<< "$ISSUE_LABELS"
+
+          if [[ -z "$synced" ]]; then
+            echo "Issue has no Citizen L1/L2/L3 label; skip"
+            exit 0
+          fi
+
+          echo "Sync level label: $synced"
+          add_label "$synced"

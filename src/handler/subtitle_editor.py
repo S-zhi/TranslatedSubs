@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field, field_validator
 from src.config import (
     ORIGINAL_SRT,
     OUTPUT_VIDEO,
+    OUTPUT_VIDEO_NAMES,
     SOURCE_VIDEO_STEM,
     TRANSLATED_SRT,
     task_dir,
@@ -208,7 +209,7 @@ def _resolve_target_path(d: Path, locale: _Locale, version: Optional[str]) -> tu
 
 # ---------- 路由 ----------
 
-@router.get("/{task_id}/subtitles", response_model=SubtitlesOut)
+@router.get("/{task_id}/subtitles", response_model=SubtitlesOut, dependencies=[Depends(require_api_token)])
 def get_subtitles(task_id: str, store: TaskStore = Depends(get_store)) -> SubtitlesOut:
     """读取任务当前 ORIGINAL_SRT / TRANSLATED_SRT，解析为结构化 JSON 供前端编辑。
 
@@ -256,7 +257,7 @@ def save_subtitles(
         target_path, rel_name = _resolve_target_path(d, body.locale, body.version)
 
         # 校验、读取现有编码与写回必须处于同一临界区，避免并发保存时基于过期文件状态写入。
-        if body.version is not None and rel_name in {ORIGINAL_SRT, TRANSLATED_SRT, OUTPUT_VIDEO}:
+        if body.version is not None and rel_name in {ORIGINAL_SRT, TRANSLATED_SRT, *OUTPUT_VIDEO_NAMES}:
             raise HTTPException(status_code=400, detail="非法的版本文件名")
 
         sorted_entries = sorted(body.entries, key=lambda e: (e.start, e.index))
@@ -334,5 +335,5 @@ def reburn_subtitles(
 
     out_name = result.output_path.name
     # 把 DB 里的 output_video 同步刷新，方便前端通过 /download 立即拿到新版本
-    store.update(task_id, output_video=str(result.output_path))
+    store.update(task_id, output_video=result.output_path.name)
     return ReburnOut(ok=True, taskId=task_id, mode=mode, outputPath=out_name)

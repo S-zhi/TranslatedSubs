@@ -10,6 +10,7 @@ import { $, el, shortUrl } from "./utils.js";
 import { Api } from "./api.js";
 import { toast } from "./toast.js";
 import { LANG_LABEL } from "./constants.js";
+import { setView } from "./store.js";
 
 const URL_RE = /^https?:\/\/.+/i;
 
@@ -21,6 +22,25 @@ function isValidUrl(url) {
 function formatLang(code) {
   if (!code) return null;
   return LANG_LABEL[code] ? `${LANG_LABEL[code]} (${code})` : code;
+}
+
+function formatFilesize(bytes) {
+  if (!bytes || !Number.isFinite(bytes)) return "";
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function qualityLabel(q) {
+  const map = {
+    best: "原画最佳 (best)",
+    "1080p": "1080P 高清",
+    "720p": "720P 标清",
+    "480p": "480P 省流",
+    "360p": "360P 极速",
+    audio_only: "纯音频流",
+  };
+  return map[q] || q;
 }
 
 function formatDuration(seconds) {
@@ -84,6 +104,18 @@ function renderResult(resultEl, result, url) {
   icon.innerHTML = `<i class="ph ${result.ok ? "ph-check-circle" : "ph-warning-circle"}" aria-hidden="true"></i>`;
 
   const body = el("div", "probe-result__body");
+
+  // 封面预览（如有）
+  if (result.thumbnail) {
+    const thumb = el("div", "probe-result__thumb");
+    const img = el("img");
+    img.src = result.thumbnail;
+    img.alt = result.title || "视频封面";
+    img.loading = "lazy";
+    thumb.append(img);
+    body.append(thumb);
+  }
+
   const title = el("div", "probe-result__title");
   title.textContent = result.ok ? "可以下载" : "暂时不可下载";
   const desc = el("div", "probe-result__desc");
@@ -96,6 +128,7 @@ function renderResult(resultEl, result, url) {
   const duration = formatDuration(result.duration);
   const webpage = result.webpageUrl || url;
   meta.append(metaItem("链接", shortUrl(webpage)));
+  if (result.uploader) meta.append(metaItem("作者 / 频道", result.uploader));
   if (result.extractor) meta.append(metaItem("站点解析器", result.extractor));
   if (duration) meta.append(metaItem("时长", duration));
   if (result.language) meta.append(metaItem("推测语言", formatLang(result.language)));
@@ -104,6 +137,69 @@ function renderResult(resultEl, result, url) {
     meta.append(metaItem("详情", result.detail));
   }
   body.append(meta);
+
+  // 展现支持的清晰度标签（如 1080p, 720p, 480p, 纯音频）
+  if (result.ok && Array.isArray(result.availableQualities) && result.availableQualities.length > 0) {
+    const qualBox = el("div", "probe-result__qualities");
+    const qualTitle = el("div", "probe-result__section-title");
+    qualTitle.innerHTML = `<i class="ph ph-video" aria-hidden="true"></i><span>当前支持的画质策略</span>`;
+    const qualTags = el("div", "probe-result__tags");
+    result.availableQualities.forEach((q) => {
+      const tag = el("span", `probe-tag ${q === "1080p" || q === "best" ? "is-highlight" : ""}`);
+      tag.textContent = qualityLabel(q);
+      qualTags.append(tag);
+    });
+    qualBox.append(qualTitle, qualTags);
+    body.append(qualBox);
+  }
+
+  // 展现代表性音视频流明细
+  if (result.ok && Array.isArray(result.formats) && result.formats.length > 0) {
+    const formatsBox = el("div", "probe-result__formats");
+    const fTitle = el("div", "probe-result__section-title");
+    fTitle.innerHTML = `<i class="ph ph-list-dashes" aria-hidden="true"></i><span>可用流规格明细</span>`;
+    const table = el("div", "probe-formats-table");
+    result.formats.forEach((f) => {
+      const row = el("div", "probe-format-row");
+      const resCol = el("span", "probe-format-col--res");
+      resCol.textContent = f.resolution || "视频";
+      const extCol = el("span", "probe-format-col--ext");
+      extCol.textContent = (f.ext || "").toUpperCase();
+      const codecCol = el("span", "probe-format-col--codec");
+      const codecs = [f.vcodec, f.acodec].filter(Boolean).join(" / ") || (f.note || "默认编码");
+      codecCol.textContent = codecs;
+      const sizeCol = el("span", "probe-format-col--size");
+      const sizeText = f.filesize ? formatFilesize(f.filesize) : (f.tbr ? `${f.tbr} kbps` : "");
+      sizeCol.textContent = sizeText;
+
+      row.append(resCol, extCol, codecCol, sizeCol);
+      table.append(row);
+    });
+    formatsBox.append(fTitle, table);
+    body.append(formatsBox);
+  }
+
+  // 操作按钮：一键带入任务控制台
+  if (result.ok) {
+    const actionBox = el("div", "probe-result__actions");
+    const createBtn = el("button", "btn btn--primary btn--sm");
+    createBtn.type = "button";
+    createBtn.innerHTML = `<i class="ph ph-plus-circle" aria-hidden="true"></i><span>以此链接创建任务</span>`;
+    createBtn.addEventListener("click", () => {
+      setView("tasks");
+      setTimeout(() => {
+        const urlEl = $("#url");
+        if (urlEl) {
+          urlEl.value = result.webpageUrl || url;
+          urlEl.dispatchEvent(new Event("input", { bubbles: true }));
+          urlEl.focus();
+        }
+      }, 50);
+    });
+    actionBox.append(createBtn);
+    body.append(actionBox);
+  }
+
   resultEl.append(icon, body);
 }
 

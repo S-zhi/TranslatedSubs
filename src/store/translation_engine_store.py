@@ -1,22 +1,28 @@
-"""持久化翻译引擎配置。
+"""Redis-backed translation engine records.
 
-引擎配置保存的是协议、地址、模型和密钥；API 层只返回脱敏后的视图。
-当前应用是本地工作台，因此密钥与 SQLite 位于同一受限本地数据目录，业务代码
-不会把密钥写入日志、任务记录或前端响应。
+The legacy ``db_path`` constructor argument remains accepted for callers that
+also own a SQLite task store. Engine configuration and credentials themselves
+are read and written only through the shared Redis configuration provider.
 """
 
 from __future__ import annotations
 
-import sqlite3
+import copy
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import List, Optional
 
+from src.config.config_repository import ConfigSnapshot, get_config_provider
+from src.config.model_schema import validate_engines
 
-ENGINE_TYPES = ("openai_compatible", "anthropic_compatible")
+ENGINE_TYPES = ("openai_compatible", "anthropic_compatible", "local_ct2")
 AVAILABILITY = ("UNCONFIGURED", "UNKNOWN", "CHECKING", "AVAILABLE", "UNAVAILABLE")
+LOCAL_TRANSLATION_ENGINE_ID = "local-opus-en-zh"
+DEFAULT_TRANSLATION_ENGINE_ID = LOCAL_TRANSLATION_ENGINE_ID
+LOCAL_TRANSLATION_ENGINE_NAME = "本地 CPU 英译中"
+LOCAL_TRANSLATION_MODEL = "Helsinki-NLP/opus-mt-en-zh"
 
 
 @dataclass
@@ -44,191 +50,175 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def _to_engine(value: dict | None) -> TranslationEngine | None:
+    if not value:
+        return None
+    fields = {field: value.get(field) for field in TranslationEngine.__dataclass_fields__}
+    return TranslationEngine(**fields)
+
+
 class TranslationEngineStore:
-    def __init__(self, db_path: Path | str):
-        self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_schema()
-        self.reset_dangling_checking()
+    def __init__(self, db_path: Path | str | None = None, *, provider=None,
+                 snapshot: ConfigSnapshot | None = None):
+        # Retained for source compatibility only. No SQLite file is opened.
+        self.db_path = Path(db_path) if db_path is not None else None
+        self._provider = provider
+        self._snapshot = snapshot
+        if snapshot is None:
+            self.reset_dangling_checking()
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, timeout=10)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=5000")
-        return conn
+    def _read(self) -> ConfigSnapshot:
+        return self._snapshot or (self._provider or get_config_provider()).read()
 
-    def _init_schema(self) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS translation_engines (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    api_type TEXT NOT NULL,
-                    base_url TEXT NOT NULL,
-                    model TEXT NOT NULL,
-                    api_key TEXT,
-                    enabled INTEGER NOT NULL DEFAULT 1,
-                    availability TEXT NOT NULL DEFAULT 'UNCONFIGURED',
-                    last_checked_at INTEGER,
-                    last_error TEXT,
-                    api_key_rotated_at INTEGER,
-                    created_at INTEGER NOT NULL,
-                    updated_at INTEGER NOT NULL
-                )
-                """
-            )
-            columns = {row[1] for row in conn.execute("PRAGMA table_info(translation_engines)")}
-            if "api_key_rotated_at" not in columns:
-                conn.execute("ALTER TABLE translation_engines ADD COLUMN api_key_rotated_at INTEGER")
+    def _engines(self) -> dict[str, dict]:
+        by_id = self._read().values.get("engines", {}).get("byId", {})
+        return copy.deepcopy(by_id)
+
+    def _mutate(self, callback, *, expected_revision: int | None = None) -> ConfigSnapshot:
+        return (self._provider or get_config_provider()).mutate(
+            callback, expected_revision=expected_revision,
+        )
 
     def reset_dangling_checking(self) -> int:
-        """重置所有因服务异常退出/崩溃残留的 CHECKING 状态。"""
-        with self._connect() as conn:
-            cur = conn.execute(
-                """
-                UPDATE translation_engines
-                SET availability = CASE
-                    WHEN api_key IS NOT NULL AND trim(api_key) != '' THEN 'UNKNOWN'
-                    ELSE 'UNCONFIGURED'
-                END
-                WHERE availability = 'CHECKING'
-                """
-            )
-            return cur.rowcount
+        snapshot = self._read()
+        values = snapshot.values
+        by_id = values.get("engines", {}).get("byId", {})
+        stale = [engine_id for engine_id, item in by_id.items()
+                 if item.get("availability") == "CHECKING"]
+        if not stale:
+            return 0
+
+        def apply(document: dict) -> None:
+            records = document.setdefault("engines", {}).setdefault("byId", {})
+            for engine_id in stale:
+                item = records.get(engine_id)
+                if item and item.get("availability") == "CHECKING":
+                    item["availability"] = (
+                        "UNKNOWN" if str(item.get("api_key") or "").strip()
+                        else "UNCONFIGURED"
+                    )
+
+        self._mutate(apply, expected_revision=snapshot.revision)
+        return len(stale)
 
     def list(self) -> List[TranslationEngine]:
-        with self._connect() as conn:
-            rows = conn.execute("SELECT * FROM translation_engines ORDER BY created_at ASC").fetchall()
-        return [_row_to_engine(row) for row in rows]
+        records = self._engines()
+        return [engine for value in records.values() if (engine := _to_engine(value))]
 
     def ensure_default_deepseek(
-        self,
-        *,
-        api_key: Optional[str] = None,
+        self, *, api_key: Optional[str] = None,
         base_url: str = "https://api.deepseek.com",
         model: str = "deepseek-chat",
     ) -> TranslationEngine:
-        """确保旧版 DeepSeek 兼容配置在高级设置中可见。
+        """Ensure the legacy ID exists without importing environment secrets.
 
-        使用固定的 ``deepseek`` ID，以兼容已有任务记录和旧版环境变量配置。
-        只在记录不存在时写入，用户后续在 UI 中的自定义不会被启动流程覆盖。
+        ``api_key`` is accepted for call compatibility but deliberately ignored;
+        keys must be entered through the Redis-backed settings API.
         """
-        existing = self.get("deepseek")
-        if existing is not None:
-            return existing
-
         now = _now_ms()
-        normalized_key = api_key.strip() if api_key and api_key.strip() else None
-        rec = TranslationEngine(
-            id="deepseek",
-            name="DeepSeek",
-            api_type="openai_compatible",
-            base_url=base_url.strip().rstrip("/"),
-            model=model.strip(),
-            api_key=normalized_key,
-            enabled=1,
-            availability="UNKNOWN" if normalized_key else "UNCONFIGURED",
-            created_at=now,
-            updated_at=now,
-            api_key_rotated_at=now if normalized_key else None,
-        )
-        with self._connect() as conn:
-            conn.execute(
-                """INSERT OR IGNORE INTO translation_engines
-                (id, name, api_type, base_url, model, api_key, enabled, availability,
-                 last_checked_at, last_error, api_key_rotated_at, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (rec.id, rec.name, rec.api_type, rec.base_url, rec.model, rec.api_key,
-                rec.enabled, rec.availability, None, None, rec.api_key_rotated_at,
-                rec.created_at, rec.updated_at),
-            )
-        return self.get("deepseek") or rec
+        record = {
+            "id": "deepseek", "name": "DeepSeek", "api_type": "openai_compatible",
+            "base_url": base_url.strip().rstrip("/"), "model": model.strip(),
+            "api_key": None, "enabled": 1, "availability": "UNCONFIGURED",
+            "last_checked_at": None, "last_error": None, "api_key_rotated_at": None,
+            "created_at": now, "updated_at": now,
+        }
+        def apply(document: dict) -> None:
+            by_id = document.setdefault("engines", {}).setdefault("byId", {})
+            by_id.setdefault("deepseek", copy.deepcopy(record))
+        self._mutate(apply)
+        return self.get("deepseek") or TranslationEngine(**record)
+
+    def ensure_local_ct2(self) -> TranslationEngine:
+        now = _now_ms()
+        record = {
+            "id": LOCAL_TRANSLATION_ENGINE_ID, "name": LOCAL_TRANSLATION_ENGINE_NAME,
+            "api_type": "local_ct2", "base_url": "", "model": LOCAL_TRANSLATION_MODEL,
+            "api_key": None, "enabled": 1, "availability": "UNKNOWN",
+            "last_checked_at": None, "last_error": None, "api_key_rotated_at": None,
+            "created_at": now, "updated_at": now,
+        }
+        def apply(document: dict) -> None:
+            by_id = document.setdefault("engines", {}).setdefault("byId", {})
+            existing = by_id.get(LOCAL_TRANSLATION_ENGINE_ID)
+            if existing is None:
+                by_id[LOCAL_TRANSLATION_ENGINE_ID] = copy.deepcopy(record)
+            else:
+                existing.update({
+                    "name": record["name"], "api_type": record["api_type"],
+                    "base_url": "", "model": record["model"], "api_key": None,
+                    "api_key_rotated_at": None,
+                })
+        self._mutate(apply)
+        return self.get(LOCAL_TRANSLATION_ENGINE_ID) or TranslationEngine(**record)
 
     def get(self, engine_id: str) -> Optional[TranslationEngine]:
-        with self._connect() as conn:
-            row = conn.execute("SELECT * FROM translation_engines WHERE id = ?", (engine_id,)).fetchone()
-        return _row_to_engine(row) if row else None
+        return _to_engine(self._engines().get(engine_id))
 
     def create(
-        self,
-        *,
-        name: str,
-        api_type: str,
-        base_url: str,
-        model: str,
-        api_key: Optional[str] = None,
-        enabled: bool = True,
+        self, *, name: str, api_type: str, base_url: str, model: str,
+        api_key: Optional[str] = None, enabled: bool = True,
     ) -> TranslationEngine:
         now = _now_ms()
         normalized_key = api_key.strip() if api_key and api_key.strip() else None
         rec = TranslationEngine(
-            id="engine_" + uuid.uuid4().hex[:10],
-            name=name.strip(), api_type=api_type, base_url=base_url.strip().rstrip("/"),
-            model=model.strip(), api_key=normalized_key, enabled=int(enabled),
+            id="engine_" + uuid.uuid4().hex[:10], name=name.strip(), api_type=api_type,
+            base_url=base_url.strip().rstrip("/"), model=model.strip(),
+            api_key=normalized_key, enabled=int(enabled),
             availability="UNKNOWN" if normalized_key else "UNCONFIGURED",
             created_at=now, updated_at=now,
             api_key_rotated_at=now if normalized_key else None,
         )
-        with self._connect() as conn:
-            conn.execute(
-                """INSERT INTO translation_engines
-                (id, name, api_type, base_url, model, api_key, enabled, availability,
-                 last_checked_at, last_error, api_key_rotated_at, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (rec.id, rec.name, rec.api_type, rec.base_url, rec.model, rec.api_key,
-                rec.enabled, rec.availability, None, None, rec.api_key_rotated_at,
-                rec.created_at, rec.updated_at),
-            )
+        validate_engines({rec.id: asdict(rec)})
+        def apply(document: dict) -> None:
+            document.setdefault("engines", {}).setdefault("byId", {})[rec.id] = asdict(rec)
+        self._mutate(apply)
         return rec
 
     def update(self, engine_id: str, **fields) -> Optional[TranslationEngine]:
-        rec = self.get(engine_id)
-        if rec is None:
-            return None
-        allowed = {k: v for k, v in fields.items() if k in {
+        allowed = {key: value for key, value in fields.items() if key in {
             "name", "api_type", "base_url", "model", "api_key", "enabled",
             "availability", "last_checked_at", "last_error",
         }}
+        snapshot = self._read()
+        existing = snapshot.values.get("engines", {}).get("byId", {}).get(engine_id)
+        rec = _to_engine(existing)
+        if rec is None:
+            return None
         if "base_url" in allowed:
             allowed["base_url"] = str(allowed["base_url"]).strip().rstrip("/")
         if "api_key" in allowed:
             raw_key = allowed["api_key"].strip() if allowed["api_key"] else ""
-            if not raw_key:
-                # Blank values mean "not supplied" for update. Keep the old
-                # secret and avoid changing updated_at for a key-only update.
+            if not raw_key or raw_key == rec.api_key:
                 del allowed["api_key"]
             else:
                 allowed["api_key"] = raw_key
-            if raw_key and allowed["api_key"] != rec.api_key:
                 allowed["api_key_rotated_at"] = _now_ms()
                 allowed.setdefault("availability", "UNKNOWN")
-            elif raw_key:
-                # Re-sending the same key is a no-op unless other fields change.
-                del allowed["api_key"]
         if not allowed:
             return rec
         allowed["updated_at"] = _now_ms()
-        assignments = ", ".join(f"{key} = ?" for key in allowed)
-        with self._connect() as conn:
-            conn.execute(
-                f"UPDATE translation_engines SET {assignments} WHERE id = ?",
-                (*allowed.values(), engine_id),
-            )
+        candidate = asdict(rec)
+        candidate.update(copy.deepcopy(allowed))
+        validate_engines({engine_id: candidate})
+        def apply(document: dict) -> None:
+            current = document.setdefault("engines", {}).setdefault("byId", {}).get(engine_id)
+            if current is None:
+                return
+            current.update(copy.deepcopy(allowed))
+        self._mutate(apply, expected_revision=snapshot.revision)
         return self.get(engine_id)
 
     def delete(self, engine_id: str) -> bool:
-        with self._connect() as conn:
-            # Clear the secret before deleting the row so it is not retained in
-            # SQLite freelists/WAL longer than necessary.
-            conn.execute(
-                "UPDATE translation_engines SET api_key = NULL, api_key_rotated_at = NULL WHERE id = ?",
-                (engine_id,),
-            )
-            cur = conn.execute("DELETE FROM translation_engines WHERE id = ?", (engine_id,))
-        return cur.rowcount > 0
-
-
-def _row_to_engine(row: sqlite3.Row) -> TranslationEngine:
-    return TranslationEngine(**dict(row))
+        existed = self.get(engine_id) is not None
+        if not existed:
+            return False
+        def apply(document: dict) -> None:
+            by_id = document.setdefault("engines", {}).setdefault("byId", {})
+            item = by_id.get(engine_id)
+            if item is not None:
+                item["api_key"] = None
+                item["api_key_rotated_at"] = None
+                del by_id[engine_id]
+        self._mutate(apply)
+        return True

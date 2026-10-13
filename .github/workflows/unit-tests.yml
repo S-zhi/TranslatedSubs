@@ -1,11 +1,13 @@
-name: Python tests
+name: Language unit tests
 
 on:
   push:
+    branches:
+      - main
   pull_request:
 
 jobs:
-  test:
+  python-unit-test:
     runs-on: ubuntu-latest
 
     steps:
@@ -24,10 +26,10 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install . pytest
 
-      - name: Run tests
+      - name: Run Python unit tests
         run: python -m pytest -q
 
-  frontend:
+  frontend-unit-test:
     runs-on: ubuntu-latest
 
     steps:
@@ -39,11 +41,11 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Run tests
+      - name: Run frontend unit tests
         run: npm test
         working-directory: web
 
-  go:
+  go-unit-test:
     runs-on: ubuntu-latest
 
     steps:
@@ -56,6 +58,6 @@ jobs:
           go-version-file: drive-service/go.mod
           cache-dependency-path: drive-service/go.sum
 
-      - name: Run tests
+      - name: Run Go unit tests
         run: go test ./...
         working-directory: drive-service

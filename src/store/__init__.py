@@ -16,10 +16,15 @@ from .task_store import (
 )
 from .translation_engine_store import (
     AVAILABILITY,
+    DEFAULT_TRANSLATION_ENGINE_ID,
     ENGINE_TYPES,
+    LOCAL_TRANSLATION_ENGINE_ID,
+    LOCAL_TRANSLATION_ENGINE_NAME,
+    LOCAL_TRANSLATION_MODEL,
     TranslationEngine,
     TranslationEngineStore,
 )
+from .model_settings_store import KINDS as MODEL_KINDS, ModelSettingsStore
 
 __all__ = [
     "ProbeRecord",
@@ -36,7 +41,13 @@ __all__ = [
     "RESOURCE_STATUSES",
     "STATUSES",
     "AVAILABILITY",
+    "DEFAULT_TRANSLATION_ENGINE_ID",
     "ENGINE_TYPES",
+    "LOCAL_TRANSLATION_ENGINE_ID",
+    "LOCAL_TRANSLATION_ENGINE_NAME",
+    "LOCAL_TRANSLATION_MODEL",
     "TranslationEngine",
     "TranslationEngineStore",
+    "MODEL_KINDS",
+    "ModelSettingsStore",
 ]

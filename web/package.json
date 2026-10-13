@@ -1,9 +1,9 @@
 {
-  "name": "subtrans-web",
+  "name": "translatedsubs-web",
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "Vanilla JS front-end for LynxSense. Node test runner is used for the notifications scheduling unit tests; the browser loads these as native ES modules.",
+  "description": "Vanilla JS front-end for TranslatedSubs. The browser loads native ES modules, and Node runs the unit tests.",
   "scripts": {
     "test": "node --test \"__tests__/**/*.test.mjs\""
   }

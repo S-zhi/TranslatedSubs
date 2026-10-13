@@ -1,7 +1,7 @@
 [project]
-name = "subtrans-backend"
+name = "translatedsubs-backend"
 version = "1.0.2"
-description = "LynxSense - 视频信息理解与处理工作台"
+description = "TranslatedSubs - 视频与音频字幕处理工作台"
 requires-python = ">=3.10,<3.13"
 dependencies = [
     "fastapi>=0.138.2",
@@ -9,10 +9,31 @@ dependencies = [
     "httpx>=0.28.1",
     "mcp[cli]>=2.0.0,<3",
     "python-multipart>=0.0.9",
-    "replicate>=1.0.7",
+    "redis>=5",
     "uvicorn[standard]>=0.49.0",
     "yt-dlp>=2024.0.0",
-    # 后续阶段再加：fastapi, uvicorn, rq, redis ...
+]
+
+[project.optional-dependencies]
+hf-models = [
+    "numpy>=1.26",
+    "safetensors>=0.4.5",
+    "torch>=2.6",
+    "transformers>=4.48,<5",
+]
+local-translation = [
+    "ctranslate2>=4.5",
+    "huggingface-hub>=0.26",
+    "sacremoses>=0.1",
+    "sentencepiece>=0.2",
+    "torch>=2.6",
+    "transformers>=4.48,<5",
+]
+tts = [
+    "kokoro>=0.9.4",
+    "misaki[zh,en]>=0.8.1",
+    "numpy>=1.26",
+    "torch>=2.6",
 ]
 
 [tool.setuptools.packages.find]

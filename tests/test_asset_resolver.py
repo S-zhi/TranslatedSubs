@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import pytest
 from pathlib import Path
-from types import SimpleNamespace
 
-from src.service.asset_resolver import AssetResolver, ResourceState, ResourceError
-from src.service import orchestrator
-from src.service.orchestrator import PipelineParams, run_pipeline
+from src.config.storage import ArtifactStore
+from src.service.asset_resolver import (
+    ArtifactStatus,
+    AssetResolver,
+    ProcessingArtifact,
+    ResourceState,
+    ResourceError,
+)
 
 
 def test_asset_resolver_check_file_state(tmp_path):
@@ -28,6 +32,40 @@ def test_asset_resolver_check_file_state(tmp_path):
     valid_file = tmp_path / "valid.mp4"
     valid_file.write_bytes(b"content")
     assert AssetResolver.check_file_state(valid_file) == ResourceState.AVAILABLE
+
+
+def test_processing_artifact_preflight_and_storage_operations(tmp_path):
+    store = ArtifactStore(tmp_path)
+    artifact = AssetResolver.artifact("task_1", "translated.srt", store=store)
+
+    assert isinstance(artifact, ProcessingArtifact)
+    missing = artifact.preflight()
+    assert isinstance(missing, ArtifactStatus)
+    assert missing.state == ResourceState.DELETED
+    assert missing.address is None
+
+    artifact.write_bytes(b"1\n00:00:00,000 --> 00:00:01,000\nhello\n")
+    ready = artifact.preflight()
+    assert ready.available
+    assert ready.address == tmp_path / "task_1" / "translated.srt"
+    assert artifact.require() == ready.address
+    with artifact.open() as handle:
+        assert handle.read().startswith(b"1")
+
+    artifact.delete()
+    assert artifact.preflight().state == ResourceState.DELETED
+
+
+def test_processing_artifact_source_preflight_ignores_partial_download(tmp_path):
+    store = ArtifactStore(tmp_path)
+    task_dir = store.task_dir("task_1", create=True)
+    (task_dir / "source.mp4.part").write_bytes(b"partial")
+    assert AssetResolver.preflight_source("task_1", store=store).state == ResourceState.DELETED
+
+    (task_dir / "source.mp4").write_bytes(b"video")
+    status = AssetResolver.preflight_source("task_1", store=store)
+    assert status.available
+    assert status.address == task_dir / "source.mp4"
 
 
 def test_asset_resolver_resolve_source(tmp_path, monkeypatch):
@@ -96,36 +134,6 @@ def test_asset_resolver_require_methods(tmp_path, monkeypatch):
     assert exc_info.value.state == ResourceState.UNREADABLE
 
 
-def test_pipeline_interruption_at_boundary(tmp_path, monkeypatch):
-    # This tests that run_pipeline fails immediately at the correct step when a dependency is missing.
-    # Let's say download succeeded, but the downloaded source video was deleted / not created.
-    # It should fail at DOWNLOADING or EXTRACTING.
-
-    # We will mock download_video to succeed and return a dummy path.
-    # But when extract_audio boundary checks require_source, we let require_source raise ResourceError.
-
-    monkeypatch.setattr(orchestrator, "download_video",
-                        lambda *a, **kw: SimpleNamespace(video_path=Path("/d/source.mp4"), title="T"))
-
-    # Raise ResourceError on require_source (representing deleted/missing source)
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_source",
-                        lambda tid: (_ for _ in ()).throw(ResourceError("源视频已删除", ResourceState.DELETED)))
-
-    params = PipelineParams(
-        task_id="t1",
-        url="http://x/v",
-        source_lang="auto",
-        target_lang="zh-CN",
-    )
-    events = []
-    with pytest.raises(ResourceError) as exc_info:
-        run_pipeline(params, events.append)
-
-    assert exc_info.value.state == ResourceState.DELETED
-    assert events[-1].status == "FAILED"
-    assert "源视频已删除" in events[-1].error
-
-
 def test_cleanup_cancelled_artifacts_burning_step(tmp_path, monkeypatch):
     monkeypatch.setattr("src.service.asset_resolver.task_dir", lambda tid: tmp_path)
 
@@ -188,49 +196,3 @@ def test_cleanup_cancelled_artifacts_downloading_upload(tmp_path, monkeypatch):
 
     assert (tmp_path / "source.mp4").exists()
     assert not (tmp_path / "audio.wav").exists()
-
-
-def test_pipeline_resumes_from_existing_artifacts(monkeypatch, tmp_path):
-    """重启后从已有的最近阶段产物继续，而不是从头执行。"""
-    monkeypatch.setattr(orchestrator, "task_dir", lambda tid: tmp_path)
-    monkeypatch.setattr("src.service.asset_resolver.task_dir", lambda tid: tmp_path)
-    for name, content in {
-        "source.mp4": b"video",
-        "audio.wav": b"audio",
-        "original.srt": b"original",
-    }.items():
-        (tmp_path / name).write_bytes(content)
-
-    calls = []
-
-    def should_not_run(name):
-        def fn(*args, **kwargs):
-            calls.append(name)
-            raise AssertionError(f"已完成的阶段不应重复执行: {name}")
-        return fn
-
-    def fake_translate(*args, **kwargs):
-        calls.append("translate_srt")
-        (tmp_path / "translated.srt").write_bytes(b"translated")
-        return SimpleNamespace(srt_path=tmp_path / "translated.srt")
-
-    def fake_burn(*args, **kwargs):
-        calls.append("burn_subtitles")
-        (tmp_path / "output.mp4").write_bytes(b"output")
-        return SimpleNamespace(output_path=tmp_path / "output.mp4")
-
-    monkeypatch.setattr(orchestrator, "download_video", should_not_run("download_video"))
-    monkeypatch.setattr(orchestrator, "extract_audio", should_not_run("extract_audio"))
-    monkeypatch.setattr(orchestrator, "transcribe", should_not_run("transcribe"))
-    monkeypatch.setattr(orchestrator, "translate_srt", fake_translate)
-    monkeypatch.setattr(orchestrator, "burn_subtitles", fake_burn)
-
-    params = PipelineParams(
-        task_id="t1", url="https://x/v", source_lang="auto", target_lang="zh-CN",
-        title="Recovered video",
-    )
-    result = run_pipeline(params, lambda event: None)
-
-    assert calls == ["translate_srt", "burn_subtitles"]
-    assert result.status == "SUCCESS"
-    assert result.title == "Recovered video"

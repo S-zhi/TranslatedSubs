@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
-from src.config import settings, ensure_task_dir, OUTPUT_VIDEO
+from src.config import settings, ensure_task_dir, output_video_filename
 from src.core.ffmpeg_utils import has_subtitles_filter, probe_duration, run_ffmpeg
 from src.service.asset_resolver import AssetResolver, ResourceState
 
@@ -112,7 +112,9 @@ def burn_subtitles(
         raise BurnError(f"输入字幕损坏或不可读: {srt_path}")
 
     out_dir = ensure_task_dir(task_id)
-    out_path = out_dir / OUTPUT_VIDEO
+    if mode not in ("hard", "soft"):
+        raise BurnError(f"未知烧录模式: {mode}")
+    out_path = out_dir / output_video_filename(mode)
 
     tmp_burn_path = out_dir / "tmp_burn.srt"
     cwd: Optional[str] = None
@@ -128,8 +130,6 @@ def burn_subtitles(
         cwd = str(out_dir.resolve())  # 让滤镜引用 safe basename tmp_burn.srt
     elif mode == "soft":
         cmd = _soft_cmd(video_path, srt_path, out_path)
-    else:
-        raise BurnError(f"未知烧录模式: {mode}")
 
     total = probe_duration(video_path, settings.ffprobe_bin)
 
@@ -148,7 +148,7 @@ def burn_subtitles(
         run_ffmpeg(
             cmd, _tick,
             error_cls=BurnError,
-            not_found_msg=f"找不到 ffmpeg（{settings.ffmpeg_bin}）。请安装 ffmpeg 或设置 SUBTRANS_FFMPEG。",
+            not_found_msg=f"找不到 ffmpeg（{settings.ffmpeg_bin}）。请在业务设置/API 配置 FFmpeg 可执行文件，或安装 ffmpeg。",
             cwd=cwd,
             task_id=task_id,
         )

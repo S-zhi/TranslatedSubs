@@ -15,6 +15,9 @@ window.APP_CONFIG = {
   // false = 走真实 REST + SSE 接口
   USE_MOCK: false,
 
+  // 界面语言：auto 跟随浏览器；用户在页面中的选择会保存在 localStorage 并优先生效。
+  UI_LOCALE: "auto",
+
   // 请求超时（毫秒）
   API_TIMEOUT_MS: 15000,
 
@@ -23,14 +26,21 @@ window.APP_CONFIG = {
   DRIVE_API_TIMEOUT_MS: 600000,
 
   // 高级设置中的引擎配置由后端动态加载；此项仅作为无后端时的兼容兜底
-  TRANSLATION_ENGINES: [{ value: "deepseek", label: "DeepSeek（兼容旧配置）", enabled: true }],
+  TRANSLATION_ENGINES: [{
+    value: "local-opus-en-zh",
+    label: "本地 CPU 英译中（请先下载模型）",
+    enabled: true,
+    apiType: "local_ct2",
+    modelStatus: "NOT_INSTALLED",
+    availability: "UNAVAILABLE",
+  }],
 
   // 默认支持的目标语言列表
   TARGET_LANGUAGES: [
     "zh-CN", "zh-TW", "en", "ja", "ko", "es", "fr", "de", "ru", "it",
     "pt", "vi", "th", "ar", "id", "hi", "nl", "pl", "tr", "sv",
     "uk", "cs", "da", "fi", "el", "he", "hu", "no", "ro", "sk",
-    "af", "ca", "bg", "hr", "ms", "fa", "ur", "bn", "ta", "sw",
+    "af", "ca", "bg", "hr", "ms", "fa", "ta", "sw",
   ],
 };
 

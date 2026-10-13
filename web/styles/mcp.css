@@ -1,0 +1,52 @@
+/* ============================================================
+   TranslatedSubs - MCP guide
+   MCP 页面说明区：静态信息，不阻塞任务队列操作
+   ============================================================ */
+
+.mcp-guide { display: grid; gap: 12px; margin-bottom: 24px; }
+.mcp-guide__intro {
+  position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px 20px; overflow: hidden; padding: 20px 22px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: var(--r-panel); background: linear-gradient(115deg, color-mix(in srgb, var(--accent-soft) 76%, var(--surface)) 0%, var(--surface) 62%);
+  box-shadow: var(--shadow-1);
+}
+.mcp-guide__intro::after { content: ""; position: absolute; right: -60px; top: -86px; width: 220px; height: 220px; border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent); border-radius: 50%; box-shadow: 0 0 0 20px color-mix(in srgb, var(--accent) 5%, transparent), 0 0 0 42px color-mix(in srgb, var(--accent) 4%, transparent); pointer-events: none; }
+.mcp-guide__eyebrow { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; color: var(--accent-text); font: 10px/1 var(--font-mono); letter-spacing: .1em; text-transform: uppercase; }
+.mcp-guide__intro h1 { margin: 0 0 5px; font-size: 20px; line-height: 1.25; letter-spacing: -.025em; }
+.mcp-guide__intro p { max-width: 610px; margin: 0; color: var(--text-2); font-size: 12.5px; line-height: 1.6; }
+.mcp-guide__status { align-self: end; display: inline-flex; align-items: center; gap: 7px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 999px; background: color-mix(in srgb, var(--surface) 76%, transparent); color: var(--text-2); font-size: 11px; white-space: nowrap; }
+.mcp-guide__status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+.mcp-guide__columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); gap: 12px; }
+.mcp-guide__card { min-width: 0; padding: 17px 18px; border: 1px solid var(--border); border-radius: var(--r-panel); background: var(--surface); box-shadow: var(--shadow-1); }
+.mcp-guide__card-head { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 15px; }
+.mcp-guide__card-head h2 { margin: 1px 0 3px; font-size: 14px; }
+.mcp-guide__card-head p { margin: 0; color: var(--text-3); font-size: 11px; }
+.mcp-guide__icon { display: grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: 10px; background: var(--surface-2); color: var(--text-2); font-size: 17px; }
+.mcp-guide__icon--accent { color: var(--accent); background: var(--accent-soft); }
+.mcp-guide__step-count { margin: 2px 0 0 auto; color: var(--text-3); font: 10px var(--font-mono); }
+.mcp-guide__steps { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.mcp-guide__steps li { display: grid; grid-template-columns: 25px 1fr; gap: 9px; padding: 9px 0; border-top: 1px solid var(--border); }
+.mcp-guide__steps li:first-child { padding-top: 0; border-top: 0; }
+.mcp-guide__steps li > span { color: var(--accent-text); font: 10px/1.7 var(--font-mono); }
+.mcp-guide__steps strong { display: block; margin-bottom: 3px; font-size: 12px; font-weight: 620; }
+.mcp-guide__steps p { margin: 0; color: var(--text-2); font-size: 11.5px; line-height: 1.5; }
+.mcp-guide__code-wrap { overflow: hidden; border: 1px solid var(--border); border-radius: var(--r-control); background: var(--surface-2); }
+.mcp-guide__code-label { display: flex; align-items: center; gap: 7px; padding: 8px 11px; border-bottom: 1px solid var(--border); color: var(--text-3); font: 10px var(--font-mono); }
+.mcp-guide__code-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.mcp-guide__code-wrap pre { max-width: 100%; margin: 0; padding: 11px; overflow-x: auto; color: var(--text-2); font: 10.5px/1.55 var(--font-mono); tab-size: 2; }
+.mcp-guide__code-wrap code { font: inherit; }
+.mcp-guide__tip { display: flex; align-items: flex-start; gap: 7px; margin: 11px 1px 0; color: var(--text-2); font-size: 11px; line-height: 1.55; }
+.mcp-guide__tip > i { flex: none; margin-top: 2px; color: var(--accent); }
+.mcp-guide__tip code { padding: 1px 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-2); color: var(--text); font: 10px var(--font-mono); }
+
+@media (max-width: 760px) {
+  .mcp-guide__intro { grid-template-columns: 1fr; }
+  .mcp-guide__status { justify-self: start; align-self: auto; }
+  .mcp-guide__columns { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 560px) {
+  .mcp-guide__intro, .mcp-guide__card { padding: 15px; }
+  .mcp-guide__intro h1 { font-size: 18px; }
+}

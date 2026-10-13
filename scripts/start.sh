@@ -6,11 +6,33 @@
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DRIVE_CONFIG="${DRIVE_CONFIG:-${ROOT_DIR}/drive-service/config.local.json}"
-API_PORT="${API_PORT:-8000}"
+DRIVE_CONFIG="${ROOT_DIR}/drive-service/config.local.json"
+DEBUG_MODE=0
 
-if [[ "${DRIVE_CONFIG}" != /* ]]; then
-  DRIVE_CONFIG="${ROOT_DIR}/${DRIVE_CONFIG}"
+case "${1:-}" in
+  --debug)
+    DEBUG_MODE=1
+    shift
+    ;;
+  --help|-h)
+    cat <<'EOF'
+用法：./scripts/start.sh [--debug]
+
+选项：
+  --debug  跳过 API 启动时的网站连通性检查，但不改变实际业务请求的错误处理。
+  --help   显示此帮助信息。
+
+监听地址与端口从仓库根目录的 config.local.json 中读取；
+Google Drive 配置固定从 drive-service/config.local.json 读取。
+EOF
+    exit 0
+    ;;
+esac
+
+if [[ "$#" -gt 0 ]]; then
+  echo "未知参数：$1" >&2
+  echo "用法：./scripts/start.sh [--debug]" >&2
+  exit 2
 fi
 
 if [[ ! -f "${DRIVE_CONFIG}" ]]; then
@@ -85,7 +107,11 @@ echo "编译 Google Drive sidecar..."
   go build -o ./bin/drive-server ./cmd/server
 )
 
-echo "LynxSense API         → http://127.0.0.1:${API_PORT}"
+if [[ "${DEBUG_MODE}" -eq 1 ]]; then
+  echo "TranslatedSubs API    → 使用 config.local.json 中的 HTTP 监听设置 (debug：跳过网站连通性检查)"
+else
+  echo "TranslatedSubs API    → 使用 config.local.json 中的 HTTP 监听设置"
+fi
 echo "Google Drive sidecar  → ${DRIVE_CONFIG}"
 echo "按 Ctrl-C 同时停止两个服务。"
 
@@ -97,7 +123,10 @@ drive_pid=$!
 
 (
   cd "${ROOT_DIR}"
-  exec uv run uvicorn src.handler.app:app --reload --port "${API_PORT}"
+  if [[ "${DEBUG_MODE}" -eq 1 ]]; then
+    exec uv run python -m src.cli --debug --reload
+  fi
+  exec uv run python -m src.cli --reload
 ) &
 api_pid=$!
 

@@ -1,6 +1,7 @@
 /* 入口：装配各模块并加载数据 */
 
 import { initTheme } from "./theme.js";
+import { initI18n } from "./i18n.js";
 import { initShell } from "./ui-shell.js";
 import { initConsole } from "./ui-console.js";
 import { initQueue } from "./ui-queue.js";
@@ -10,18 +11,34 @@ import { initProbe } from "./ui-probe.js";
 import { initStorage } from "./ui-storage.js";
 import { initDrive } from "./ui-drive.js";
 import { initTranslationSettings } from "./ui-translation-settings.js";
+import { initAudioSettings } from "./ui-audio-settings.js";
+import { initLocalModels } from "./ui-local-models.js";
+import { initAdvancedSettings } from "./ui-advanced-settings.js";
+import { initModelSettings } from "./ui-model-settings.js";
+import { initRouter } from "./router.js";
 import { loadTasks, stopAll, setView, setFilter } from "./store.js";
+import { initDeveloperEntry } from "./developer-entry.js";
+import { initSupportedSitesView } from "./supported-sites.js";
 
+initI18n();
 initTheme();
+initAdvancedSettings();
+initModelSettings();
+initRouter();
+initDeveloperEntry();
 initShell();
 initConsole();
-initQueue();
+initQueue({ listSelector: "#taskList", origin: "web" });
+initQueue({ listSelector: "#mcpTaskList", origin: "mcp" });
 initPreview();
 initEditor();
 initProbe();
 initStorage();
 initDrive();
 initTranslationSettings();
+initAudioSettings();
+initLocalModels();
+initSupportedSitesView();
 
 loadTasks();
 

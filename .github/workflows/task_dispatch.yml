@@ -1,0 +1,44 @@
+# 任务分发
+# 评审完成后，把任务交接给具体 Agent Cli 进入后续开发。
+# 若本工作流被关掉，评审过的任务会停在「任务评级」阶段，不会进入后面的开发。
+name: 评审任务分发(GH1-2.5)
+
+on:
+  issues:
+    types:
+      - labeled
+
+jobs:
+  # 路径 A：Issue 被打上 Citizen L2 时走这条 Job
+  # 后续若 L2 要加的标签、评论或指派对象与 L3 不同，只改这个 Job 即可
+  citizen-l2:
+    name: Citizen L2 分发
+    if: github.event.label.name == 'Citizen L2'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: 为 Issue 添加 openhands 标签
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number }}
+        # 标签必须已在仓库中存在；可按需改成多个，例如 "openhands,agent-l2"
+        run: gh issue edit "$NUMBER" --add-label "openhands"
+
+  # 路径 B：Issue 被打上 Citizen L3 时走这条 Job
+  # 目前与 L2 一样添加 openhands，后续可改成不同标签或额外步骤
+  citizen-l3:
+    name: Citizen L3 分发
+    if: github.event.label.name == 'Citizen L3'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: 为 Issue 添加 openhands 标签
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number }}
+        # 标签必须已在仓库中存在；可按需改成多个，例如 "openhands,agent-l3"
+        run: gh issue edit "$NUMBER" --add-label "openhands"

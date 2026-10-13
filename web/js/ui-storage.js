@@ -2,14 +2,14 @@
  * 复用 store.loadTasks() 在清理后刷新任务列表，保持任务 Tab 一致。
  */
 
-import { $, $$, el } from "./utils.js";
+import { $, $$, el, escapeHtml } from "./utils.js";
 import { Api } from "./api.js";
 import { state, loadTasks } from "./store.js";
 import { toast } from "./toast.js";
 
 const RUNNING = new Set([
   "PENDING", "DOWNLOADING", "EXTRACTING",
-  "TRANSCRIBING", "TRANSLATING", "BURNING",
+  "TRANSCRIBING", "TRANSLATING", "BURNING", "SYNTHESIZING", "DUBBING",
 ]);
 const STORAGE_REFRESH_INTERVAL_MS = 8000;
 const DEFAULT_RETENTION_DAYS = 30;
@@ -30,6 +30,8 @@ const STATUS_LABEL = {
   TRANSCRIBING: "识别中",
   TRANSLATING: "翻译中",
   BURNING: "烧录中",
+  SYNTHESIZING: "生成配音中",
+  DUBBING: "封装配音中",
   SUCCESS: "已完成",
   FAILED: "失败",
 };
@@ -58,16 +60,8 @@ export function initStorage() {
     cleanable: $("#statCleanable"),
     cleanableSub: $("#statCleanableSub"),
     retention: $("#statRetention"),
-    kind: $("#storageKind"),
-    retentionSelect: $("#storageRetention"),
     selInfo: $("#storageSelInfo"),
     selectAll: $("#storageSelectAll"),
-    selectNone: $("#storageSelectNone"),
-    preview: $("#storagePreview"),
-    previewBtn: $("#storagePreview"),
-    previewBox: $("#storagePreviewBox"),
-    previewBody: $("#storagePreviewBody"),
-    previewClose: $("#storagePreviewClose"),
     apply: $("#storageApply"),
     table: $("#storageTable"),
     tbody: $("#storageTbody"),
@@ -75,7 +69,6 @@ export function initStorage() {
     checkAll: $("#storageCheckAll"),
     refresh: $("#storageRefresh"),
     driveUpload: $("#storageDriveUpload"),
-    driveDownload: $("#storageDriveDownload"),
     driveSync: $("#storageDriveSync"),
     driveSyncTitle: $("#storageDriveSyncTitle"),
     driveSyncMeta: $("#storageDriveSyncMeta"),
@@ -84,23 +77,10 @@ export function initStorage() {
   };
 
   els.refresh.addEventListener("click", () => refresh(true));
-  els.kind.addEventListener("change", () => {
-    local.kindFilter = els.kind.value;
-    renderTable();
-  });
-  els.retentionSelect.addEventListener("change", () => {
-    const v = parseInt(els.retentionSelect.value, 10) || 0;
-    local.retentionDays = v;
-    saveRetention();
-  });
   els.selectAll.addEventListener("click", () => selectAll(true));
-  els.selectNone.addEventListener("click", () => selectAll(false));
-  els.previewBtn.addEventListener("click", () => runPreview());
   els.apply.addEventListener("click", () => runApply());
-  els.previewClose.addEventListener("click", () => closePreview());
   els.checkAll.addEventListener("change", (e) => selectAll(e.target.checked));
   els.driveUpload?.addEventListener("click", () => runDriveSync("UPLOAD"));
-  els.driveDownload?.addEventListener("click", () => runDriveSync("DOWNLOAD"));
   els.driveSyncCancel?.addEventListener("click", () => cancelDriveSync());
 
   // 当切到本 Tab 时再加载一次，其它时候用定时轻量刷新
@@ -155,9 +135,6 @@ async function refresh(showToast = false) {
         ? 0
         : (retention.days || DEFAULT_RETENTION_DAYS);
       // 仅在未初始化时同步 select
-      if (els.retentionSelect.value !== String(local.retentionDays)) {
-        els.retentionSelect.value = String(local.retentionDays);
-      }
     }
     if (stats) {
       renderCards();
@@ -188,20 +165,16 @@ async function saveRetention() {
 /* ---------- 渲染 ---------- */
 function renderCards() {
   if (!local.stats) return;
-  const { totalBytes, totalTasks, runnableTaskCount, byKind } = local.stats;
+  const { totalBytes, byKind, byTask = [] } = local.stats;
+  const completedTaskCount = byTask.filter((task) => task.status === "SUCCESS").length;
+  const runningTaskCount = byTask.filter((task) => RUNNING.has(task.status)).length;
   els.total.textContent = formatBytes(totalBytes);
-  els.totalSub.textContent = totalTasks
-    ? `${(byKind.source || 0) > 0 ? "源视频 " + formatBytes(byKind.source) + " · " : ""}共 ${totalTasks} 个任务`
+  els.totalSub.textContent = completedTaskCount
+    ? `${(byKind.source || 0) > 0 ? "源视频 " + formatBytes(byKind.source) + " · " : ""}共 ${completedTaskCount} 个已完成任务`
     : "尚未生成任何产物";
-  els.tasks.textContent = String(totalTasks);
-  els.cleanable.textContent = String(runnableTaskCount);
-  const running = totalTasks - runnableTaskCount;
-  els.cleanableSub.textContent = running > 0
-    ? `${running} 个运行中会被跳过`
-    : "可全部清理";
-  els.retention.textContent = local.retentionDays > 0
-    ? `${local.retentionDays} 天`
-    : "不限";
+  els.tasks.textContent = String(completedTaskCount);
+  els.cleanable.textContent = String(runningTaskCount);
+  els.cleanableSub.textContent = runningTaskCount > 0 ? "正在运行" : "暂无运行中任务";
 }
 
 function renderTable() {
@@ -294,13 +267,74 @@ function renderTable() {
     const ageTd = el("td", "storage-table__age");
     ageTd.textContent = "—";
 
-    tr.append(checkTd, titleTd, statusTd, artTd, sizeTd, ageTd);
+    const actionTd = el("td", "storage-table__action");
+    const preview = el("button", "btn btn--ghost btn--sm");
+    preview.type = "button";
+    preview.innerHTML = `<i class="ph ph-folder-open"></i><span>打开文件夹</span>`;
+    preview.title = "打开任务文件夹";
+    preview.addEventListener("click", () => openTaskResource(t.taskId, t.title || t.taskId));
+    actionTd.append(preview);
+    tr.append(checkTd, titleTd, statusTd, artTd, sizeTd, ageTd, actionTd);
     tbody.append(tr);
   }
 
   // 用本地 store 的 tasks 兜底填入创建时间
   fillAges();
   updateActions();
+}
+
+async function openTaskResource(taskId, title) {
+  try {
+    const capability = await Api.folderCapability(taskId);
+    if (capability.mode === "system") {
+      await Api.openFolder(taskId);
+      toast("已打开服务器文件夹", "ph-folder-open");
+      return;
+    }
+    showTaskBrowser(taskId, title);
+  } catch (error) {
+    toast(error.message || "打开文件夹失败", "ph-warning-circle");
+  }
+}
+
+function showTaskBrowser(taskId, title) {
+  const overlay = el("div", "resource-browser");
+  overlay.innerHTML = `<div class="resource-browser__panel" role="dialog" aria-modal="true">
+    <div class="resource-browser__head"><strong>${escapeHtml(title)}</strong><button class="iconbtn" aria-label="关闭"><i class="ph ph-x"></i></button></div>
+    <div class="resource-browser__crumb">任务产物 / <span></span></div>
+    <div class="resource-browser__body"><span>正在读取…</span></div>
+  </div>`;
+  const body = overlay.querySelector(".resource-browser__body");
+  const crumb = overlay.querySelector(".resource-browser__crumb span");
+  let currentPath = "";
+  const close = () => overlay.remove();
+  overlay.querySelector(".iconbtn").addEventListener("click", close);
+  overlay.addEventListener("click", (event) => { if (event.target === overlay) close(); });
+  document.body.append(overlay);
+  const load = async (path) => {
+    currentPath = path;
+    try {
+      const data = await Api.listTaskFiles(taskId, path);
+      crumb.textContent = path || "根目录";
+      body.replaceChildren();
+      if (path) {
+        const up = el("button", "resource-browser__entry resource-browser__up");
+        up.textContent = "↑ 返回上级";
+        up.addEventListener("click", () => load(path.split("/").slice(0, -1).join("/")));
+        body.append(up);
+      }
+      for (const entry of data.entries) {
+        const button = el("button", "resource-browser__entry");
+        button.innerHTML = `<i class="ph ${entry.directory ? "ph-folder" : "ph-file"}"></i><span>${escapeHtml(entry.name)}</span><small>${entry.directory ? "目录" : formatBytes(entry.size)}</small>`;
+        button.addEventListener("click", () => entry.directory
+          ? load(entry.path)
+          : window.open(Api.taskFileUrl(taskId, entry.path), "_blank"));
+        body.append(button);
+      }
+      if (!data.entries.length) body.textContent = "目录为空";
+    } catch (error) { body.textContent = error.message || "读取失败"; }
+  };
+  void load(currentPath);
 }
 
 function fillAges() {
@@ -360,10 +394,8 @@ function updateActions() {
   els.selInfo.textContent = n > 0 ? `已选 ${n} 项` : "未选择";
   const hasSelection = n > 0;
   const syncing = Boolean(local.driveSync?.active);
-  els.previewBtn.disabled = !hasSelection || syncing;
   els.apply.disabled = !hasSelection || syncing;
   if (els.driveUpload) els.driveUpload.disabled = !hasSelection || syncing;
-  if (els.driveDownload) els.driveDownload.disabled = !hasSelection || syncing;
 
   // 让表头选择器反映真实状态：全选、部分选择和无可选项分别可见。
   const selectable = local.stats
@@ -493,28 +525,13 @@ function renderDriveSync() {
   }
 }
 
-/* ---------- 预览 / 执行 ---------- */
+/* ---------- 执行 ---------- */
 function buildBody() {
   const body = {};
   if (local.selected.size > 0) body.taskIds = [...local.selected];
   if (local.kindFilter) body.kinds = [local.kindFilter];
   if (local.retentionDays > 0) body.olderThanDays = local.retentionDays;
   return body;
-}
-
-async function runPreview() {
-  if (local.selected.size === 0) return;
-  els.previewBtn.disabled = true;
-  try {
-    const data = await Api.previewCleanup(buildBody());
-    local.preview = data;
-    renderPreview(data);
-    toast(`将处理 ${data.matchedTasks} 个任务（${formatBytes(data.matchedBytes)}）`, "ph-eye");
-  } catch (e) {
-    toast(e.message || "预览失败", "ph-warning-circle");
-  } finally {
-    els.previewBtn.disabled = false;
-  }
 }
 
 async function runApply() {
@@ -529,8 +546,6 @@ async function runApply() {
       : `已清理 ${formatBytes(res.deletedBytes)} 产物`);
     toast(msg, "ph-trash");
     local.selected.clear();
-    local.preview = null;
-    closePreview();
     await refresh();
     // 任务列表也需要同步
     await loadTasks();
@@ -540,57 +555,6 @@ async function runApply() {
     els.apply.disabled = false;
     updateActions();
   }
-}
-
-function renderPreview(data) {
-  els.previewBox.hidden = false;
-  const skipIds = new Set((data.skippedTasks || []).map((t) => t.taskId));
-  const targetIds = new Set((data.targets || []).map((t) => t.taskId));
-
-  // 同步 local.selected：把预览后才进入 RUNNING 的从选中里去掉
-  for (const id of skipIds) local.selected.delete(id);
-  updateActions();
-
-  const body = els.previewBody;
-  body.replaceChildren();
-  const summary = el("div", "storage__preview-summary");
-  summary.innerHTML = `
-    <span>将处理 <b>${data.matchedTasks}</b> 个任务</span>
-    <span>预计释放 <b>${formatBytes(data.matchedBytes)}</b></span>
-    ${skipIds.size > 0 ? `<span>已跳过 <b>${skipIds.size}</b> 个运行中任务</span>` : ""}
-  `;
-  body.append(summary);
-
-  if (targetIds.size > 0) {
-    const list = el("div", "storage__preview-list");
-    for (const t of data.targets.slice(0, 12)) {
-      const chip = el("span", "storage__preview-chip");
-      chip.textContent = `${t.title || t.taskId} · ${formatBytes(t.size)}`;
-      chip.title = `${t.taskId} (${t.status})`;
-      list.append(chip);
-    }
-    if (data.targets.length > 12) {
-      const more = el("span", "storage__preview-chip");
-      more.textContent = `… 另有 ${data.targets.length - 12} 个`;
-      list.append(more);
-    }
-    body.append(list);
-  }
-  if (skipIds.size > 0) {
-    const list = el("div", "storage__preview-list");
-    for (const t of data.skippedTasks) {
-      const chip = el("span", "storage__preview-chip storage__preview-chip--skipped");
-      chip.textContent = `跳过 · ${t.title || t.taskId} (${STATUS_LABEL[t.status] || t.status})`;
-      chip.title = t.taskId;
-      list.append(chip);
-    }
-    body.append(list);
-  }
-}
-
-function closePreview() {
-  els.previewBox.hidden = true;
-  local.preview = null;
 }
 
 /* ---------- 工具 ---------- */

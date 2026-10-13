@@ -12,7 +12,7 @@ globalThis.window = {
 
 const { Api } = await import("../js/api.js");
 
-test("LANG_LABEL contains 40 target languages (excluding auto and zh)", () => {
+test("LANG_LABEL retains labels for existing tasks", () => {
   const targetLangs = Object.keys(LANG_LABEL).filter(
     (k) => k !== "auto" && k !== "zh"
   );
@@ -22,14 +22,25 @@ test("LANG_LABEL contains 40 target languages (excluding auto and zh)", () => {
   assert.ok(targetLangs.includes("fr"));
   assert.ok(targetLangs.includes("de"));
   assert.ok(targetLangs.includes("sw"));
+  assert.ok(targetLangs.includes("bn"));
+  assert.ok(targetLangs.includes("ur"));
 });
 
-test("MockApi.listTargetLanguages returns all 40 target languages", async () => {
+test("MockApi.listTargetLanguages excludes Bengali and Urdu", async () => {
   const langs = await Api.listTargetLanguages();
-  assert.equal(langs.length, 40);
+  assert.equal(langs.length, 38);
   assert.ok(langs.includes("zh-CN"));
   assert.ok(langs.includes("es"));
   assert.ok(langs.includes("fr"));
   assert.ok(langs.includes("de"));
   assert.ok(langs.includes("sw"));
+  assert.ok(!langs.includes("bn"));
+  assert.ok(!langs.includes("ur"));
+});
+
+test("MockApi.listVideoLanguages excludes Bengali and Urdu", async () => {
+  const langs = await Api.listVideoLanguages();
+  assert.ok(langs.includes("hi"));
+  assert.ok(!langs.includes("bn"));
+  assert.ok(!langs.includes("ur"));
 });

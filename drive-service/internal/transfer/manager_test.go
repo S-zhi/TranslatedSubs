@@ -294,3 +294,26 @@ func TestManagerRecoverDoesNotStartPausedOrTerminalTransfers(t *testing.T) {
 		}
 	}
 }
+
+func TestPostPythonUploadRespectsTimeoutAndCancellation(t *testing.T) {
+	t.Parallel()
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.PythonTimeoutSeconds = 1
+	state, err := store.Open(filepath.Join(cfg.DataDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(&cfg, state, &fakeDrive{})
+
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	staging := filepath.Join(cfg.DataDir, "import-file.bin")
+	if err := os.WriteFile(staging, []byte("test payload data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := manager.postPythonUpload(cancelCtx, "transfer-1", staging, "import-file.bin"); err == nil {
+		t.Fatal("expected error when context is cancelled, got nil")
+	}
+}

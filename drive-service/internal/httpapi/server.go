@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -33,6 +34,15 @@ type Server struct {
 	drive     DriveClient
 	transfers *transfer.Manager
 	store     *store.Store
+
+	uploadLocksMu sync.Mutex
+	uploadLocks   map[string]*uploadLock
+}
+
+// uploadLock tracks active users of a per-upload mutex so idle entries can be removed.
+type uploadLock struct {
+	mu   sync.Mutex
+	refs int
 }
 
 // DriveClient is the HTTP surface needed by the API layer. The production
@@ -86,7 +96,38 @@ var errFolderEntryUploadExists = errors.New("folder entry already has an upload"
 
 // New 将 HTTP 外观层与单用户服务依赖连接起来。
 func New(cfg *config.Config, auth *oauth.Manager, client DriveClient, transfers *transfer.Manager, state *store.Store) *Server {
-	return &Server{cfg: cfg, auth: auth, drive: client, transfers: transfers, store: state}
+	return &Server{
+		cfg:         cfg,
+		auth:        auth,
+		drive:       client,
+		transfers:   transfers,
+		store:       state,
+		uploadLocks: make(map[string]*uploadLock),
+	}
+}
+
+// lockUpload serializes file and metadata operations for one upload ID while
+// allowing unrelated uploads to proceed concurrently.
+func (s *Server) lockUpload(id string) func() {
+	s.uploadLocksMu.Lock()
+	lock := s.uploadLocks[id]
+	if lock == nil {
+		lock = &uploadLock{}
+		s.uploadLocks[id] = lock
+	}
+	lock.refs++
+	s.uploadLocksMu.Unlock()
+
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+		s.uploadLocksMu.Lock()
+		lock.refs--
+		if lock.refs == 0 {
+			delete(s.uploadLocks, id)
+		}
+		s.uploadLocksMu.Unlock()
+	}
 }
 
 // ServeHTTP 实现完整的本地 API。长时间运行的上传/下载会交给 transfer.Manager，
@@ -956,6 +997,9 @@ func (s *Server) handleCreateUpload(w http.ResponseWriter, r *http.Request) {
 
 // handleUploadChunk 处理 HEAD 进度查询和 PATCH 分片写入，并在完成后排队 Drive 上传。
 func (s *Server) handleUploadChunk(w http.ResponseWriter, r *http.Request, id string) {
+	unlock := s.lockUpload(id)
+	defer unlock()
+
 	u, ok := s.store.GetUpload(id)
 	if !ok {
 		writeError(w, http.StatusNotFound, errors.New("upload not found"))
@@ -1034,6 +1078,9 @@ func (s *Server) handleUploadChunk(w http.ResponseWriter, r *http.Request, id st
 
 // handleDeleteUpload 删除尚未进入 Drive worker 的本地暂存上传。
 func (s *Server) handleDeleteUpload(w http.ResponseWriter, id string) {
+	unlock := s.lockUpload(id)
+	defer unlock()
+
 	// 已完成的本地暂存上传已经交给 Drive worker，不能通过此接口删除；
 	// 如需终止，应取消对应的传输任务。
 	u, ok := s.store.GetUpload(id)

@@ -1,5 +1,5 @@
 /* ============================================================
-   LynxSense - layout
+   TranslatedSubs - layout
    应用外壳：轻量 Pro 工具栏侧边 + 内容区 + 视图切换
    ============================================================ */
 
@@ -139,6 +139,68 @@
   flex: none;
   gap: 8px;
 }
+.supported-sites__track.is-static {
+  width: 100%;
+  justify-content: center;
+  animation: none;
+  transform: none;
+}
+.supported-sites__placeholder,
+.supported-sites__empty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 168px;
+  height: 44px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 75%, var(--accent));
+  border-radius: 12px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--surface-2) 84%, transparent), color-mix(in srgb, var(--accent-soft) 38%, transparent));
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  white-space: nowrap;
+}
+.supported-sites__empty {
+  color: var(--text-2);
+  font-family: var(--font-sans);
+}
+.supported-sites__placeholder-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.supported-sites__loader {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 18px;
+}
+.supported-sites__loader i {
+  display: block;
+  width: 4px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--accent);
+  animation: supported-sites-pulse 720ms ease-in-out infinite;
+}
+.supported-sites__loader i:nth-child(2) { animation-delay: 120ms; }
+.supported-sites__loader i:nth-child(3) { animation-delay: 240ms; }
+@keyframes supported-sites-pulse {
+  0%, 100% { transform: scaleY(0.45); opacity: 0.45; }
+  50% { transform: scaleY(1); opacity: 1; }
+}
+.site-icon__fallback {
+  display: grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 750;
+}
 .site-icon {
   position: relative;
   display: inline-flex;
@@ -212,6 +274,11 @@
 .site-icon--soundcloud { --site-color: #ff6a00; }
 .site-icon--bandcamp { --site-color: #1da0c3; }
 .site-icon--twitch { --site-color: #9147ff; }
+.site-icon--vimeo { --site-color: #1ab7ea; }
+.site-icon--instagram { --site-color: #e4405f; }
+.site-icon--twitter { --site-color: #111820; }
+.site-icon--acfun { --site-color: #fd4c5c; }
+.site-icon--pornhub { --site-color: #f5a623; }
 .site-icon__label {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -229,7 +296,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .supported-sites__track { animation: none; transform: none; }
+  .supported-sites__track,
+  .supported-sites__loader i { animation: none; }
+  .supported-sites__track { transform: none; }
 }
 
 .sidebar__spacer { flex: 1; }
@@ -237,6 +306,14 @@
   display: flex; align-items: center; justify-content: center;
   gap: 8px; padding: 10px 6px 2px; border-top: 1px solid var(--border);
 }
+.locale-picker { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--text-2); }
+.locale-picker .ph { font-size: 17px; }
+.locale-picker select {
+  min-width: 0; max-width: 132px; padding: 6px 4px;
+  border: 1px solid var(--border); border-radius: var(--r-control);
+  background: var(--surface); color: var(--text); font: inherit; font-size: 12px;
+}
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 
 /* ---------- 内容区 ---------- */
 .content {
@@ -263,7 +340,7 @@
     place-items: center;
   }
   .app {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     width: min(100%, 760px);
     height: calc(100dvh - 24px);
     min-height: 0;
@@ -271,16 +348,14 @@
     border-radius: 20px;
   }
   .sidebar {
-    position: sticky; top: 0; height: auto; flex-direction: row; align-items: center;
+    position: sticky; top: 0; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center;
     gap: 10px; padding: 8px 14px;
+    min-width: 0; width: 100%; overflow: hidden;
     border-right: 0; border-bottom: 1px solid var(--border);
   }
-  .brand { padding: 0; }
+  .brand { order: 0; padding: 0; }
   .brand__name { display: none; }
-  .supported-sites {
-    margin: 0;
-    padding: 0;
-  }
+  .supported-sites { order: 3; flex: 1 0 100%; min-width: 0; margin: 0; padding: 0; }
   .supported-sites__head { display: none; }
   .supported-sites__viewport { min-height: 38px; padding: 0; }
   .supported-sites__viewport::before { inset: -3px 0; }
@@ -288,10 +363,12 @@
   .site-icon__mark { width: 22px; height: 22px; border-radius: 6px; }
   .site-icon__mark img { width: 14px; height: 14px; }
   .site-icon--wikimedia .site-icon__mark img { width: 16px; height: 16px; }
-  .nav { flex-direction: row; flex: 1; }
-  .nav__item { width: auto; padding: 8px 12px; }
+  .nav { order: 2; flex-direction: row; flex: 1 0 100%; min-width: 0; overflow-x: auto; }
+  .nav__item { width: auto; flex: none; padding: 8px 12px; }
   .nav__item.is-active::before { left: 50%; top: auto; bottom: -8px; width: 18px; height: 3px; border-radius: 3px 3px 0 0; transform: translateX(-50%); }
   .sidebar__spacer { display: none; }
-  .sidebar__foot { padding: 0; border-top: 0; }
+  .settings { order: 4; flex: 1 0 100%; min-width: 0; }
+  .sidebar__foot { order: 1; margin-inline-start: auto; padding: 0; border-top: 0; }
+  .locale-picker select { max-width: 102px; }
   .content { padding: 20px 16px 56px; }
 }

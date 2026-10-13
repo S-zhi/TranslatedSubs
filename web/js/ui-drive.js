@@ -241,7 +241,7 @@ export function initDrive() {
   $("#driveTransfers")?.addEventListener("click", handleTransferAction);
   document.addEventListener("viewchange", handleViewChange);
 
-  if (state.view === "drive") void refresh();
+  if (state.view === "other-settings" && state.settingsTab === "drive") void refresh();
 }
 
 /**
@@ -290,7 +290,8 @@ function bindDropzone() {
  */
 function handleViewChange(event) {
   const view = event.detail?.view;
-  if (view === "drive") {
+  const settingsTab = event.detail?.settingsTab;
+  if (view === "other-settings" && settingsTab === "drive") {
     void refresh();
     startPolling();
   } else {
@@ -304,7 +305,7 @@ function handleViewChange(event) {
 function startPolling() {
   stopPolling();
   local.timer = setInterval(() => {
-    if (state.view === "drive" && !local.refreshing) void refresh();
+    if (state.view === "other-settings" && state.settingsTab === "drive" && !local.refreshing) void refresh();
   }, REFRESH_INTERVAL);
 }
 

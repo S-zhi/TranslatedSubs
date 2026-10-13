@@ -35,6 +35,7 @@ type Config struct {
 	MaxConcurrentTransfers int      `json:"max_concurrent_transfers"`
 	ChunkSizeBytes         int64    `json:"chunk_size_bytes"`
 	RequestTimeoutSeconds  int      `json:"request_timeout_seconds"`
+	PythonTimeoutSeconds   int      `json:"python_timeout_seconds"`
 }
 
 // Default 返回适合本地开发的 sidecar 安全默认配置。
@@ -53,6 +54,7 @@ func Default() Config {
 		MaxConcurrentTransfers: 3,
 		ChunkSizeBytes:         16 * 1024 * 1024,
 		RequestTimeoutSeconds:  600,
+		PythonTimeoutSeconds:   1800,
 	}
 }
 
@@ -119,6 +121,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.RequestTimeoutSeconds <= 0 {
 		cfg.RequestTimeoutSeconds = Default().RequestTimeoutSeconds
+	}
+	if cfg.PythonTimeoutSeconds <= 0 {
+		cfg.PythonTimeoutSeconds = Default().PythonTimeoutSeconds
 	}
 	return cfg, nil
 }

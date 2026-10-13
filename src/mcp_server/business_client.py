@@ -6,24 +6,17 @@ MCP Server 不直接访问业务层的 SQLite、线程池或核心 pipeline，�
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import Any, Mapping
 
 import httpx
-
-
-def _read_timeout() -> float:
-    raw = os.getenv("SUBTRANS_MCP_TIMEOUT", "15")
-    try:
-        return max(1.0, float(raw))
-    except ValueError:
-        return 15.0
+from src.config import settings
+from src.config.bootstrap import load_bootstrap
 
 
 @dataclass(frozen=True)
 class BusinessApiConfig:
-    """MCP 侧配置，不包含 Replicate / DeepSeek 等业务密钥。"""
+    """MCP 侧配置，不包含 DeepSeek 等业务密钥。"""
 
     base_url: str = "http://127.0.0.1:8000"
     timeout: float = 15.0
@@ -31,14 +24,16 @@ class BusinessApiConfig:
 
     @classmethod
     def from_env(cls) -> "BusinessApiConfig":
+        """Compatibility alias; configuration comes from config.local.json, never the process environment."""
+        return cls.from_bootstrap()
+
+    @classmethod
+    def from_bootstrap(cls) -> "BusinessApiConfig":
+        options = load_bootstrap()["mcp"]
         return cls(
-            base_url=(
-                os.getenv("SUBTRANS_API_BASE_URL", "http://127.0.0.1:8000")
-                .strip()
-                .rstrip("/")
-            ),
-            timeout=_read_timeout(),
-            api_token=os.getenv("SUBTRANS_API_TOKEN") or None,
+            base_url=str(options.get("baseUrl") or "http://127.0.0.1:8000").strip().rstrip("/"),
+            timeout=max(1.0, float(options.get("timeout", 15))),
+            api_token=None,
         )
 
 
@@ -79,8 +74,14 @@ class BusinessApiClient:
         *,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        self.config = config or BusinessApiConfig.from_env()
+        self._config_override = config
         self._transport = transport
+
+    @property
+    def config(self) -> BusinessApiConfig:
+        # Connection details are machine-local; the business API token is read
+        # from Redis settings for each request.
+        return self._config_override or BusinessApiConfig.from_bootstrap()
 
     @property
     def base_url(self) -> str:
@@ -98,10 +99,18 @@ class BusinessApiClient:
         *,
         payload: Mapping[str, Any] | None = None,
         params: Mapping[str, Any] | None = None,
+        extra_headers: Mapping[str, str] | None = None,
     ) -> Any:
         headers = {"Accept": "application/json"}
-        if self.config.api_token:
-            headers["Authorization"] = f"Bearer {self.config.api_token}"
+        api_token = (
+            self._config_override.api_token
+            if self._config_override is not None
+            else settings.api_token
+        )
+        if api_token:
+            headers["Authorization"] = f"Bearer {api_token}"
+        if extra_headers:
+            headers.update(extra_headers)
 
         request_kwargs: dict[str, Any] = {"headers": headers}
         if payload is not None:
@@ -168,7 +177,9 @@ class BusinessApiClient:
         return await self._request("POST", "/api/tasks/probe", payload={"url": url})
 
     async def create_task(self, payload: Mapping[str, Any]) -> dict[str, Any]:
-        return await self._request("POST", "/api/tasks", payload=payload)
+        return await self._request(
+            "POST", "/api/tasks", payload=payload, extra_headers={"X-Task-Origin": "mcp"}
+        )
 
     async def list_tasks(
         self,
@@ -178,6 +189,7 @@ class BusinessApiClient:
         after_id: str | None = None,
     ) -> list[dict[str, Any]]:
         params: dict[str, Any] = {"limit": limit, "offset": offset}
+        params["origin"] = "mcp"
         if before_id:
             params["before_id"] = before_id
         if after_id:

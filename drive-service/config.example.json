@@ -18,5 +18,6 @@
   "max_folder_directories": 5000,
   "max_concurrent_transfers": 3,
   "chunk_size_bytes": 16777216,
-  "request_timeout_seconds": 600
+  "request_timeout_seconds": 600,
+  "python_timeout_seconds": 1800
 }

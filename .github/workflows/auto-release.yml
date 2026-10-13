@@ -252,7 +252,7 @@ jobs:
           ## Quick Start (Linux)
 
           ```bash
-          curl -fsSL https://github.com/S-zhi/Subtitles-AI/releases/latest/download/install.sh | sudo bash
+          curl -fsSL https://github.com/S-zhi/TranslatedSubs/releases/latest/download/install.sh | sudo bash
           ```
           EOF
 

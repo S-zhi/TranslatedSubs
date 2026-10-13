@@ -8,9 +8,15 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
-from src.store import RESOURCE_STATUS_AVAILABLE, RESOURCE_STATUS_MISSING, ProbeRecord, TaskRecord
+from src.store import (
+    DEFAULT_TRANSLATION_ENGINE_ID,
+    RESOURCE_STATUS_AVAILABLE,
+    RESOURCE_STATUS_MISSING,
+    ProbeRecord,
+    TaskRecord,
+)
 
 
 def _probe_record_to_out(rec: ProbeRecord) -> "ProbeRecordOut":
@@ -28,6 +34,10 @@ def _probe_record_to_out(rec: ProbeRecord) -> "ProbeRecordOut":
         detail=rec.detail,
         createdAt=rec.created_at,
         language=rec.language,
+        availableQualities=rec.available_qualities,
+        formats=rec.parsed_formats,
+        thumbnail=rec.thumbnail,
+        uploader=rec.uploader,
     )
 
 
@@ -35,14 +45,26 @@ class TaskCreate(BaseModel):
     """POST /api/tasks 的请求体。"""
 
     url: str
-    sourceLang: str = Field(default="auto", min_length=1)
+    sourceLang: str = Field(default="en", min_length=1)
     targetLang: str = Field(default="zh-CN", min_length=1)
     mode: Literal["mono", "bilingual"] = "mono"
     burn: Literal["hard", "soft"] = "hard"
-    model: str = Field(default="small", min_length=1)
+    model: str = Field(default="local:tiny", min_length=1)
     # 配置实例 ID；保留 deepseek 以兼容旧版环境变量配置。
-    engine: str = Field(default="deepseek", min_length=1)
+    engine: str = Field(default=DEFAULT_TRANSLATION_ENGINE_ID, min_length=1)
     needSubtitle: bool = True  # False = 仅下载视频，跳过识别/翻译/烧录
+    quality: Optional[str] = Field(default=None, description="下载画质策略：best/1080p/720p/480p/360p/audio_only")
+    ttsEnabled: bool = False
+    ttsVoice: str = "auto"
+    originalVoiceMode: Literal["keep", "lower", "replace"] = "keep"
+
+    @model_validator(mode="after")
+    def validate_tts_options(self):
+        if self.ttsEnabled and not self.needSubtitle:
+            raise ValueError("配音需要启用字幕翻译")
+        if self.ttsEnabled and not self.targetLang.lower().startswith(("zh", "en")):
+            raise ValueError("Kokoro 配音目前支持中文和英文目标语")
+        return self
 
 
 class ErrorDetail(BaseModel):
@@ -58,6 +80,18 @@ class TaskProbeIn(BaseModel):
     """POST /api/tasks/probe 的请求体。"""
 
     url: str = Field(min_length=1)
+    cookiesFromBrowser: Optional[
+        Literal[
+            "chrome",
+            "chromium",
+            "edge",
+            "firefox",
+            "brave",
+            "vivaldi",
+            "opera",
+            "safari",
+        ]
+    ] = None
 
 
 class TaskProbeOut(BaseModel):
@@ -73,6 +107,10 @@ class TaskProbeOut(BaseModel):
     detail: Optional[str] = None
     cached: bool = False
     language: Optional[str] = None
+    availableQualities: list[str] = Field(default_factory=list)
+    formats: list[dict[str, Any]] = Field(default_factory=list)
+    thumbnail: Optional[str] = None
+    uploader: Optional[str] = None
 
 
 class ProbeRecordOut(BaseModel):
@@ -90,6 +128,49 @@ class ProbeRecordOut(BaseModel):
     detail: Optional[str] = None
     createdAt: int
     language: Optional[str] = None
+    availableQualities: list[str] = Field(default_factory=list)
+    formats: list[dict[str, Any]] = Field(default_factory=list)
+    thumbnail: Optional[str] = None
+    uploader: Optional[str] = None
+
+
+class YtDlpEnvInfo(BaseModel):
+    """yt-dlp 运行时环境与提取器诊断信息。"""
+
+    version: Optional[str] = None
+    extractorsCount: int = 0
+    proxyConfigured: bool = False
+    proxyMasked: Optional[str] = None
+    cookiesConfigured: bool = False
+    browserCookiesEnabled: bool = False
+    cacheTtlSec: float = 0.0
+
+
+class ProbeBatchSiteOut(BaseModel):
+    """固定站点在当前启动批次中的状态。"""
+
+    id: str
+    name: str
+    domain: str
+    url: str
+    status: Literal["pending", "testing", "ok", "fail"]
+    source: Optional[Literal["startup", "manual"]] = None
+    updatedAt: Optional[int] = None
+    result: Optional[dict[str, Any]] = None
+
+
+class ProbeBatchStatusOut(BaseModel):
+    """固定十站点启动探测批次的实时状态。"""
+
+    runId: Optional[str] = None
+    state: Literal["idle", "disabled", "running", "completed"]
+    total: int = 0
+    completed: int = 0
+    successful: int = 0
+    failed: int = 0
+    runStartedAt: Optional[int] = None
+    updatedAt: Optional[int] = None
+    sites: list[ProbeBatchSiteOut] = Field(default_factory=list)
 
 
 class ProbeRecordsClearOut(BaseModel):
@@ -111,6 +192,7 @@ class TaskOut(BaseModel):
     model: str
     engine: str
     sourceType: str
+    taskOrigin: str = "web"
     needSubtitle: bool
     status: str
     progress: int
@@ -120,7 +202,14 @@ class TaskOut(BaseModel):
     outputs: Optional[dict]
     resourceStatus: str  # AVAILABLE | MISSING — 任务产物文件是否在盘
     downgradeReason: Optional[str] = None
+    downgradeErrno: Optional[int] = None
     downgradedAt: Optional[int] = None
+    quality: Optional[str] = None
+    ttsEnabled: bool = False
+    ttsVoice: str = "auto"
+    originalVoiceMode: str = "keep"
+    ttsStatus: str = "DISABLED"
+    ttsError: Optional[str] = None
     createdAt: int
     updatedAt: int
 
@@ -140,6 +229,8 @@ def to_out(rec: TaskRecord) -> TaskOut:
         outputs = {"video": f"/api/tasks/{rec.id}/download"}
         if need_subtitle:
             outputs["subtitle"] = f"/api/tasks/{rec.id}/subtitle"
+        if bool(getattr(rec, "tts_enabled", 0)) and getattr(rec, "tts_status", "") == "SUCCESS":
+            outputs["dubbedVideo"] = f"/api/tasks/{rec.id}/dubbed"
     return TaskOut(
         id=rec.id,
         url=rec.url,
@@ -151,6 +242,7 @@ def to_out(rec: TaskRecord) -> TaskOut:
         model=rec.model,
         engine=rec.engine,
         sourceType=rec.source_type,
+        taskOrigin=getattr(rec, "task_origin", "web"),
         needSubtitle=need_subtitle,
         status=rec.status,
         progress=rec.progress,
@@ -160,7 +252,14 @@ def to_out(rec: TaskRecord) -> TaskOut:
         outputs=outputs,
         resourceStatus=resource_status,
         downgradeReason=rec.downgrade_reason,
+        downgradeErrno=rec.downgrade_errno,
         downgradedAt=rec.downgraded_at,
+        quality=getattr(rec, "quality", None),
+        ttsEnabled=bool(getattr(rec, "tts_enabled", 0)),
+        ttsVoice=getattr(rec, "tts_voice", "auto"),
+        originalVoiceMode=getattr(rec, "original_voice_mode", "keep"),
+        ttsStatus=getattr(rec, "tts_status", "DISABLED"),
+        ttsError=getattr(rec, "tts_error", None),
         createdAt=rec.created_at,
         updatedAt=rec.updated_at,
     )

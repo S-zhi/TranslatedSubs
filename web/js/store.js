@@ -7,7 +7,9 @@ import { createNotifications } from "./notifications.js";
 export const state = {
   tasks: [],
   filter: "all",       // all | active | done | failed
-  view: "tasks",       // tasks | preview | editor | probe | storage | drive | translation-settings
+  view: "tasks",       // tasks | preview | editor | storage | model-settings | other-settings
+  modelKind: "llm",
+  settingsTab: "engines", // engines | audio | probe | drive
   previewId: null,
   loading: true,
   loadError: null,
@@ -36,7 +38,33 @@ function emit(detail) {
 
 /* ---- 视图 / 筛选 / 预览选择 ---- */
 export function setFilter(f) { state.filter = f; emit({ type: "filter" }); }
-export function setView(v) { state.view = v; emit({ type: "view" }); }
+export function setView(v, options = {}) {
+  if (!v || state.view === v) return;
+  state.view = v;
+  emit({ type: "view", history: options.history !== false });
+}
+export function setModelKind(kind, options = {}) {
+  if (!["llm", "whisper", "tts"].includes(kind) || state.modelKind === kind) return;
+  state.modelKind = kind;
+  emit({ type: "model-kind", modelKind: kind, history: options.history !== false });
+}
+export function setSettingsTab(tab) {
+  // Legacy model navigation now lives in the dedicated model-settings view.
+  if (tab === "models") {
+    state.settingsTab = "models";
+    const changedKind = state.modelKind !== "whisper";
+    state.modelKind = "whisper";
+    state.view = "model-settings";
+    if (changedKind && typeof document !== "undefined") {
+      document.dispatchEvent(new CustomEvent("modelkindchange", { detail: { kind: "whisper" } }));
+    }
+    emit({ type: "legacy-model-navigation", settingsTab: "models", modelKind: "whisper", history: true });
+    return;
+  }
+  if (!tab || state.settingsTab === tab) return;
+  state.settingsTab = tab;
+  emit({ type: "settings-tab", settingsTab: tab });
+}
 export function setPreviewId(id) { state.previewId = id; emit({ type: "preview" }); }
 
 /* ---- 数据动作 ---- */
@@ -135,9 +163,10 @@ export function notificationsApi() {
 }
 
 /* ---- 选择器 ---- */
-export function visibleTasks() {
+export function visibleTasks(origin = null) {
   const f = state.filter;
   return state.tasks.filter((t) => {
+    if (origin && (t.taskOrigin || "web") !== origin) return false;
     if (f === "all") return true;
     if (f === "done") return t.status === "SUCCESS";
     if (f === "failed") return t.status === "FAILED" || t.status === "CANCELLED";

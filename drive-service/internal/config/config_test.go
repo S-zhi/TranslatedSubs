@@ -29,6 +29,9 @@ func TestLoadAppliesSafeDefaultsAndDriveChunkAlignment(t *testing.T) {
 	if cfg.ChunkSizeBytes != driveChunkMultiple {
 		t.Fatalf("chunk size = %d, want %d", cfg.ChunkSizeBytes, driveChunkMultiple)
 	}
+	if cfg.PythonTimeoutSeconds != 1800 {
+		t.Fatalf("python timeout = %d, want 1800", cfg.PythonTimeoutSeconds)
+	}
 	if len(cfg.GoogleScopes) != 1 || cfg.GoogleScopes[0] != defaultScope {
 		t.Fatalf("unexpected scopes: %#v", cfg.GoogleScopes)
 	}

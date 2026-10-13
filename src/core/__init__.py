@@ -28,6 +28,12 @@ from .transcriber import (
     TranscribeError,
     TranscribeProgress,
     TranscribeResult,
+    TranscribeRequest,
+    TranscribeResponse,
+    TranscriberBackend,
+    TranscriberService,
+    HttpTranscriber,
+    LocalWhisperTranscriber,
     transcribe,
 )
 from .translator import (
@@ -43,6 +49,11 @@ from .subtitle_burner import (
     BurnResult,
     burn_subtitles,
 )
+from .vocal_separator import (
+    VocalSeparationError,
+    VocalSeparationCancelledError,
+    separate_vocals,
+)
 
 __all__ = [
     # ① 下载
@@ -53,8 +64,12 @@ __all__ = [
     "Subtitle", "decode_srt_bytes", "format_timestamp", "parse_timestamp", "read_srt_content", "write_srt", "parse_srt",
     # ③ 语音识别
     "transcribe", "TranscribeResult", "TranscribeProgress", "TranscribeError",
+    "TranscribeRequest", "TranscribeResponse", "TranscriberBackend", "TranscriberService",
+    "HttpTranscriber",
+    "LocalWhisperTranscriber",
     # ④ 翻译
     "translate_srt", "translate_texts", "TranslateResult", "TranslateProgress", "TranslateError",
     # ⑤ 烧录
     "burn_subtitles", "BurnResult", "BurnProgress", "BurnError",
+    "separate_vocals", "VocalSeparationError", "VocalSeparationCancelledError",
 ]

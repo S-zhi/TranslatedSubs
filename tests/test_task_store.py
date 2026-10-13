@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import sqlite3
 
 import pytest
 
@@ -40,6 +41,15 @@ def test_create_defaults(store):
     assert rec.progress == 0
     assert rec.created_at > 0
     assert rec.created_at == rec.updated_at
+
+
+def test_is_cancelling_defaults_to_false_and_round_trips(store):
+    rec = _create(store)
+    assert rec.is_cancelling == 0
+    updated = store.update(rec.id, is_cancelling=1)
+    assert updated.is_cancelling == 1
+    assert TaskStore(store.db_path).get(rec.id).is_cancelling == 1
+
 
 
 def test_get_roundtrip(store):
@@ -237,6 +247,8 @@ def test_resource_status_migration_adds_column(tmp_path):
     assert rec is not None
     assert rec.resource_status == RESOURCE_STATUS_AVAILABLE
     assert rec.status == "SUCCESS"  # 其它字段保持不变
+    assert rec.tts_enabled == 0
+    assert rec.tts_status == "DISABLED"
 
 
 def test_downgrade_audit_round_trip(store):
@@ -308,3 +320,37 @@ def test_create_if_no_recent_active_allows_terminal_task(store):
     )
     assert created is True
     assert second.id != first.id
+
+
+def test_plugin_plan_roundtrips_internally_but_is_hidden_from_public_dict(store):
+    plan = '{"schema_version":1,"slots":{}}'
+    record = _create(store, plugin_plan_json=plan)
+    loaded = store.get(record.id)
+    assert loaded.plugin_plan_json == plan
+    assert "plugin_plan_json" not in loaded.to_dict()
+
+
+def test_old_database_without_plugin_plan_column_migrates_to_null(tmp_path):
+    db_path = tmp_path / "old.db"
+    store = TaskStore(db_path)
+    record = _create(store)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("ALTER TABLE tasks DROP COLUMN plugin_plan_json")
+
+    migrated = TaskStore(db_path).get(record.id)
+    assert migrated is not None
+    assert migrated.id == record.id
+    assert migrated.plugin_plan_json is None
+    columns = {row[1] for row in sqlite3.connect(db_path).execute("PRAGMA table_info(tasks)")}
+    assert "plugin_plan_json" in columns
+
+
+def test_ensure_plugin_plan_compare_and_set_preserves_existing_winner(store):
+    record = _create(store)
+    winner = '{"schema_version":1,"slots":{}}'
+    loser = '{"schema_version":1,"slots":{"download":{}}}'
+    persisted = store.ensure_plugin_plan(record.id, winner)
+    assert persisted.plugin_plan_json == winner
+    again = store.ensure_plugin_plan(record.id, loser)
+    assert again.plugin_plan_json == winner
+    assert store.ensure_plugin_plan("missing", winner) is None

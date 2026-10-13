@@ -8,18 +8,20 @@
 
 进度通过 on_progress 回调透传（解析 ffmpeg 的 -progress 输出），供编排层转 SSE。
 
-依赖：ffmpeg、ffprobe（需在 PATH 中，或用 SUBTRANS_FFMPEG / SUBTRANS_FFPROBE 指定）。
+依赖：ffmpeg、ffprobe（需在 PATH 中，或在设置页/API 的业务配置中指定命令路径）。
 """
 
 from __future__ import annotations
 
 import logging
 import subprocess
+import wave
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
 from src.config import settings, ensure_task_dir, AUDIO_FILENAME
+from src.core.ffmpeg_utils import run_ffmpeg
 from src.service.asset_resolver import AssetResolver, ResourceState
 
 logger = logging.getLogger(__name__)
@@ -59,8 +61,9 @@ def extract_audio(
     *,
     sample_rate: Optional[int] = None,
     channels: Optional[int] = None,
+    output_path: Path | str | None = None,
 ) -> AudioResult:
-    """从视频提取音频到 data/{task_id}/audio.wav。
+    """从视频提取音频到任务目录，默认路径仍是 audio.wav。
     可以共用
     Args:
         video_path: 输入视频路径（通常是下载阶段的 source.mp4）。
@@ -68,6 +71,7 @@ def extract_audio(
         on_progress: 可选进度回调。
         sample_rate: 采样率，默认取配置（16000）。
         channels: 声道数，默认取配置（1）。
+        output_path: 可选任务目录内 WAV 目标路径。
 
     Returns:
         AudioResult
@@ -92,7 +96,23 @@ def extract_audio(
     ch = channels or settings.audio_channels
 
     out_dir = ensure_task_dir(task_id)
-    audio_path = out_dir / AUDIO_FILENAME
+    audio_path = out_dir / AUDIO_FILENAME if output_path is None else Path(output_path)
+    try:
+        task_root = out_dir.resolve(strict=True)
+        resolved_output = audio_path.resolve()
+        resolved_output.relative_to(task_root)
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise AudioExtractError("音频输出路径必须位于任务目录内") from exc
+    if audio_path.is_symlink() or resolved_output.parent != task_root:
+        raise AudioExtractError("音频输出路径必须是任务目录根目录中的普通文件")
+    if output_path is not None:
+        if (
+            not audio_path.is_absolute()
+            or audio_path.name not in {"audio.wav", "tts_source.wav"}
+        ):
+            raise AudioExtractError("音频输出路径必须是任务目录内的保留 WAV 目标")
+    if audio_path.resolve() == video_path.resolve():
+        raise AudioExtractError("音频输出路径不能覆盖输入视频")
 
     total = _probe_duration(video_path)
 
@@ -116,11 +136,20 @@ def extract_audio(
     if not audio_path.exists() or audio_path.stat().st_size == 0:
         raise AudioExtractError("ffmpeg 执行完成但未生成有效音频文件")
 
+    try:
+        with wave.open(str(audio_path), "rb") as audio_file:
+            actual_sample_rate = audio_file.getframerate()
+            actual_channels = audio_file.getnchannels()
+            frame_count = audio_file.getnframes()
+    except (OSError, EOFError, wave.Error) as exc:
+        raise AudioExtractError("ffmpeg 产物不是有效的 WAV 音频文件") from exc
+    if actual_sample_rate <= 0 or actual_channels <= 0:
+        raise AudioExtractError("ffmpeg 产物的音频格式无效")
     result = AudioResult(
         audio_path=audio_path,
-        sample_rate=sr,
-        channels=ch,
-        duration=total,
+        sample_rate=actual_sample_rate,
+        channels=actual_channels,
+        duration=frame_count / actual_sample_rate,
         filesize=_safe_filesize(audio_path),
     )
     logger.info(
@@ -140,68 +169,44 @@ def _run_ffmpeg(
     task_id: Optional[str] = None,
 ) -> None:
     """执行 ffmpeg 并解析 -progress 输出，逐步回调进度。"""
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-        )
-    except FileNotFoundError as e:
-        raise AudioExtractError(
-            f"找不到 ffmpeg（{cmd[0]}）。请安装 ffmpeg-full 或设置 SUBTRANS_FFMPEG。 MAC用户请使用  brew install ffmpeg-full,请注意不要下载 ffmpeg，ffmpeg-full 是 ffmpeg 的完整版本，仅下载ffmpeg可能会导致字幕无法烧录到视频"
-        ) from e
+    last_pct = -1.0
 
-    if task_id:
-        try:
-            from src.service.runner import register_process
-            register_process(task_id, proc)
-        except Exception:
-            pass
+    def _tick(processed: float) -> None:
+        nonlocal last_pct
+        if on_progress is None:
+            return
+        pct = None
+        if total_seconds and total_seconds > 0:
+            pct = max(0.0, min(100.0, processed / total_seconds * 100.0))
+        # 去抖：百分比无变化时不重复回调
+        if pct is None or round(pct, 1) != last_pct:
+            last_pct = round(pct, 1) if pct is not None else last_pct
+            _safe_call(on_progress, AudioProgress(
+                percent=round(pct, 1) if pct is not None else None,
+                processed_seconds=processed,
+                total_seconds=total_seconds,
+            ))
 
-    try:
-        assert proc.stdout is not None
-        last_pct = -1.0
-        for line in proc.stdout:
-            line = line.strip()
-            if not line or "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            if key == "out_time_us" and on_progress is not None:
-                processed = _parse_us(value)
-                if processed is None:
-                    continue
-                pct = None
-                if total_seconds and total_seconds > 0:
-                    pct = max(0.0, min(100.0, processed / total_seconds * 100.0))
-                # 去抖：百分比无变化时不重复回调
-                if pct is None or round(pct, 1) != last_pct:
-                    last_pct = round(pct, 1) if pct is not None else last_pct
-                    _safe_call(on_progress, AudioProgress(
-                        percent=round(pct, 1) if pct is not None else None,
-                        processed_seconds=processed,
-                        total_seconds=total_seconds,
-                    ))
-            elif key == "progress" and value == "end":
-                if on_progress is not None:
-                    _safe_call(on_progress, AudioProgress(
-                        percent=100.0 if total_seconds else None,
-                        processed_seconds=total_seconds or 0.0,
-                        total_seconds=total_seconds,
-                    ))
+    not_found_msg = (
+        f"找不到 ffmpeg（{cmd[0]}）。请安装 ffmpeg-full，或在设置页/API 配置 ffmpeg 路径。"
+        " MAC用户请使用  brew install ffmpeg-full,请注意不要下载 ffmpeg，"
+        "ffmpeg-full 是 ffmpeg 的完整版本，仅下载ffmpeg可能会导致字幕无法烧录到视频"
+    )
 
-        proc.wait()
-        if proc.returncode != 0:
-            stderr = proc.stderr.read() if proc.stderr else ""
-            raise AudioExtractError(f"ffmpeg 提取音频失败（退出码 {proc.returncode}）: {stderr.strip()}")
-    finally:
-        if task_id:
-            try:
-                from src.service.runner import unregister_process
-                unregister_process(task_id, proc)
-            except Exception:
-                pass
+    run_ffmpeg(
+        cmd,
+        on_tick=_tick,
+        error_cls=AudioExtractError,
+        not_found_msg=not_found_msg,
+        task_id=task_id,
+    )
+
+    if on_progress is not None:
+        _safe_call(on_progress, AudioProgress(
+            percent=100.0 if total_seconds else None,
+            processed_seconds=total_seconds or 0.0,
+            total_seconds=total_seconds,
+        ))
 
 
 def _has_audio_stream(video_path: Path) -> bool:

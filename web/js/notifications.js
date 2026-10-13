@@ -13,6 +13,7 @@
  */
 
 import { TERMINAL } from "./constants.js";
+import { translate } from "./i18n.js";
 import { shortUrl } from "./utils.js";
 
 const STORAGE_KEY = "subtrans_notifications_enabled";
@@ -37,9 +38,9 @@ function safeWrite(localStorage, value) {
 
 /* 根据 task 状态生成通知正文。纯函数：仅依赖入参。 */
 function titleFor(task, kind) {
-  if (kind === "success") return "任务已完成";
-  if (kind === "failed") return "任务处理失败";
-  return "任务已开始处理";
+  if (kind === "success") return translate("任务已完成");
+  if (kind === "failed") return translate("任务处理失败");
+  return translate("任务已开始处理");
 }
 
 function bodyFor(task, kind) {

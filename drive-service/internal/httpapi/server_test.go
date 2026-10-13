@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/s-zhi/subtitles-ai-drive/internal/config"
@@ -127,6 +129,88 @@ func TestUploadEndpointSupportsOffsetChecks(t *testing.T) {
 	server.ServeHTTP(missingHead, headReq)
 	if missingHead.Code != http.StatusNotFound {
 		t.Fatalf("deleted upload HEAD status=%d", missingHead.Code)
+	}
+}
+
+// TestConcurrentUploadChunksSerialize verifies duplicate offsets cannot overwrite one another.
+func TestConcurrentUploadChunksSerialize(t *testing.T) {
+	t.Parallel()
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	if err := cfg.EnsureDataDir(); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.Open(filepath.Join(cfg.DataDir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := oauth.NewManager(&cfg)
+	drive := driveclient.NewClient(&cfg, auth, state)
+	transfers := transfer.NewManager(&cfg, state, drive)
+	server := New(&cfg, auth, drive, transfers, state)
+
+	createReq := httptest.NewRequest(http.MethodPost, "/api/drive/uploads", nil)
+	createReq.Header.Set("X-Upload-Length", "4")
+	createResp := httptest.NewRecorder()
+	server.ServeHTTP(createResp, createReq)
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s", createResp.Code, createResp.Body.String())
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(createResp.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	responses := make([]*httptest.ResponseRecorder, 2)
+	bodies := []string{"abc", "xyz"}
+	var wg sync.WaitGroup
+	for i := range bodies {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodPatch, "/api/drive/uploads/"+created.ID, bytes.NewBufferString(bodies[i]))
+			req.Header.Set("X-Upload-Offset", "0")
+			responses[i] = httptest.NewRecorder()
+			server.ServeHTTP(responses[i], req)
+		}(i)
+	}
+	wg.Wait()
+
+	successes, conflicts := 0, 0
+	for _, response := range responses {
+		switch response.Code {
+		case http.StatusNoContent:
+			successes++
+			if response.Header().Get("Upload-Offset") != "3" {
+				t.Fatalf("success offset = %q", response.Header().Get("Upload-Offset"))
+			}
+		case http.StatusConflict:
+			conflicts++
+			if response.Header().Get("Upload-Offset") != "3" {
+				t.Fatalf("conflict offset = %q", response.Header().Get("Upload-Offset"))
+			}
+		default:
+			t.Fatalf("unexpected concurrent PATCH status = %d body=%s", response.Code, response.Body.String())
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("successes=%d conflicts=%d, want one each", successes, conflicts)
+	}
+	upload, ok := state.GetUpload(created.ID)
+	if !ok {
+		t.Fatal("upload disappeared")
+	}
+	content, err := os.ReadFile(upload.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "abc" && string(content) != "xyz" {
+		t.Fatalf("file content = %q, want one complete chunk", content)
+	}
+	if upload.Offset != int64(len(content)) || upload.Offset != 3 {
+		t.Fatalf("offset=%d content length=%d", upload.Offset, len(content))
 	}
 }
 

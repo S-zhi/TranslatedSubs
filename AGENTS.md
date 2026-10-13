@@ -1,7 +1,33 @@
+# TranslatedSubs Agent 工作指南
+
+本仓库是视频与音频信息理解工作台，已实现字幕下载、转写、翻译、封装、Web 工作台和 MCP 接入。先阅读相关模块及其测试，再按现有架构做局部修改；不要把尚未交付的媒体分类、情绪或语调能力当作现有功能。
+
+## 项目位置
+
+- `src/handler/`：FastAPI 路由、请求模型和 Web 服务入口；入口是 `src.handler.app:app`。
+- `src/core/`：下载、音频提取、转写、翻译和字幕处理。
+- `src/service/`、`src/store/`：任务执行、调度与持久化；`src/mcp_server/`：MCP 接入。
+- `web/`：原生 JavaScript ES Modules 前端；`drive-service/`：可选的 Google Drive sidecar。
+- `tests/`、`web/__tests__/`：后端与前端测试；`docs/`：部署和接口文档。
+
+## 开发与验证
+
+- 使用 Python 3.10–3.12、`uv` 和 FFmpeg。硬字幕需要 FFmpeg 的 `subtitles`（libass）滤镜；环境说明见 `docs/local-quick-start.md`。
+- `uv sync` 安装 Python 依赖；`uv run python -m src.cli` 启动业务 API。
+- **`reopen` 快捷约定**：用户说 `reopen` 时，表示重新打开前端工作台。先检查 `8000` 端口并终止占用它的进程，再运行 `uv run python -m src.cli --debug --host 127.0.0.1 --port 8000`，最后打开 `http://127.0.0.1:8000/`；如果用户指定了页面路径，则打开对应路径。
+- `uv run pytest -q` 运行 Python 测试；前端测试在 `web/` 目录运行 `npm test`。修改某一模块时先跑相关测试，改动跨模块行为时再跑完整测试。
+- 测试遵循“最小必要范围”原则：每次修改后只运行覆盖本次改动的相关测试，不要默认执行全量测试。Python 测试使用 `uv run pytest -q tests/<相关测试>.py` 或指定测试节点；前端测试在 `web/` 目录使用 `npm test -- <相关测试>`。只有改动跨越多个模块、影响公共接口/配置/构建流程，或用户明确要求时，才扩大到多个测试文件或全量测试。
+- 新增或变更运行所需的外部服务、系统工具或 Python 可选依赖时，同步更新 README 和相关部署文档，说明基础依赖与按功能选装的依赖，并提供服务启动或依赖可用性的验证方法。
+- 报告验证结果时说明实际运行的测试范围；未运行全量测试时无需补跑，只需明确剩余风险来自哪些未覆盖模块。
+- `tests/test_live_pipeline.py` 涉及真实云服务和视频下载，只有配置好环境后才通过 `SUBTRANS_LIVE_TEST=1 uv run pytest tests/test_live_pipeline.py -v -s` 显式运行。
+- 本机 Redis 连接、数据路径和监听配置从 `config.example.json` 复制到未跟踪的 `config.local.json`；业务配置保存在 Redis 中。不要提交引导配置、API Key、OAuth 凭据、Cookie 或测试生成的媒体文件。
+
+保持 Python 代码符合现有 PEP 8 风格；前端沿用原生 JS/ES Modules。行为变化应更新相关测试和文档。提交规范与 PR 要求见 `.github/CONTRIBUTING.md`。
+
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **Subtitles-AI** (3622 symbols, 10126 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **TranslatedSubs** (4495 symbols, 12442 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 
@@ -25,10 +51,10 @@ This project is indexed by GitNexus as **Subtitles-AI** (3622 symbols, 10126 rel
 
 | Resource | Use for |
 |----------|---------|
-| `gitnexus://repo/Subtitles-AI/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/Subtitles-AI/clusters` | All functional areas |
-| `gitnexus://repo/Subtitles-AI/processes` | All execution flows |
-| `gitnexus://repo/Subtitles-AI/process/{name}` | Step-by-step execution trace |
+| `gitnexus://repo/TranslatedSubs/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/TranslatedSubs/clusters` | All functional areas |
+| `gitnexus://repo/TranslatedSubs/processes` | All execution flows |
+| `gitnexus://repo/TranslatedSubs/process/{name}` | Step-by-step execution trace |
 
 ## CLI
 

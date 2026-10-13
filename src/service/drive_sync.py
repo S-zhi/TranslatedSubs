@@ -37,6 +37,8 @@ RUNNING_TASK_STATES = {
     "TRANSCRIBING",
     "TRANSLATING",
     "BURNING",
+    "SYNTHESIZING",
+    "DUBBING",
 }
 
 
@@ -206,11 +208,17 @@ class DriveSidecarClient:
     """调用本机 Google Drive sidecar 的最小同步客户端。"""
 
     def __init__(self, *, base_url: str | None = None, timeout: float | None = None):
-        self.base_url = (
-            base_url or os.getenv("SUBTRANS_DRIVE_API_BASE_URL", "http://127.0.0.1:8787")
-        ).rstrip("/")
-        self.timeout = timeout or max(10.0, float(os.getenv("SUBTRANS_DRIVE_TIMEOUT", "600")))
-        self.client = httpx.Client(timeout=self.timeout)
+        self._base_url_override = base_url.rstrip("/") if base_url else None
+        self._timeout_override = timeout
+        self.client = httpx.Client()
+
+    @property
+    def base_url(self) -> str:
+        return (self._base_url_override or settings.drive_api_base_url).rstrip("/")
+
+    @property
+    def timeout(self) -> float:
+        return self._timeout_override or max(10.0, float(settings.drive_timeout))
 
     def close(self) -> None:
         self.client.close()
@@ -233,6 +241,7 @@ class DriveSidecarClient:
                 method,
                 f"{self.base_url}{path}",
                 headers=headers,
+                timeout=self.timeout,
                 **kwargs,
             )
         except httpx.HTTPError as exc:
@@ -719,7 +728,7 @@ class DriveSyncManager:
         )
 
     def _wait_transfer(self, client: DriveSidecarClient, batch_id: str, transfer_id: str, name: str) -> None:
-        deadline = time.monotonic() + max(60.0, float(os.getenv("SUBTRANS_DRIVE_TRANSFER_TIMEOUT", "7200")))
+        deadline = time.monotonic() + max(60.0, float(settings.drive_transfer_timeout))
         while time.monotonic() < deadline:
             if self._cancelled(batch_id):
                 try:
@@ -799,6 +808,7 @@ class DriveSyncManager:
                             error=None,
                             error_code=None,
                             downgrade_reason=None,
+                            downgrade_errno=None,
                             downgraded_at=None,
                         )
         except Exception as exc:

@@ -11,7 +11,7 @@ import sqlite3
 import time
 import uuid
 from dataclasses import asdict, dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import List, Optional
 
 # 与流水线状态机一致
@@ -22,6 +22,8 @@ STATUSES = (
     "TRANSCRIBING",
     "TRANSLATING",
     "BURNING",
+    "SYNTHESIZING",
+    "DUBBING",
     "SUCCESS",
     "FAILED",
     "CANCELLED",
@@ -58,6 +60,7 @@ class TaskRecord:
     engine: str        # 翻译引擎配置 ID；deepseek 为旧版兼容值
     url_hash: Optional[str] = None
     source_type: str = "url"  # url=在线链接下载 upload=本地上传视频
+    task_origin: str = "web"  # web=网页创建 mcp=MCP 创建
     need_subtitle: int = 1  # 1=需要字幕(完整流水线) 0=仅下载视频
     status: str = "PENDING"
     progress: int = 0
@@ -71,10 +74,26 @@ class TaskRecord:
     resource_status: str = RESOURCE_STATUS_AVAILABLE  # 产物文件是否在盘
     error_code: Optional[str] = None
     downgrade_reason: Optional[str] = None
+    downgrade_errno: Optional[int] = None
     downgraded_at: Optional[int] = None
+    is_cancelling: int = 0  # 1=取消清理进行中，0=未取消
+    quality: str = "480p"  # 下载清晰度策略：best/1080p/720p/480p/360p/audio_only
+    tts_enabled: int = 0
+    tts_voice: str = "auto"
+    original_voice_mode: str = "keep"
+    tts_status: str = "DISABLED"
+    tts_error: Optional[str] = None
+    output_dubbed_video: Optional[str] = None
+    plugin_plan_json: Optional[str] = None
+    # Non-sensitive runtime routing snapshot captured at task creation.
+    runtime_config_json: Optional[str] = None
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        # The plugin plan is internal execution data, never part of API payloads.
+        record = asdict(self)
+        record.pop("plugin_plan_json", None)
+        record.pop("runtime_config_json", None)
+        return record
 
 
 _COLUMNS = list(TaskRecord.__dataclass_fields__.keys())
@@ -86,6 +105,22 @@ def _now_ms() -> int:
 
 def _calc_url_hash(url: str) -> str:
     return hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+
+
+def _portable_artifact_name(value: Optional[str], task_id: str) -> Optional[str]:
+    """Persist only a task-local filename, regardless of the host OS."""
+    if not value:
+        return None
+    raw = str(value)
+    posix = PurePosixPath(raw)
+    windows = PureWindowsPath(raw)
+    name = windows.name if windows.name != raw else posix.name
+    if not name or name in {".", ".."}:
+        return None
+    parts = {part for part in (*posix.parts, *windows.parts) if part not in {"/", "\\"}}
+    if (posix.is_absolute() or windows.is_absolute()) and task_id not in parts:
+        return None
+    return name
 
 
 class TaskStore:
@@ -118,6 +153,7 @@ class TaskStore:
                     model TEXT NOT NULL,
                     engine TEXT NOT NULL,
                     source_type TEXT NOT NULL DEFAULT 'url',
+                    task_origin TEXT NOT NULL DEFAULT 'web',
                     need_subtitle INTEGER NOT NULL DEFAULT 1,
                     status TEXT NOT NULL,
                     progress INTEGER NOT NULL,
@@ -131,7 +167,10 @@ class TaskStore:
                     resource_status TEXT NOT NULL DEFAULT 'AVAILABLE',
                     error_code TEXT,
                     downgrade_reason TEXT,
-                    downgraded_at INTEGER
+                    downgrade_errno INTEGER,
+                    downgraded_at INTEGER,
+                    is_cancelling INTEGER NOT NULL DEFAULT 0,
+                    plugin_plan_json TEXT
                 )
                 """
             )
@@ -148,6 +187,8 @@ class TaskStore:
                 conn.execute("ALTER TABLE tasks ADD COLUMN need_subtitle INTEGER NOT NULL DEFAULT 1")
             if "source_type" not in cols:
                 conn.execute("ALTER TABLE tasks ADD COLUMN source_type TEXT NOT NULL DEFAULT 'url'")
+            if "task_origin" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN task_origin TEXT NOT NULL DEFAULT 'web'")
             if "resource_status" not in cols:
                 conn.execute(
                     "ALTER TABLE tasks ADD COLUMN resource_status TEXT NOT NULL DEFAULT 'AVAILABLE'"
@@ -156,8 +197,42 @@ class TaskStore:
                 conn.execute("ALTER TABLE tasks ADD COLUMN error_code TEXT")
             if "downgrade_reason" not in cols:
                 conn.execute("ALTER TABLE tasks ADD COLUMN downgrade_reason TEXT")
+            if "downgrade_errno" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN downgrade_errno INTEGER")
+            if "is_cancelling" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN is_cancelling INTEGER NOT NULL DEFAULT 0")
             if "downgraded_at" not in cols:
                 conn.execute("ALTER TABLE tasks ADD COLUMN downgraded_at INTEGER")
+            if "quality" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN quality TEXT NOT NULL DEFAULT '480p'")
+            for name, declaration in (
+                ("tts_enabled", "INTEGER NOT NULL DEFAULT 0"),
+                ("tts_voice", "TEXT NOT NULL DEFAULT 'auto'"),
+                ("original_voice_mode", "TEXT NOT NULL DEFAULT 'keep'"),
+                ("tts_status", "TEXT NOT NULL DEFAULT 'DISABLED'"),
+                ("tts_error", "TEXT"),
+            ):
+                if name not in cols:
+                    conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {declaration}")
+            if "output_dubbed_video" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN output_dubbed_video TEXT")
+            if "plugin_plan_json" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN plugin_plan_json TEXT")
+            if "runtime_config_json" not in cols:
+                conn.execute("ALTER TABLE tasks ADD COLUMN runtime_config_json TEXT")
+            # Older versions persisted absolute output paths. Keep only the
+            # task-local name so the database survives volume and OS changes.
+            for row in conn.execute(
+                "SELECT id, output_video, output_subtitle FROM tasks "
+                "WHERE output_video IS NOT NULL OR output_subtitle IS NOT NULL"
+            ):
+                video = _portable_artifact_name(row["output_video"], row["id"])
+                subtitle = _portable_artifact_name(row["output_subtitle"], row["id"])
+                if video != row["output_video"] or subtitle != row["output_subtitle"]:
+                    conn.execute(
+                        "UPDATE tasks SET output_video = ?, output_subtitle = ? WHERE id = ?",
+                        (video, subtitle, row["id"]),
+                    )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_tasks_created_at "
                 "ON tasks (created_at DESC, id DESC)"
@@ -179,8 +254,15 @@ class TaskStore:
         model: str,
         engine: str,
         source_type: str = "url",
+        task_origin: str = "web",
         need_subtitle: bool = True,
         title: Optional[str] = None,
+        quality: Optional[str] = "480p",
+        tts_enabled: bool = False,
+        tts_voice: str = "auto",
+        original_voice_mode: str = "keep",
+        plugin_plan_json: Optional[str] = None,
+        runtime_config_json: Optional[str] = None,
     ) -> TaskRecord:
         with self._connect() as conn:
             return self._insert(
@@ -193,8 +275,15 @@ class TaskStore:
                 model=model,
                 engine=engine,
                 source_type=source_type,
+                task_origin=task_origin,
                 need_subtitle=need_subtitle,
                 title=title,
+                quality=quality or "480p",
+                tts_enabled=tts_enabled,
+                tts_voice=tts_voice,
+                original_voice_mode=original_voice_mode,
+                plugin_plan_json=plugin_plan_json,
+                runtime_config_json=runtime_config_json,
             )
 
     def create_if_no_recent_active(
@@ -211,9 +300,10 @@ class TaskStore:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT * FROM tasks WHERE url_hash = ? AND created_at >= ? "
-                "AND status IN ('PENDING', 'DOWNLOADING', 'EXTRACTING', 'TRANSCRIBING', 'TRANSLATING', 'BURNING') "
+                "AND task_origin = ? "
+                "AND status IN ('PENDING', 'DOWNLOADING', 'EXTRACTING', 'TRANSCRIBING', 'TRANSLATING', 'BURNING', 'SYNTHESIZING', 'DUBBING') "
                 "ORDER BY created_at DESC LIMIT 1",
-                (url_hash, cutoff),
+                (url_hash, cutoff, kwargs.get("task_origin", "web")),
             ).fetchone()
             if row:
                 return _row_to_record(row), False
@@ -232,8 +322,16 @@ class TaskStore:
             engine=kwargs["engine"],
             url_hash=_calc_url_hash(kwargs["url"]),
             source_type=kwargs.get("source_type", "url"),
+            task_origin=kwargs.get("task_origin", "web"),
             need_subtitle=int(kwargs.get("need_subtitle", True)),
             title=kwargs.get("title"),
+            quality=kwargs.get("quality") or "480p",
+            tts_enabled=int(kwargs.get("tts_enabled", False)),
+            tts_voice=kwargs.get("tts_voice", "auto"),
+            original_voice_mode=kwargs.get("original_voice_mode", "keep"),
+            runtime_config_json=kwargs.get("runtime_config_json"),
+            tts_status="PENDING" if kwargs.get("tts_enabled", False) else "DISABLED",
+            plugin_plan_json=kwargs.get("plugin_plan_json"),
             status="PENDING",
             progress=0,
             created_at=now,
@@ -258,6 +356,7 @@ class TaskStore:
         offset: int = 0,
         before_id: Optional[str] = None,
         after_id: Optional[str] = None,
+        task_origin: Optional[str] = None,
     ) -> List[TaskRecord]:
         where_clauses = []
         params = []
@@ -275,6 +374,10 @@ class TaskStore:
                 return []
             where_clauses.append("(created_at > ? OR (created_at = ? AND id > ?))")
             params.extend([after_rec.created_at, after_rec.created_at, after_rec.id])
+
+        if task_origin:
+            where_clauses.append("task_origin = ?")
+            params.append(task_origin)
 
         sql = "SELECT * FROM tasks"
         if where_clauses:
@@ -302,6 +405,22 @@ class TaskStore:
         if after_id and not before_id:
             records.reverse()
         return records
+
+    def ensure_plugin_plan(self, task_id: str, plugin_plan_json: str) -> Optional[TaskRecord]:
+        """Atomically preserve an existing plan or initialize a legacy NULL plan."""
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if row is None:
+                return None
+            if row["plugin_plan_json"] is None:
+                conn.execute(
+                    "UPDATE tasks SET plugin_plan_json = ?, updated_at = ? "
+                    "WHERE id = ? AND plugin_plan_json IS NULL",
+                    (plugin_plan_json, _now_ms(), task_id),
+                )
+                row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        return _row_to_record(row) if row else None
 
     # ---------- 改 ----------
     def update(self, task_id: str, **fields) -> Optional[TaskRecord]:

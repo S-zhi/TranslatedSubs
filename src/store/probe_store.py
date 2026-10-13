@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 import time
 import uuid
@@ -36,6 +37,34 @@ class ProbeRecord:
     created_at: int = 0       # epoch 毫秒
     url_hash: Optional[str] = None  # sha256(url)[:16]
     language: Optional[str] = None
+    formats_json: Optional[str] = None
+    qualities: Optional[str] = None
+    thumbnail: Optional[str] = None
+    uploader: Optional[str] = None
+
+    @property
+    def available_qualities(self) -> list[str]:
+        if not self.qualities:
+            return []
+        try:
+            val = json.loads(self.qualities)
+            if isinstance(val, list):
+                return [str(x) for x in val]
+        except Exception:
+            pass
+        return [q.strip() for q in self.qualities.split(",") if q.strip()]
+
+    @property
+    def parsed_formats(self) -> list[dict]:
+        if not self.formats_json:
+            return []
+        try:
+            val = json.loads(self.formats_json)
+            if isinstance(val, list):
+                return val
+        except Exception:
+            pass
+        return []
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -84,11 +113,16 @@ class ProbeStore:
                     reason TEXT,
                     detail TEXT,
                     created_at INTEGER NOT NULL,
-                    url_hash TEXT
+                    url_hash TEXT,
+                    language TEXT,
+                    formats_json TEXT,
+                    qualities TEXT,
+                    thumbnail TEXT,
+                    uploader TEXT
                 )
                 """
             )
-            # Schema 迁移：若已有旧表无 url_hash 列则补充
+            # Schema 迁移：若已有旧表无某列则补充
             cols = [r["name"] for r in conn.execute("PRAGMA table_info(probe_records)").fetchall()]
             if "url_hash" not in cols:
                 conn.execute("ALTER TABLE probe_records ADD COLUMN url_hash TEXT")
@@ -97,6 +131,14 @@ class ProbeStore:
                     conn.execute("UPDATE probe_records SET url_hash = ? WHERE id = ?", (_calc_url_hash(r["url"]), r["id"]))
             if "language" not in cols:
                 conn.execute("ALTER TABLE probe_records ADD COLUMN language TEXT")
+            if "formats_json" not in cols:
+                conn.execute("ALTER TABLE probe_records ADD COLUMN formats_json TEXT")
+            if "qualities" not in cols:
+                conn.execute("ALTER TABLE probe_records ADD COLUMN qualities TEXT")
+            if "thumbnail" not in cols:
+                conn.execute("ALTER TABLE probe_records ADD COLUMN thumbnail TEXT")
+            if "uploader" not in cols:
+                conn.execute("ALTER TABLE probe_records ADD COLUMN uploader TEXT")
 
             # 列表默认按时间倒序，建索引避免大表全表扫
             conn.execute(
@@ -122,12 +164,18 @@ class ProbeStore:
         reason: Optional[str] = None,
         detail: Optional[str] = None,
         language: Optional[str] = None,
+        available_qualities: Optional[list[str]] = None,
+        formats: Optional[list[dict]] = None,
+        thumbnail: Optional[str] = None,
+        uploader: Optional[str] = None,
     ) -> ProbeRecord:
         """写入或更新一条测试记录。若同 URL 在当前小时桶已存在，则覆盖更新最新结果。"""
         now = _now_ms()
         url_hash = _calc_url_hash(url)
         start_of_hour = (now // 3600000) * 3600000
         ok_val = 1 if ok else 0
+        formats_json = json.dumps(formats, ensure_ascii=False) if formats else None
+        qualities_str = json.dumps(available_qualities, ensure_ascii=False) if available_qualities else None
 
         with self._connect() as conn:
             row = conn.execute(
@@ -143,7 +191,8 @@ class ProbeStore:
                     UPDATE probe_records
                     SET url = ?, ok = ?, title = ?, extractor = ?, duration = ?,
                         formats_count = ?, webpage_url = ?, reason = ?, detail = ?,
-                        created_at = ?, language = ?
+                        created_at = ?, language = ?, formats_json = ?, qualities = ?,
+                        thumbnail = ?, uploader = ?
                     WHERE id = ?
                     """,
                     (
@@ -158,6 +207,10 @@ class ProbeStore:
                         detail,
                         now,
                         language,
+                        formats_json,
+                        qualities_str,
+                        thumbnail,
+                        uploader,
                         rec_id,
                     ),
                 )
@@ -177,6 +230,10 @@ class ProbeStore:
                     created_at=now,
                     url_hash=url_hash,
                     language=language,
+                    formats_json=formats_json,
+                    qualities=qualities_str,
+                    thumbnail=thumbnail,
+                    uploader=uploader,
                 )
                 values = [getattr(rec, c) for c in _COLUMNS]
                 placeholders = ", ".join(["?"] * len(_COLUMNS))
@@ -200,6 +257,10 @@ class ProbeStore:
             created_at=now,
             url_hash=url_hash,
             language=language,
+            formats_json=formats_json,
+            qualities=qualities_str,
+            thumbnail=thumbnail,
+            uploader=uploader,
         )
 
     # ---------- 查 ----------

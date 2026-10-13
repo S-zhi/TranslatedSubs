@@ -9,40 +9,40 @@ import {
 import { Api, USE_MOCK } from "./api.js";
 import { toast } from "./toast.js";
 
-let listEl;
-const rows = new Map(); // id -> element
-let renderedSpecial = false;
+const queues = new Set();
 
-export function initQueue() {
-  listEl = $("#taskList");
-  subscribe(renderQueue);
-  renderQueue();
+export function initQueue({ listSelector = "#taskList", origin = "web" } = {}) {
+  const queue = { listEl: $(listSelector), rows: new Map(), renderedSpecial: false, origin };
+  queues.add(queue);
+  subscribe(() => renderQueue(queue));
+  renderQueue(queue);
 }
 
 /* ---------- 整体渲染（复用节点） ---------- */
-function renderQueue() {
+function renderQueue(queue) {
+  const { listEl, rows } = queue;
   if (state.loading) {
     listEl.replaceChildren(skeleton());
     rows.clear();
-    renderedSpecial = true;
+    queue.renderedSpecial = true;
     return;
   }
   if (state.loadError) {
     listEl.replaceChildren(loadErrorState());
     rows.clear();
-    renderedSpecial = true;
+    queue.renderedSpecial = true;
     return;
   }
-  const visible = visibleTasks();
+  const visible = visibleTasks(queue.origin);
   if (visible.length === 0) {
     listEl.replaceChildren(emptyState());
     rows.clear();
-    renderedSpecial = true;
+    queue.renderedSpecial = true;
     return;
   }
-  if (renderedSpecial) {
+  if (queue.renderedSpecial) {
     listEl.replaceChildren();
-    renderedSpecial = false;
+    queue.renderedSpecial = false;
   }
 
   // 更新或新建
@@ -95,7 +95,8 @@ function buildRow(t) {
     metaBox.append(
       tag(`${LANG_LABEL[t.sourceLang] || t.sourceLang} → ${LANG_LABEL[t.targetLang] || t.targetLang}`),
       tag(t.mode === "bilingual" ? "双语对照" : "仅译文"),
-      tag(t.burn === "hard" ? "硬烧录" : "软字幕"),
+      tag(t.burn === "hard" ? "硬烧录" : "软字幕（可开关）"),
+      ...(t.ttsEnabled ? [tag(t.ttsStatus === "SUCCESS" ? "配音已生成" : t.ttsStatus === "FAILED" ? "配音失败" : "配音中")] : []),
       tag("whisper " + t.model)
     );
   }
@@ -110,6 +111,23 @@ function updateRow(row, t) {
   applyDynamic(row, t);
 }
 
+export function downgradeReasonText(reason, errno) {
+  let text = "";
+  if (reason === "USER_CLEANED") {
+    text = "资源已被用户或系统清理";
+  } else if (reason === "DISK_FAILURE") {
+    text = "磁盘故障或读写错误";
+  } else if (reason === "VOLUME_MIGRATED") {
+    text = "存储卷已迁移或卸载";
+  } else {
+    text = "存储资源丢失";
+  }
+  if (errno != null && errno !== "") {
+    text += ` (errno: ${errno})`;
+  }
+  return text;
+}
+
 function setHeader(row, t) {
   const meta = STATUS_META[t.status] || STATUS_META.PENDING;
   ["pending", "active", "success", "failed"].forEach((c) => row.classList.remove("is-" + c));
@@ -121,8 +139,15 @@ function setHeader(row, t) {
   if (t._streamStatus === "reconnecting") {
     badgeLabel = "重连中";
   }
-  row.querySelector(".qrow__badge").innerHTML =
-    `<span class="badge badge--${meta.cls}"><i class="ph ${meta.icon}"></i>${badgeLabel}</span>`;
+  const badgeContainer = row.querySelector(".qrow__badge");
+  if (t.resourceStatus === "MISSING") {
+    const reasonText = downgradeReasonText(t.downgradeReason, t.downgradeErrno);
+    badgeContainer.innerHTML =
+      `<span class="badge badge--${meta.cls}" title="资源缺失原因：${escapeHtml(reasonText)}"><i class="ph ${meta.icon}"></i>${badgeLabel}</span>`;
+  } else {
+    badgeContainer.innerHTML =
+      `<span class="badge badge--${meta.cls}"><i class="ph ${meta.icon}"></i>${badgeLabel}</span>`;
+  }
 }
 
 function categoryOf(status) {
@@ -138,7 +163,7 @@ function applyDynamic(row, t) {
 
   if (row.dataset.cat !== cat) {
     row.dataset.cat = cat;
-    dyn.innerHTML = dynMarkup(cat);
+    dyn.innerHTML = dynMarkup(cat, t);
     if (cat === "failed") fillError(dyn, t);
     actions.replaceChildren(...buildActions(t, cat));
   }
@@ -146,10 +171,11 @@ function applyDynamic(row, t) {
   if (cat === "failed") fillError(dyn, t); // 错误文案可能更新
 }
 
-function dynMarkup(cat) {
+function dynMarkup(cat, task) {
   if (cat === "success") return `<div class="donebar"></div>`;
   if (cat === "failed") return `<div class="qrow__error"></div>`;
-  const segs = STEPS.map(
+  const steps = task.ttsEnabled ? [...STEPS, { label: "生成配音" }, { label: "封装配音" }] : STEPS;
+  const segs = steps.map(
     (s) => `<div class="track__seg"><div class="track__bar"></div><div class="track__label">${s.label}</div></div>`
   ).join("");
   return `
@@ -163,7 +189,7 @@ function dynMarkup(cat) {
 function updateTrack(row, t) {
   const meta = STATUS_META[t.status] || STATUS_META.PENDING;
   const isActive = !TERMINAL.has(t.status) && t.status !== "PENDING";
-  const curIdx = progressToStepIndex(t.progress);
+  const curIdx = t.status === "SYNTHESIZING" ? STEPS.length : t.status === "DUBBING" ? STEPS.length + 1 : progressToStepIndex(t.progress);
   const segs = row.querySelectorAll(".track__seg");
   segs.forEach((s, i) => {
     s.classList.toggle("is-done", t.status !== "PENDING" && i < curIdx);
@@ -190,7 +216,7 @@ function fillError(dyn, t) {
 
 function errorHint(msg, code) {
   if (code === "unauthorized" || code === "missing_api_key")
-    return `API Key 无效或未设置，请检查 .env 配置或翻译引擎设置`;
+    return `API Key 无效或未设置，请检查设置页中的业务配置或翻译引擎设置`;
   if (code === "rate_limited")
     return `翻译 API 达到调用频率限制，请稍后重试或更换 API Key`;
   if (code === "network_error")
@@ -201,10 +227,10 @@ function errorHint(msg, code) {
     return `处理过程中发生内部错误，请检查任务日志并稍后重试`;
 
   const m = (msg || "").toLowerCase();
-  if (m.includes("replicate") || m.includes("token"))
-    return `检查 .env 中的 <code>REPLICATE_API_TOKEN</code>`;
+  if (m.includes("模型") || m.includes("whisper"))
+    return `请在本地模型设置中下载并检查 Whisper 模型`;
   if (m.includes("deepseek") || m.includes("api key"))
-    return `检查 .env 中的 <code>SUBTRANS_DEEPSEEK_API_KEY</code> 或翻译引擎配置`;
+    return `检查设置页中的模型密钥或已保存的翻译引擎配置`;
   if (m.includes("libass") || m.includes("ffmpeg"))
     return `检查 ffmpeg 是否安装且带 <code>libass</code>`;
   if (m.includes("下载") || m.includes("download") || m.includes("404"))
@@ -222,6 +248,7 @@ function buildActions(t, cat) {
       }),
       iconBtn("ph-folder-open", "打开文件夹", "", () => openFolder(t)),
       iconBtn("ph-download-simple", "下载视频", "", () => download(t, "video")),
+      ...(t.ttsStatus === "SUCCESS" ? [iconBtn("ph-speaker-high", "下载配音视频", "", () => download(t, "dubbed"))] : []),
       iconBtn("ph-closed-captioning", "下载字幕", "", () => download(t, "subtitle")),
       iconBtn("ph-trash", "删除", "iconbtn--danger", () => remove(t)),
     ];

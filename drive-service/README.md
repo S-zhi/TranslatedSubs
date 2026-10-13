@@ -1,4 +1,4 @@
-# LynxSense Drive Service
+# TranslatedSubs Drive Service
 
 这是一个单用户、本机运行的 Google Drive sidecar。它不读取 Python 服务的数据库，也不导入 Python 包；只通过内部 HTTP 调用现有的 `/api/tasks/upload`。Drive 的 OAuth token、上传状态和下载 `.part` 文件都保存在 `data_dir`，进程重启后会自动恢复未完成传输。
 
@@ -31,7 +31,7 @@ cp config.example.json config.local.json
 go run ./cmd/server -config ./config.local.json
 ```
 
-服务默认只监听 `127.0.0.1:8787`。Python 服务默认地址为 `http://127.0.0.1:8000`；如果 Python 服务配置了 `SUBTRANS_API_TOKEN`，把同一个值填入 `python_api_token`，导入操作会通过 `X-API-Token` 调用 `/api/tasks/upload`。
+服务默认只监听 `127.0.0.1:8787`。Python 服务默认地址为 `http://127.0.0.1:8000`；如果 Python 业务设置启用了 API Token，把该值填入 sidecar 的 `python_api_token`，导入操作会通过 `X-API-Token` 调用 `/api/tasks/upload`。Python 导入请求超时可由 `python_timeout_seconds` 配置（默认 1800 秒 / 30 分钟），与控制 Drive API 请求超时的 `request_timeout_seconds` 区分开。
 
 ## API
 

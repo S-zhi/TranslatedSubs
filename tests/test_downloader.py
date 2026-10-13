@@ -9,6 +9,7 @@ from __future__ import annotations
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 from yt_dlp.utils import DownloadError as YtDlpDownloadError
@@ -150,6 +151,75 @@ def test_download_passes_progress_hook(task_path, monkeypatch):
     assert captured["opts"]["concurrent_fragment_downloads"] == (
         downloader.settings.download_concurrent_fragments
     )
+
+
+def test_download_explicit_none_and_frozen_options_override_settings(task_path, monkeypatch):
+    import dataclasses
+
+    src = task_path / "source.mkv"
+    captured = {}
+    monkeypatch.setattr(
+        downloader,
+        "settings",
+        dataclasses.replace(
+            downloader.settings,
+            _download_proxy="https://global-proxy.example",
+            _cookies_file=task_path / "global-cookies.txt",
+            _download_socket_timeout=90,
+            _merge_output_format="mp4",
+            _download_retries=10,
+            _download_concurrent_fragments=12,
+        ),
+    )
+
+    def on_extract(url, download, opts):
+        captured.update(opts)
+        src.write_bytes(b"x")
+        return {"requested_downloads": [{"filepath": str(src)}]}
+
+    monkeypatch.setattr(downloader, "YoutubeDL", make_fake_ydl(on_extract))
+    download_video(
+        "https://example.test/video", "task1",
+        cookies_file=None,
+        proxy=None,
+        socket_timeout=17,
+        merge_output_format="mkv",
+        retries=4,
+        concurrent_fragments=3,
+    )
+
+    assert "cookiefile" not in captured
+    assert "proxy" not in captured
+    assert captured["socket_timeout"] == 17
+    assert captured["merge_output_format"] == "mkv"
+    assert captured["retries"] == 4
+    assert captured["concurrent_fragment_downloads"] == 3
+
+
+def test_download_progress_cancellation_is_not_swallowed(task_path, monkeypatch):
+    from src.plugin_system import PluginCancelled
+
+    checks = 0
+
+    def cancel_check():
+        nonlocal checks
+        checks += 1
+        if checks >= 2:
+            raise PluginCancelled("cancelled")
+
+    def on_extract(url, download, opts):
+        opts["progress_hooks"][0]({
+            "status": "downloading", "downloaded_bytes": 1, "total_bytes": 2,
+        })
+        return {}
+
+    monkeypatch.setattr(downloader, "YoutubeDL", make_fake_ydl(on_extract))
+    with pytest.raises(PluginCancelled, match="cancelled"):
+        download_video(
+            "https://example.test/video", "task1",
+            on_progress=lambda progress: None,
+            cancel_check=cancel_check,
+        )
 
 
 def test_download_limiter_releases_after_media_download(tmp_path, monkeypatch):
@@ -580,7 +650,102 @@ def test_probe_passes_cookies_file(monkeypatch, tmp_path):
     assert captured["opts"]["cookiefile"] == str(cookies)
 
 
-def test_probe_passes_format_selector(monkeypatch):
+def test_probe_explicit_none_and_frozen_transport_settings(monkeypatch):
+    import dataclasses
+
+    captured = {}
+    monkeypatch.setattr(
+        downloader,
+        "settings",
+        dataclasses.replace(
+            downloader.settings,
+            _download_proxy="https://global-proxy.example",
+            _cookies_file=Path("/tmp/global-cookies.txt"),
+            _download_socket_timeout=90,
+        ),
+    )
+
+    def on_extract(url, download, opts):
+        captured.update(opts)
+        return {"title": "T", "url": "https://example.test/video"}
+
+    monkeypatch.setattr(downloader, "YoutubeDL", make_fake_ydl(on_extract))
+    probe_video(
+        "https://example.test/video",
+        cookies_file=None,
+        format_selector="bv*[height<=720]+ba/b[height<=720]",
+        proxy=None,
+        socket_timeout=19,
+    )
+
+    assert "cookiefile" not in captured
+    assert "proxy" not in captured
+    assert captured["format"] == "bv*[height<=720]+ba/b[height<=720]"
+    assert captured["socket_timeout"] == 19
+
+
+def test_probe_uses_browser_cookies_without_cookiefile_or_cache(monkeypatch):
+    """浏览器 Cookie 只用于显式 probe，不与文件 Cookie 合并，也不写入缓存。"""
+    import dataclasses
+
+    captured = {}
+    calls = []
+    monkeypatch.setattr(
+        downloader,
+        "settings",
+        dataclasses.replace(downloader.settings, _allow_cookies_from_browser=True),
+    )
+
+    def on_extract(url, download, opts):
+        calls.append(url)
+        captured["opts"] = opts
+        return {"title": "T", "url": "https://x"}
+
+    monkeypatch.setattr(downloader, "YoutubeDL", make_fake_ydl(on_extract))
+    first = probe_video("https://x/v", cookies_from_browser="chrome", ttl_sec=60)
+    second = probe_video("https://x/v", cookies_from_browser="chrome", ttl_sec=60)
+
+    assert first.ok is True and second.ok is True
+    assert second.cached is False
+    assert len(calls) == 2
+    assert captured["opts"]["cookiesfrombrowser"] == ("chrome",)
+    assert "cookiefile" not in captured["opts"]
+
+
+def test_probe_rejects_unsupported_browser_cookie_source(monkeypatch):
+    called = False
+
+    def on_extract(url, download, opts):
+        nonlocal called
+        called = True
+        return {"title": "T", "url": "https://x"}
+
+    monkeypatch.setattr(downloader, "YoutubeDL", make_fake_ydl(on_extract))
+    result = probe_video("https://x/v", cookies_from_browser="/tmp/profile")
+    assert result.ok is False
+    assert result.reason == "不支持的浏览器 Cookie 来源"
+    assert called is False
+
+
+def test_probe_browser_cookie_errors_do_not_expose_profile_path(monkeypatch):
+    import dataclasses
+
+    monkeypatch.setattr(
+        downloader,
+        "settings",
+        dataclasses.replace(downloader.settings, _allow_cookies_from_browser=True),
+    )
+
+    def on_extract(url, download, opts):
+        raise YtDlpDownloadError("Could not open /Users/alice/Library/Cookies.sqlite")
+
+    monkeypatch.setattr(downloader, "YoutubeDL", make_fake_ydl(on_extract))
+    result = probe_video("https://x/v", cookies_from_browser="chrome", ttl_sec=0)
+    assert result.ok is False
+    assert "/Users/alice" not in (result.detail or "")
+    assert "Cookies.sqlite" not in (result.detail or "")
+
+
     """format_selector 覆盖 settings.download_format。"""
     captured = {}
 
@@ -738,3 +903,88 @@ def test_probe_sniffs_language_from_metadata(monkeypatch):
     downloader.clear_probe_cache()
     result = downloader.probe_video("https://example.com/lang", ttl_sec=0)
     assert result.language == "ja"
+
+
+def test_resolve_download_format_presets():
+    assert downloader.resolve_download_format(quality="best") == "bv*+ba/b"
+    assert downloader.resolve_download_format(quality="1080p") == "bv*[height<=1080]+ba/b[height<=1080]"
+    assert downloader.resolve_download_format(quality="720p") == "bv*[height<=720]+ba/b[height<=720]"
+    assert downloader.resolve_download_format(quality="480p") == "bv*[height<=480]+ba/b[height<=480]"
+    assert downloader.resolve_download_format(quality="audio_only") == "ba/b"
+    assert downloader.resolve_download_format(quality="1440p") == "bv*[height<=1440]+ba/b[height<=1440]"
+    assert downloader.resolve_download_format(format_selector="worst") == "worst"
+
+
+def test_extract_supported_contents():
+    fake_info = {
+        "title": "Sample",
+        "thumbnail": "https://img.example.com/cover.jpg",
+        "uploader": "Sample Creator",
+        "formats": [
+            {"format_id": "1", "ext": "mp4", "height": 1080, "width": 1920, "vcodec": "avc1", "acodec": "mp4a", "tbr": 2500, "filesize": 1000000},
+            {"format_id": "2", "ext": "mp4", "height": 720, "width": 1280, "vcodec": "avc1", "acodec": "mp4a", "tbr": 1200, "filesize": 500000},
+            {"format_id": "3", "ext": "mp4", "height": 480, "width": 854, "vcodec": "avc1", "acodec": "mp4a", "tbr": 600, "filesize": 250000},
+            {"format_id": "audio", "ext": "m4a", "height": None, "vcodec": "none", "acodec": "mp4a", "abr": 128, "filesize": 50000},
+        ],
+    }
+    qualities, formats = downloader.extract_supported_contents(fake_info)
+    assert "best" in qualities
+    assert "1080p" in qualities
+    assert "720p" in qualities
+    assert "480p" in qualities
+    assert "audio_only" in qualities
+    assert len(formats) == 4
+    assert formats[0]["resolution"] == "1080p"
+    assert formats[3]["resolution"] == "音频"
+
+
+def test_download_passes_quality_and_network_options(task_path, monkeypatch):
+    src = task_path / "source.mp4"
+    captured_opts = {}
+
+    def on_extract(url, download, opts):
+        captured_opts.update(opts)
+        src.write_bytes(b"data")
+        return {"requested_downloads": [{"filepath": str(src)}]}
+
+    monkeypatch.setattr(downloader, "YoutubeDL", make_fake_ydl(on_extract))
+
+    res = download_video(
+        "http://x",
+        "task1",
+        quality="1080p",
+        proxy="http://127.0.0.1:7890",
+        socket_timeout=45,
+    )
+    assert res.video_path == src
+    assert captured_opts["format"] == "bv*[height<=1080]+ba/b[height<=1080]"
+    assert captured_opts["proxy"] == "http://127.0.0.1:7890"
+    assert captured_opts["socket_timeout"] == 45
+    assert captured_opts["fragment_retries"] == 10
+    assert captured_opts["skip_unavailable_fragments"] is True
+
+
+def test_probe_video_extracts_supported_contents(monkeypatch):
+    fake_info = {
+        "title": "Probe Sample",
+        "thumbnail": "https://img.example.com/thumb.jpg",
+        "uploader": "Test Channel",
+        "formats": [
+            {"format_id": "v1080", "ext": "mp4", "height": 1080, "vcodec": "avc1", "acodec": "mp4a", "tbr": 2000},
+            {"format_id": "a1", "ext": "m4a", "vcodec": "none", "acodec": "mp4a", "abr": 128},
+        ],
+    }
+
+    def on_extract(url, download, opts):
+        return fake_info
+
+    monkeypatch.setattr(downloader, "YoutubeDL", make_fake_ydl(on_extract))
+    downloader.clear_probe_cache()
+
+    result = downloader.probe_video("https://example.com/content-test", ttl_sec=0)
+    assert result.ok is True
+    assert result.thumbnail == "https://img.example.com/thumb.jpg"
+    assert result.uploader == "Test Channel"
+    assert "1080p" in result.available_qualities
+    assert "audio_only" in result.available_qualities
+    assert len(result.formats) == 2

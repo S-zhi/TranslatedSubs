@@ -829,8 +829,27 @@ func (m *Manager) postPythonUpload(ctx context.Context, transferID, path, name s
 			_ = writer.CloseWithError(createErr)
 			return
 		}
-		if _, copyErr := io.Copy(part, file); copyErr != nil {
-			_ = writer.CloseWithError(copyErr)
+		buf := make([]byte, 1024*1024)
+		for {
+			select {
+			case <-ctx.Done():
+				_ = writer.CloseWithError(ctx.Err())
+				return
+			default:
+			}
+			n, readErr := file.Read(buf)
+			if n > 0 {
+				if _, writeErr := part.Write(buf[:n]); writeErr != nil {
+					_ = writer.CloseWithError(writeErr)
+					return
+				}
+			}
+			if readErr != nil {
+				if !errors.Is(readErr, io.EOF) {
+					_ = writer.CloseWithError(readErr)
+				}
+				return
+			}
 		}
 	}()
 	endpoint := strings.TrimRight(m.cfg.PythonBaseURL, "/") + "/api/tasks/upload"
@@ -842,7 +861,11 @@ func (m *Manager) postPythonUpload(ctx context.Context, transferID, path, name s
 	if m.cfg.PythonAPIToken != "" {
 		req.Header.Set("X-API-Token", m.cfg.PythonAPIToken)
 	}
-	client := &http.Client{Timeout: 0}
+	timeout := 1800 * time.Second
+	if m.cfg != nil && m.cfg.PythonTimeoutSeconds > 0 {
+		timeout = time.Duration(m.cfg.PythonTimeoutSeconds) * time.Second
+	}
+	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("调用 Python upload API: %w", err)

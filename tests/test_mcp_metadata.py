@@ -33,7 +33,7 @@ def test_tool_schema_contains_parameter_descriptions_and_constraints():
     start_schema = tools["start_subtitle_pipeline"].input_schema
 
     assert start_schema["properties"]["url"]["description"]
-    assert start_schema["properties"]["source_lang"]["default"] == "auto"
+    assert start_schema["properties"]["source_lang"]["default"] == "en"
     assert start_schema["properties"]["target_lang"]["default"] == "zh-CN"
     assert start_schema["properties"]["mode"]["enum"] == ["mono", "bilingual"]
     assert start_schema["properties"]["burn"]["enum"] == ["hard", "soft"]

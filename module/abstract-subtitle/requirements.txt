@@ -1,0 +1,5 @@
+fastapi>=0.115,<1
+httpx>=0.28,<1
+openai-whisper>=20240930
+python-multipart>=0.0.9
+uvicorn[standard]>=0.30,<1

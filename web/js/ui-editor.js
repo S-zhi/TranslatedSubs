@@ -11,6 +11,9 @@ import { toast } from "./toast.js";
 let listEl, hintEl, titleEl, subEl, actionsEl, versionInput;
 let subsEl;
 let addBtn, saveBtn, reburnBtn;
+let railEl, railToggle;
+
+const EDITOR_RAIL_COLLAPSED_KEY = "subtrans_editor_rail_collapsed_v1";
 
 let currentTaskId = null;
 let currentDoc = null;        // { taskId, title, burn, hasOriginal, hasTranslated, original, translated }
@@ -19,6 +22,8 @@ let dirty = false;
 export function initEditor() {
   listEl = $("#editorList");
   hintEl = $("#editorHint");
+  railEl = document.querySelector(".editor__rail");
+  railToggle = $("#editorRailToggle");
   titleEl = $("#editorTitle");
   subEl = $("#editorSub");
   actionsEl = $("#editorActions");
@@ -30,9 +35,32 @@ export function initEditor() {
   addBtn.addEventListener("click", () => onAdd());
   saveBtn.addEventListener("click", () => onSave());
   reburnBtn.addEventListener("click", () => onReburn());
+  railToggle.addEventListener("click", toggleRail);
+  setRailCollapsed(readRailCollapsed());
 
   subscribe(renderIfActive);
   renderIfActive();
+}
+
+function readRailCollapsed() {
+  try { return window.localStorage.getItem(EDITOR_RAIL_COLLAPSED_KEY) === "1"; } catch (_) { return false; }
+}
+
+function setRailCollapsed(collapsed) {
+  const editor = railEl?.closest(".editor");
+  if (!editor || !railToggle) return;
+  editor.classList.toggle("is-rail-collapsed", collapsed);
+  railToggle.setAttribute("aria-expanded", String(!collapsed));
+  railToggle.title = collapsed ? "展开任务面板" : "收起任务面板";
+  railToggle.querySelector("i").className = `ph ${collapsed ? "ph-caret-right" : "ph-caret-left"}`;
+  const label = collapsed ? "展开任务面板" : "收起任务面板";
+  railToggle.querySelector(".sr-only").textContent = label;
+}
+
+function toggleRail() {
+  const collapsed = !railEl.closest(".editor").classList.contains("is-rail-collapsed");
+  setRailCollapsed(collapsed);
+  try { window.localStorage.setItem(EDITOR_RAIL_COLLAPSED_KEY, collapsed ? "1" : "0"); } catch (_) {}
 }
 
 function renderIfActive() {
@@ -81,7 +109,7 @@ function renderList() {
       <span class="editem__thumb" aria-hidden="true"><i class="ph ph-text-aa"></i></span>
       <span class="editem__body">
         <span class="editem__title">${escapeHtml(t.title || "成品视频")}</span>
-        <span class="editem__meta">${LANG_LABEL[t.targetLang] || t.targetLang} · ${t.burn === "hard" ? "硬字幕" : "软字幕"}</span>
+        <span class="editem__meta">${LANG_LABEL[t.targetLang] || t.targetLang} · ${t.burn === "hard" ? "硬字幕" : "软字幕（可开关）"}</span>
       </span>`;
     item.addEventListener("click", () => selectTask(t.id));
     listEl.append(item);
@@ -123,7 +151,7 @@ function renderMain() {
   if (!currentDoc) return;
   const t = state.tasks.find((x) => x.id === currentTaskId);
   titleEl.textContent = t ? (t.title || "字幕编辑") : "字幕编辑";
-  const burn = t ? (t.burn === "hard" ? "硬字幕" : "软字幕") : "";
+  const burn = t ? (t.burn === "hard" ? "硬字幕" : "软字幕（可开关）") : "";
   subEl.textContent = `烧录方式：${burn} · 原文与译文对照编辑 · 共 ${entryCount()} 条`;
   actionsEl.hidden = false;
   renderSubs();
@@ -206,7 +234,9 @@ function buildRow(i) {
   if (originalText) originalText.value = original?.text || "";
   if (translatedText) translatedText.value = translated?.text || "";
   row.querySelectorAll(".subrow__text").forEach((textArea) => {
+    resizeTextarea(textArea);
     textArea.addEventListener("input", () => {
+      resizeTextarea(textArea);
       const locale = textArea.dataset.locale;
       const entry = entryAt(locale, i);
       if (!entry) return;
@@ -252,6 +282,11 @@ function languageField(locale, label, index, missing) {
       <span class="subrow__fieldlabel">${label}</span>
       <textarea class="subrow__text" data-locale="${locale}" rows="2" placeholder="${hint}" aria-label="${hint}" spellcheck="false"${disabled}></textarea>
     </label>`;
+}
+
+function resizeTextarea(textArea) {
+  textArea.style.height = "auto";
+  textArea.style.height = `${textArea.scrollHeight}px`;
 }
 
 function validateRow(row) {
@@ -390,7 +425,7 @@ async function onSave() {
 
 async function onReburn() {
   if (!currentTaskId) return;
-  if (!confirm("将基于当前 translated.srt 重新烧录 output.mp4。确定继续？")) return;
+  if (!confirm("将基于当前 translated.srt 重新烧录并生成带模式标识的成品视频。确定继续？")) return;
   reburnBtn.disabled = true;
   try {
     const res = await Api.reburnSubtitles(currentTaskId, {});

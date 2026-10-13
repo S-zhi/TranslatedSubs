@@ -52,7 +52,7 @@ func main() {
 		ReadHeaderTimeout: 15 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
-	log.Printf("LynxSense Drive service listening on http://%s", cfg.ListenAddr)
+	log.Printf("TranslatedSubs Drive service listening on http://%s", cfg.ListenAddr)
 	log.Printf("Google OAuth credentials are intentionally empty until configured")
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)

@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 from src.mcp_server.tools import SubtitleMcpTools
+from src.store import DEFAULT_TRANSLATION_ENGINE_ID
 
 
 class FakeBusinessApi:
@@ -74,12 +75,12 @@ def test_start_pipeline_returns_task_id_and_uses_business_contract():
     assert result["task_id"] == "task_1"
     assert api.created_payload == {
         "url": "https://example.test/video",
-        "sourceLang": "auto",
+        "sourceLang": "en",
         "targetLang": "ja",
         "mode": "bilingual",
         "burn": "soft",
-        "model": "small",
-        "engine": "deepseek",
+        "model": "local:tiny",
+        "engine": DEFAULT_TRANSLATION_ENGINE_ID,
         "needSubtitle": True,
     }
 
@@ -137,8 +138,8 @@ def test_start_pipeline_reports_initialization_failure():
             return {
                 "ok": False,
                 "capabilities": {"download": False, "full_pipeline": False},
-                "config_file": "/project/.env",
-                "missing": ["REPLICATE_API_TOKEN"],
+                "config_file": "/project/config.local.json",
+                "missing": ["请先在业务设置/API 配置翻译引擎"],
             }
 
     result = _run(SubtitleMcpTools(NotReadyApi()).start_subtitle_pipeline(
@@ -147,4 +148,4 @@ def test_start_pipeline_reports_initialization_failure():
 
     assert result["ok"] is False
     assert result["error_code"] == "NOT_INITIALIZED"
-    assert result["missing"] == ["REPLICATE_API_TOKEN"]
+    assert result["missing"] == ["请先在业务设置/API 配置翻译引擎"]

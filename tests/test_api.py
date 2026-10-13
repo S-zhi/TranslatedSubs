@@ -6,26 +6,36 @@
 
 from __future__ import annotations
 
+import errno
+import io
+import pathlib
+
 import pytest
 from fastapi.testclient import TestClient
 
 from src.handler import tasks as tasks_routes
+from src.handler import srt as srt_routes
 from src.handler.app import app
-from src.handler.deps import get_probe_store, get_store
+from src.handler.deps import get_probe_store, get_store, reset_singletons
 from src.store import RESOURCE_STATUS_AVAILABLE, RESOURCE_STATUS_MISSING, TaskStore
 
 from src.handler.schemas import to_out
 from src.core.downloader import ProbeResult
-from src.store import ProbeStore, TaskStore, TaskRecord
+from src.store import ProbeStore, TaskStore, TaskRecord, TranslationEngineStore
+from src.config.config_repository import get_config_provider
 
 
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     import dataclasses
+    reset_singletons()
     db_path = tmp_path / "test.db"
     store = TaskStore(db_path)
     probe_store = ProbeStore(db_path)
+    engine_store = TranslationEngineStore()
+    engine_store.ensure_default_deepseek()
+    engine_store.update("deepseek", api_key="sk-mock-key", availability="AVAILABLE")
     # 覆盖 store 依赖 -> 临时库
     app.dependency_overrides[get_store] = lambda: store
     app.dependency_overrides[get_probe_store] = lambda: probe_store
@@ -35,13 +45,16 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr("src.service.asset_resolver.task_dir", lambda tid: tmp_path / tid)
     # 不在 API 测试里真跑流水线（执行器单独测）
     monkeypatch.setattr(tasks_routes, "enqueue_pipeline", lambda task_id: None)
+    # API tests exercise request validation and persistence; model download
+    # readiness is covered by the local model endpoint tests.
+    monkeypatch.setattr(tasks_routes, "_ensure_local_model_ready", lambda model: None)
     # 默认 mock probe_duration 返回 10 秒，避免单元测试依赖系统 ffprobe 命令
     monkeypatch.setattr(tasks_routes, "probe_duration", lambda path, bin_path: 10.0)
-    # 默认 mock 提供 DeepSeek Key 及临时 data_dir，确保其它 Task 创建测试不受影响
+    # 临时目录仍由测试替换；DeepSeek key位于显式 Memory provider中。
     monkeypatch.setattr(
         tasks_routes,
         "settings",
-        dataclasses.replace(tasks_routes.settings, deepseek_api_key="sk-mock-key", data_dir=tmp_path),
+        dataclasses.replace(tasks_routes.settings, data_dir=tmp_path),
     )
     with TestClient(app) as c:
         c._store = store
@@ -49,6 +62,7 @@ def client(tmp_path, monkeypatch):
         c._tmp = tmp_path
         yield c
     app.dependency_overrides.clear()
+    reset_singletons()
 
 
 def _payload(**over):
@@ -79,12 +93,45 @@ def test_create_task(client):
     assert data["targetLang"] == "zh-CN"
     assert data["outputs"] is None
     assert data["createdAt"] > 0
+    assert data["ttsEnabled"] is False
+    assert data["ttsStatus"] == "DISABLED"
+
+
+def test_create_task_persists_tts_options(client):
+    response = client.post("/api/tasks", json=_payload(
+        ttsEnabled=True, ttsVoice="zm_010", originalVoiceMode="lower",
+    ))
+    assert response.status_code == 201
+    data = response.json()
+    record = client._store.get(data["id"])
+    assert (record.tts_enabled, record.tts_voice, record.original_voice_mode) == (1, "zm_010", "lower")
+    assert data["ttsStatus"] == "PENDING"
+
+
+def test_tts_failure_keeps_regular_video_output(client):
+    rec = TaskRecord(
+        id="task_tts_failed", url="u", source_lang="en", target_lang="zh-CN",
+        mode="mono", burn="hard", model="small", engine="deepseek",
+        status="SUCCESS", need_subtitle=1, tts_enabled=1,
+        tts_status="FAILED", tts_error="model unavailable",
+    )
+    output = to_out(rec)
+    assert output.outputs == {
+        "video": "/api/tasks/task_tts_failed/download",
+        "subtitle": "/api/tasks/task_tts_failed/subtitle",
+    }
+    assert output.ttsStatus == "FAILED"
+    assert output.ttsError == "model unavailable"
 
 
 # ---------- API Token 鉴权 ----------
 
 def test_api_token_auth_when_token_configured(client, monkeypatch):
-    """配置 SUBTRANS_API_TOKEN 时，变更接口必须校验 Authorization / X-API-Token。"""
+    """Redis API Token 设置后，变更接口校验 Authorization / X-API-Token。"""
+    get_config_provider().mutate(lambda document: document["business"].update(
+        {"api_token": "secret-token-123"},
+    ))
+    # Runtime environment values do not override the Redis setting.
     monkeypatch.setenv("SUBTRANS_API_TOKEN", "secret-token-123")
 
     # 未提供 Token -> 401
@@ -105,19 +152,97 @@ def test_api_token_auth_when_token_configured(client, monkeypatch):
     assert r_header.status_code == 201
 
 
+def test_api_token_auth_read_and_download_endpoints(client, monkeypatch):
+    """配置 SUBTRANS_API_TOKEN 时，数据读取和删除接口均受保护。"""
+    cid = client.post("/api/tasks", json=_payload()).json()["id"]
+    client._store.update(cid, status="SUCCESS", progress=100)
+    d = client._tmp / cid
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "source.mp4").write_bytes(b"SRC")
+    (d / "output.mp4").write_bytes(b"OUT")
+    (d / "translated.srt").write_text("1\n00:00:00,000 --> 00:00:01,000\nhi\n", encoding="utf-8")
+
+    get_config_provider().mutate(lambda document: document["business"].update(
+        {"api_token": "secret-token-123"},
+    ))
+
+    endpoints_get = [
+        "/api/tasks",
+        f"/api/tasks/{cid}",
+        "/api/tasks/probe/records",
+        f"/api/tasks/{cid}/source",
+        f"/api/tasks/{cid}/download",
+        f"/api/tasks/{cid}/subtitle",
+        f"/api/tasks/{cid}/subtitles",
+        "/api/storage/stats",
+        "/api/storage/retention",
+    ]
+
+    endpoints_head = [
+        f"/api/tasks/{cid}/source",
+        f"/api/tasks/{cid}/download",
+    ]
+    endpoints_delete = ["/api/srt/local-models/small"]
+
+    # 未带 Token 均返回 401
+    for ep in endpoints_get:
+        assert client.get(ep).status_code == 401, f"{ep} 未拦截 401"
+    for ep in endpoints_head:
+        assert client.head(ep).status_code == 401, f"HEAD {ep} 未拦截 401"
+    for ep in endpoints_delete:
+        assert client.delete(ep).status_code == 401, f"DELETE {ep} 未拦截 401"
+    assert client.post(
+        "/api/srt/local-models/import",
+        data={"name": "external"},
+        files=[("files", ("model.safetensors", b"weights"))],
+    ).status_code == 401
+    assert client.post("/api/srt/local-models/external/check").status_code == 401
+    assert client.post("/api/srt/local-models/tiny/download").status_code == 401
+    assert client.post("/api/storage/cleanup_preview", json={}).status_code == 401
+
+    # 支持 Header Authorization: Bearer
+    assert client.get("/api/tasks", headers={"Authorization": "Bearer secret-token-123"}).status_code == 200
+    # 支持 Header X-API-Token
+    assert client.get(f"/api/tasks/{cid}", headers={"X-API-Token": "secret-token-123"}).status_code == 200
+    # 支持 Query ?token=
+    assert client.get(f"/api/tasks/{cid}/download?token=secret-token-123").status_code == 200
+    # 支持 Query ?api_token=
+    assert client.get(f"/api/tasks/{cid}/subtitle?api_token=secret-token-123").status_code == 200
+
+
 def test_api_token_auth_when_token_unset(client, monkeypatch):
-    """未配置 SUBTRANS_API_TOKEN 时，接口无须鉴权直接通过。"""
+    """未配置 SUBTRANS_API_TOKEN 时，读取和修改接口无须鉴权直接通过。"""
     monkeypatch.delenv("SUBTRANS_API_TOKEN", raising=False)
+    get_config_provider().mutate(lambda document: document["business"].update(
+        {"api_token": None},
+    ))
 
     r = client.post("/api/tasks", json=_payload())
     assert r.status_code == 201
+    cid = r.json()["id"]
+
+    assert client.get("/api/tasks").status_code == 200
+    assert client.get(f"/api/tasks/{cid}").status_code == 200
 
 
-def test_create_defaults_when_minimal(client):
+def test_create_defaults_when_minimal(client, monkeypatch):
+    class UnavailableLocalModel:
+        @staticmethod
+        def is_ready():
+            return False
+
+    monkeypatch.setattr(
+        tasks_routes, "get_translation_model_manager", lambda: UnavailableLocalModel()
+    )
     r = client.post("/api/tasks", json={"url": "https://x/y"})
-    assert r.status_code == 201
-    data = r.json()
-    assert data["targetLang"] == "zh-CN" and data["mode"] == "mono"
+    # Minimal requests use the local CPU engine by default.  Until its model
+    # has been downloaded and converted, task creation must fail explicitly
+    # instead of silently falling back to a cloud engine.
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] in {
+        "LOCAL_TRANSLATION_MODEL_NOT_READY",
+        "LOCAL_TRANSLATION_DEPENDENCY_MISSING",
+    }
 
 
 def test_create_missing_url_422(client):
@@ -147,14 +272,32 @@ def test_create_rejects_empty_model_and_languages(client, monkeypatch):
     assert enqueued == []
 
 
+def test_replicate_model_is_rejected_with_migration_code():
+    with pytest.raises(Exception) as exc_info:
+        tasks_routes._ensure_local_model_ready("replicate:tiny")
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["code"] == "REPLICATE_BACKEND_REMOVED"
+
+
+def test_retry_rejects_historical_replicate_task(client, monkeypatch):
+    # Historical records may still exist in upgraded databases even though
+    # creating a new Replicate task is now rejected before enqueue.
+    rec = client._store.create(
+        url="https://example.com/legacy", source_lang="en", target_lang="zh-CN",
+        mode="mono", burn="hard", model="replicate:tiny", engine="deepseek",
+    )
+    rec_id = rec.id
+    client._store.update(rec_id, status="FAILED", error="legacy")
+    response = client.post(f"/api/tasks/{rec_id}/retry")
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "REPLICATE_BACKEND_REMOVED"
+
+
 def test_create_task_rejects_missing_deepseek_api_key(client, monkeypatch):
     """DeepSeek 引擎在需要字幕且未配置 API Key 时应返回 422 拒绝。"""
-    import dataclasses
-    monkeypatch.setattr(
-        tasks_routes,
-        "settings",
-        dataclasses.replace(tasks_routes.settings, deepseek_api_key=None),
-    )
+    get_config_provider().mutate(lambda document: document["engines"]["byId"]["deepseek"].update(
+        api_key=None, availability="UNCONFIGURED",
+    ))
 
     # 1. POST /api/tasks
     r1 = client.post("/api/tasks", json=_payload(engine="deepseek", needSubtitle=True))
@@ -169,12 +312,9 @@ def test_create_task_rejects_missing_deepseek_api_key(client, monkeypatch):
 
 def test_create_task_allows_missing_deepseek_api_key_when_need_subtitle_false(client, monkeypatch):
     """不需要字幕（needSubtitle=False）时，即使未配置 DeepSeek Key 也能创建任务。"""
-    import dataclasses
-    monkeypatch.setattr(
-        tasks_routes,
-        "settings",
-        dataclasses.replace(tasks_routes.settings, deepseek_api_key=None),
-    )
+    get_config_provider().mutate(lambda document: document["engines"]["byId"]["deepseek"].update(
+        api_key=None, availability="UNCONFIGURED",
+    ))
 
     r = client.post("/api/tasks", json=_payload(engine="deepseek", needSubtitle=False))
     assert r.status_code == 201
@@ -182,12 +322,9 @@ def test_create_task_allows_missing_deepseek_api_key_when_need_subtitle_false(cl
 
 def test_create_task_succeeds_when_deepseek_api_key_present(client, monkeypatch):
     """已配置 DeepSeek Key 时，创建任务成功。"""
-    import dataclasses
-    monkeypatch.setattr(
-        tasks_routes,
-        "settings",
-        dataclasses.replace(tasks_routes.settings, deepseek_api_key="sk-valid-key"),
-    )
+    get_config_provider().mutate(lambda document: document["engines"]["byId"]["deepseek"].update(
+        api_key="sk-valid-key", availability="AVAILABLE",
+    ))
 
     r = client.post("/api/tasks", json=_payload(engine="deepseek", needSubtitle=True))
     assert r.status_code == 201
@@ -348,6 +485,17 @@ def test_delete_cancelled_task_succeeds(client):
     assert not d.exists()
 
 
+def test_delete_cancelling_task_returns_409(client):
+    cid = client.post("/api/tasks", json=_payload()).json()["id"]
+    client._store.update(cid, status="CANCELLED", is_cancelling=1)
+
+    response = client.delete(f"/api/tasks/{cid}")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "任务正在取消，请稍后再试"
+    assert client.get(f"/api/tasks/{cid}").status_code == 200
+
+
 def test_retry_cancelled_task_succeeds(client, monkeypatch):
     cid = client.post("/api/tasks", json=_payload()).json()["id"]
     client._store.update(cid, status="CANCELLED", error="用户取消")
@@ -463,24 +611,238 @@ def test_health(client):
 
 def test_srt_languages(client, monkeypatch):
     """测试获取源语言选项。"""
-    monkeypatch.setattr(
-        "src.handler.srt.get_video_language_options",
-        lambda: ["en", "zh"],
-    )
     r = client.get("/api/srt/languages")
     assert r.status_code == 200
-    assert r.json() == ["en", "zh"]
+    assert r.json()[:2] == ["en", "zh"]
 
 
 def test_srt_model_weights(client, monkeypatch):
-    """测试获取 Whisper 模型权重选项。"""
-    monkeypatch.setattr(
-        "src.handler.srt.get_whisper_model_weight_options",
-        lambda: ["tiny", "small"],
-    )
+    """测试获取本地 Whisper 模型权重选项。"""
+    monkeypatch.setattr(srt_routes.model_manager, "list_models", lambda: [
+        {"name": "tiny", "status": "READY"}, {"name": "small", "status": "NOT_INSTALLED"},
+    ])
     r = client.get("/api/srt/model-weights")
     assert r.status_code == 200
-    assert r.json() == ["tiny", "small"]
+    assert r.json() == ["local:tiny"]
+
+
+def test_delete_local_model_is_blocked_while_an_active_task_uses_it(client, monkeypatch):
+    class ModelManagerStub:
+        deleted = []
+
+        def delete(self, name):
+            self.deleted.append(name)
+            return {"name": name, "status": "NOT_INSTALLED"}
+
+    manager = ModelManagerStub()
+    monkeypatch.setattr(srt_routes, "model_manager", manager)
+    task_id = client.post("/api/tasks", json=_payload(model="whisper:small")).json()["id"]
+
+    blocked = client.delete("/api/srt/local-models/small")
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "MODEL_IN_USE"
+    assert manager.deleted == []
+
+    client._store.update(task_id, status="SUCCESS")
+    deleted = client.delete("/api/srt/local-models/small")
+    assert deleted.status_code == 200
+    assert deleted.json()["status"] == "NOT_INSTALLED"
+    assert manager.deleted == ["small"]
+
+
+def test_delete_current_whisper_model_and_snapshot_model_protection(client, monkeypatch):
+    import dataclasses
+    import json
+    from src.config import settings as app_settings
+    from src.store.model_settings_store import ModelSettingsStore
+
+    monkeypatch.setattr("src.config.settings", dataclasses.replace(app_settings, db_path=client._store.db_path))
+    settings_store = ModelSettingsStore(client._store.db_path)
+    settings_store.update({"whisper": {
+        "enabled": True, "provider": "local", "model": "local:current",
+        "models": [{"id": "current", "provider": "local", "model": "local:current",
+                    "enabled": True, "isCurrent": True}],
+    }})
+
+    class ModelManagerStub:
+        deleted = []
+
+        def delete(self, name):
+            self.deleted.append(name)
+            return {"name": name, "status": "NOT_INSTALLED"}
+
+    manager = ModelManagerStub()
+    monkeypatch.setattr(srt_routes, "model_manager", manager)
+    current = client.delete("/api/srt/local-models/current")
+    assert current.status_code == 409
+    assert current.json()["detail"]["code"] == "MODEL_CURRENT"
+
+    task_id = client.post("/api/tasks", json=_payload(model="local:other")).json()["id"]
+    client._store.update(task_id, runtime_config_json=json.dumps({
+        "whisper": {"model": "local:current"},
+    }))
+    settings_store.update({"whisper": {
+        "provider": "local", "model": "local:other",
+        "models": [{"id": "current", "provider": "local", "model": "local:other",
+                    "enabled": True, "isCurrent": True}],
+    }})
+    in_use = client.delete("/api/srt/local-models/current")
+    assert in_use.status_code == 409
+    assert in_use.json()["detail"]["code"] == "MODEL_IN_USE"
+    assert manager.deleted == []
+
+
+def test_model_asset_actions_do_not_change_settings_and_failed_check_keeps_reference(client, monkeypatch):
+    import dataclasses
+    from src.config import settings as app_settings
+    from src.handler import model_settings as settings_routes
+    from src.service.model_manager import ModelValidationError
+    from src.store.model_settings_store import ModelSettingsStore
+
+    configured = dataclasses.replace(app_settings, db_path=client._store.db_path)
+    monkeypatch.setattr("src.config.settings", configured)
+    monkeypatch.setattr(settings_routes, "settings", configured)
+    monkeypatch.setattr("src.handler.deps.settings", configured)
+    store = ModelSettingsStore(client._store.db_path)
+    before = store.get_all()
+
+    class InventoryManager:
+        inventory = [
+            {"name": "tiny", "status": "NOT_INSTALLED"},
+            {"name": "official-b", "status": "READY"},
+            {"name": "imported-c", "status": "READY"},
+        ]
+
+        def list_models(self):
+            return self.inventory
+
+        def is_ready(self, name):
+            return name in {"official-b", "imported-c"}
+
+        def download(self, name):
+            return {"name": name, "status": "READY"}
+
+        def import_files(self, name, _label, _files):
+            return {"name": name, "status": "READY"}
+
+        def check(self, _name):
+            self.inventory = [item for item in self.inventory if item["name"] != "imported-c"]
+            raise ModelValidationError("broken model")
+
+    manager = InventoryManager()
+    monkeypatch.setattr(srt_routes, "model_manager", manager)
+    monkeypatch.setattr(settings_routes, "model_manager", manager)
+    downloaded = client.post("/api/srt/local-models/tiny/download")
+    imported = client.post("/api/srt/local-models/import", data={
+        "name": "imported-c", "label": "Imported",
+    }, files=[("files", ("config.json", io.BytesIO(b"{}"), "application/json"))])
+    assert downloaded.status_code == imported.status_code == 200
+    assert store.get_all() == before
+
+    monkeypatch.setattr(manager, "is_ready", lambda name: name == "imported-c")
+    saved = client.put("/api/settings/models", json={"whisper": {
+        "enabled": True, "provider": "local", "model": "local:imported-c",
+        "models": [{"id": "imported-card", "provider": "local", "model": "local:imported-c",
+                    "enabled": True, "isCurrent": True}],
+    }})
+    assert saved.status_code == 200
+    failed_check = client.post("/api/srt/local-models/imported-c/check")
+    assert failed_check.status_code == 422
+    assert failed_check.json()["detail"]["cleaned"] is True
+    assert store.get("whisper")["model"] == "local:imported-c"
+    status = client.get("/api/settings/models").json()["whisper"]
+    assert status["model"] == "local:imported-c" and status["status"] == "MISSING"
+
+
+@pytest.mark.parametrize(
+    ("target", "snapshot", "status_code", "code"),
+    [
+        ("A", '{"whisper":{"provider":"local","model":"local:B"}}', 200, None),
+        ("B", '{"whisper":{"provider":"local","model":"local:B"}}', 409, "MODEL_IN_USE"),
+        ("A", None, 409, "MODEL_IN_USE"),
+        ("A", "{bad json", 409, "MODEL_IN_USE"),
+        ("A", "[]", 409, "MODEL_IN_USE"),
+        ("A", '{"whisper":{"model":17}}', 409, "MODEL_IN_USE"),
+        ("A", '{"whisper":{"model":" "}}', 409, "MODEL_IN_USE"),
+    ],
+)
+def test_delete_uses_valid_snapshot_then_falls_back_for_invalid_snapshot(
+    client, monkeypatch, target, snapshot, status_code, code,
+):
+    import dataclasses
+    from src.config import settings as app_settings
+    from src.store.model_settings_store import ModelSettingsStore
+
+    monkeypatch.setattr("src.config.settings", dataclasses.replace(app_settings, db_path=client._store.db_path))
+    settings_store = ModelSettingsStore(client._store.db_path)
+    settings_store.update({"whisper": {
+        "enabled": True, "provider": "local", "model": "local:C",
+        "models": [{"id": "current", "provider": "local", "model": "local:C",
+                    "enabled": True, "isCurrent": True}],
+    }})
+
+    class Manager:
+        deleted = []
+
+        def delete(self, name):
+            self.deleted.append(name)
+            return {"name": name, "status": "NOT_INSTALLED"}
+
+    manager = Manager()
+    monkeypatch.setattr(srt_routes, "model_manager", manager)
+    task_id = client.post("/api/tasks", json=_payload(model="local:A")).json()["id"]
+    client._store.update(task_id, model="local:A", runtime_config_json=snapshot)
+    response = client.delete(f"/api/srt/local-models/{target}")
+    assert response.status_code == status_code
+    if code:
+        assert response.json()["detail"]["code"] == code
+        assert manager.deleted == []
+    else:
+        assert manager.deleted == [target]
+
+
+def test_import_and_check_local_model_api(client, monkeypatch, tmp_path):
+    from src.service import model_manager as models
+
+    class Manager(models.LocalModelManager):
+        @property
+        def root(self):
+            path = tmp_path / "models"
+            path.mkdir(exist_ok=True)
+            return path
+
+    manager = Manager()
+    monkeypatch.setattr(srt_routes, "model_manager", manager)
+    monkeypatch.setattr(models, "validate_hf_model", lambda _path: None)
+    response = client.post(
+        "/api/srt/local-models/import",
+        data={"name": "external-whisper", "label": "External Whisper"},
+        files=[("files", ("pytorch_model.bin", io.BytesIO(b"weights"), "application/octet-stream"))],
+    )
+    assert response.status_code == 200
+    assert response.json()["format"] == "huggingface"
+    assert client.post("/api/srt/local-models/external-whisper/check").status_code == 200
+
+    def invalid(_path):
+        raise models.ModelValidationError("invalid contract")
+
+    monkeypatch.setattr(models, "validate_hf_model", invalid)
+    failed = client.post("/api/srt/local-models/external-whisper/check")
+    assert failed.status_code == 422
+    assert failed.json()["detail"]["cleaned"] is True
+    assert not (manager.root / "external-whisper").exists()
+
+
+def test_official_model_download_endpoint(client, monkeypatch):
+    class ModelManagerStub:
+        def download(self, name):
+            return {"name": name, "status": "DOWNLOADING", "phase": "queued"}
+
+    monkeypatch.setattr(srt_routes, "model_manager", ModelManagerStub())
+    response = client.post("/api/srt/local-models/tiny.en/download")
+    assert response.status_code == 200
+    assert response.json()["status"] == "DOWNLOADING"
+    assert client.post("/api/srt/local-models/not-official/download").status_code == 404
 
 
 def test_srt_target_languages(client):
@@ -542,6 +904,128 @@ def test_scan_missing_terminal_records_volume_migration(client, tmp_path):
     assert {client._store.get(task_id).downgrade_reason for task_id in ids} == {"VOLUME_MIGRATED"}
 
 
+
+def test_scan_missing_terminal_not_a_directory_error(client, tmp_path, caplog):
+    cid = client.post("/api/tasks", json=_payload()).json()["id"]
+    client._store.update(cid, status="SUCCESS", progress=100)
+
+    # 造一个同名文件代替目录
+    not_a_dir = tmp_path / "file-as-datadir"
+    not_a_dir.write_text("i am a file")
+
+    with caplog.at_level("WARNING"):
+        marked = tasks_routes.scan_missing_terminal(client._store, data_dir=not_a_dir)
+
+    assert marked == [cid]
+    rec = client._store.get(cid)
+    assert rec.resource_status == RESOURCE_STATUS_MISSING
+    assert rec.downgrade_reason == "USER_CLEANED"
+    assert rec.downgrade_errno is not None
+    assert "scan_missing_terminal data_dir 异常" in caplog.text
+
+    data = client.get(f"/api/tasks/{cid}").json()
+    assert data["downgradeReason"] == "USER_CLEANED"
+    assert data["downgradeErrno"] == rec.downgrade_errno
+
+
+def test_scan_missing_terminal_stat_os_error(client, tmp_path, monkeypatch, caplog):
+    cid = client.post("/api/tasks", json=_payload()).json()["id"]
+    client._store.update(cid, status="SUCCESS", progress=100)
+    data_dir = tmp_path / "stat-error-dir"
+    data_dir.mkdir()
+
+    original_stat = pathlib.Path.stat
+
+    def fake_stat(path, *args, **kwargs):
+        if path == data_dir:
+            raise OSError(errno.EIO, "Input/output error")
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr("pathlib.Path.stat", fake_stat)
+
+    with caplog.at_level("WARNING"):
+        marked = tasks_routes.scan_missing_terminal(client._store, data_dir=data_dir)
+
+    assert marked == [cid]
+    rec = client._store.get(cid)
+    assert rec.downgrade_reason == "DISK_FAILURE"
+    assert rec.downgrade_errno == errno.EIO
+    assert "scan_missing_terminal data_dir 异常" in caplog.text
+
+
+def test_scan_missing_terminal_permission_error(client, tmp_path, monkeypatch, caplog):
+    cid = client.post("/api/tasks", json=_payload()).json()["id"]
+    client._store.update(cid, status="SUCCESS", progress=100)
+
+    data_dir = tmp_path / "perm-denied-dir"
+    data_dir.mkdir()
+
+    def fake_iterdir(*args, **kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr("pathlib.Path.iterdir", fake_iterdir)
+
+    with caplog.at_level("WARNING"):
+        marked = tasks_routes.scan_missing_terminal(client._store, data_dir=data_dir)
+
+    assert marked == [cid]
+    rec = client._store.get(cid)
+    assert rec.resource_status == RESOURCE_STATUS_MISSING
+    assert rec.downgrade_reason == "DISK_FAILURE"
+    assert rec.downgrade_errno == 13
+    assert "scan_missing_terminal data_dir 异常" in caplog.text
+
+
+def test_scan_missing_terminal_os_error_io(client, tmp_path, monkeypatch, caplog):
+    import errno
+    cid = client.post("/api/tasks", json=_payload()).json()["id"]
+    client._store.update(cid, status="SUCCESS", progress=100)
+
+    data_dir = tmp_path / "eio-dir"
+    data_dir.mkdir()
+
+    def fake_iterdir(*args, **kwargs):
+        err = OSError("Input/output error")
+        err.errno = errno.EIO
+        raise err
+
+    monkeypatch.setattr("pathlib.Path.iterdir", fake_iterdir)
+
+    with caplog.at_level("WARNING"):
+        marked = tasks_routes.scan_missing_terminal(client._store, data_dir=data_dir)
+
+    assert marked == [cid]
+    rec = client._store.get(cid)
+    assert rec.resource_status == RESOURCE_STATUS_MISSING
+    assert rec.downgrade_reason == "DISK_FAILURE"
+    assert rec.downgrade_errno == errno.EIO
+    assert "scan_missing_terminal data_dir 异常" in caplog.text
+
+
+def test_scan_missing_terminal_os_error_generic(client, tmp_path, monkeypatch, caplog):
+    cid = client.post("/api/tasks", json=_payload()).json()["id"]
+    client._store.update(cid, status="SUCCESS", progress=100)
+
+    data_dir = tmp_path / "generic-oserror-dir"
+    data_dir.mkdir()
+
+    def fake_iterdir(*args, **kwargs):
+        err = OSError("Unknown error")
+        err.errno = 999
+        raise err
+
+    monkeypatch.setattr("pathlib.Path.iterdir", fake_iterdir)
+
+    with caplog.at_level("WARNING"):
+        marked = tasks_routes.scan_missing_terminal(client._store, data_dir=data_dir)
+
+    assert marked == [cid]
+    rec = client._store.get(cid)
+    assert rec.resource_status == RESOURCE_STATUS_MISSING
+    assert rec.downgrade_reason == "UNKNOWN"
+    assert rec.downgrade_errno == 999
+    assert "scan_missing_terminal data_dir 异常" in caplog.text
+
 def test_scan_missing_terminal_empty_data_dir_does_not_mark_volume_migration(client, tmp_path):
     """数据目录存在但为空（新装系统/空挂载）时，有多条 SUCCESS 任务不应被误标记为 VOLUME_MIGRATED。"""
     ids = [
@@ -557,6 +1041,7 @@ def test_scan_missing_terminal_empty_data_dir_does_not_mark_volume_migration(cli
     marked = tasks_routes.scan_missing_terminal(client._store, data_dir=empty_dir)
     assert set(marked) == set(ids)
     assert {client._store.get(task_id).downgrade_reason for task_id in ids} == {"UNKNOWN"}
+
 
 
 def test_success_download_only_task_with_missing_source_hides_outputs(client):
@@ -669,6 +1154,36 @@ def test_download_missing_subtitle_marks_resource_missing(client):
     assert rec.resource_status == RESOURCE_STATUS_MISSING
 
 
+def test_download_dubbed_video_returns_generated_file(client):
+    cid = client.post("/api/tasks", json=_payload(ttsEnabled=True)).json()["id"]
+    client._store.update(
+        cid, status="SUCCESS", progress=100, tts_status="SUCCESS",
+        output_dubbed_video="output_dubbed.mp4",
+    )
+    dubbed = client._tmp / cid / "output_dubbed.mp4"
+    dubbed.parent.mkdir(parents=True, exist_ok=True)
+    dubbed.write_bytes(b"DUBBED VIDEO")
+
+    response = client.get(f"/api/tasks/{cid}/dubbed")
+    assert response.status_code == 200
+    assert response.content == b"DUBBED VIDEO"
+    assert response.headers["content-type"] == "video/mp4"
+    assert client.head(f"/api/tasks/{cid}/dubbed").status_code == 204
+
+
+def test_download_dubbed_video_reports_unavailable_artifact(client):
+    cid = client.post("/api/tasks", json=_payload(ttsEnabled=True)).json()["id"]
+    client._store.update(
+        cid, status="SUCCESS", progress=100, tts_status="SUCCESS",
+        output_dubbed_video="output_dubbed.mp4",
+    )
+
+    response = client.get(f"/api/tasks/{cid}/dubbed")
+    assert response.status_code == 409
+    assert response.json()["detail"] == "配音视频不可用"
+    assert client.head(f"/api/tasks/{cid}/dubbed").status_code == 409
+
+
 def test_download_keeps_not_generated_message_for_running_task(client):
     """非 SUCCESS 任务（流水线还在跑）下载应仍返回'尚未生成'，不动 resource_status。"""
     cid = client.post("/api/tasks", json=_payload()).json()["id"]
@@ -744,6 +1259,10 @@ def test_probe_returns_probe_result_shape(client, monkeypatch):
         duration=9.0,
         formats_count=2,
         webpage_url="https://x/v",
+        available_qualities=["1080p", "720p"],
+        formats=[{"formatId": "f1", "resolution": "1080p"}],
+        thumbnail="https://x/thumb.jpg",
+        uploader="Test Creator",
     )
     monkeypatch.setattr(tasks_routes, "probe_video", lambda url, **kw: fake)
 
@@ -756,6 +1275,10 @@ def test_probe_returns_probe_result_shape(client, monkeypatch):
     assert data["duration"] == 9.0
     assert data["formatsCount"] == 2
     assert data["webpageUrl"] == "https://x/v"
+    assert data["availableQualities"] == ["1080p", "720p"]
+    assert len(data["formats"]) == 1
+    assert data["thumbnail"] == "https://x/thumb.jpg"
+    assert data["uploader"] == "Test Creator"
     assert data["reason"] is None and data["detail"] is None
     assert data["cached"] is False
     # 落库：调用一次后历史记录里应能查到此条
@@ -765,6 +1288,88 @@ def test_probe_returns_probe_result_shape(client, monkeypatch):
     assert bool(records[0].ok) is True
     assert records[0].title == "P"
     assert records[0].formats_count == 2
+    assert records[0].available_qualities == ["1080p", "720p"]
+    assert records[0].thumbnail == "https://x/thumb.jpg"
+    assert records[0].uploader == "Test Creator"
+
+
+def test_manual_probe_updates_shared_startup_status(client, monkeypatch):
+    fake = ProbeResult(ok=True, title="Manual YouTube", formats_count=1)
+    monkeypatch.setattr(tasks_routes, "probe_video", lambda url, **kw: fake)
+
+    response = client.post(
+        "/api/tasks/probe",
+        json={"url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ"},
+    )
+    assert response.status_code == 200
+
+    status = client.get("/api/tasks/probe/startup-status").json()
+    youtube = next(site for site in status["sites"] if site["id"] == "youtube")
+    assert youtube["status"] == "ok"
+    assert youtube["source"] == "manual"
+    assert youtube["result"]["title"] == "Manual YouTube"
+
+
+def test_probe_forwards_whitelisted_browser_cookie_source(client, monkeypatch):
+    import dataclasses
+
+    captured = {}
+    fake = ProbeResult(ok=True, title="P", formats_count=1)
+    monkeypatch.setattr(
+        tasks_routes,
+        "settings",
+        dataclasses.replace(tasks_routes.settings, _allow_cookies_from_browser=True),
+    )
+
+    def fake_probe(url, **kwargs):
+        captured.update(kwargs)
+        return fake
+
+    monkeypatch.setattr(tasks_routes, "probe_video", fake_probe)
+    r = client.post(
+        "/api/tasks/probe",
+        json={"url": "https://x/v", "cookiesFromBrowser": "chrome"},
+    )
+    assert r.status_code == 200
+    assert captured == {"cookies_from_browser": "chrome"}
+    assert "cookiesFromBrowser" not in r.json()
+    assert "profile" not in r.text.lower()
+
+
+def test_probe_rejects_invalid_browser_cookie_source(client):
+    r = client.post(
+        "/api/tasks/probe",
+        json={"url": "https://x/v", "cookiesFromBrowser": "/tmp/profile"},
+    )
+    assert r.status_code == 422
+
+
+def test_probe_rejects_browser_cookies_when_disabled(client, monkeypatch):
+    import dataclasses
+
+    monkeypatch.setattr(
+        tasks_routes,
+        "settings",
+        dataclasses.replace(tasks_routes.settings, _allow_cookies_from_browser=False),
+    )
+    r = client.post(
+        "/api/tasks/probe",
+        json={"url": "https://x/v", "cookiesFromBrowser": "chrome"},
+    )
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "BROWSER_COOKIES_DISABLED"
+    assert "profile" not in r.text.lower()
+
+
+def test_create_task_with_custom_quality(client):
+    """POST /api/tasks 支持指定 quality 参数。"""
+    payload = _payload(quality="1080p")
+    r = client.post("/api/tasks", json=payload)
+    assert r.status_code == 201
+    data = r.json()
+    assert data["quality"] == "1080p"
+    rec = client._store.get(data["id"])
+    assert rec.quality == "1080p"
 
 
 def test_probe_failure_response(client, monkeypatch):
@@ -785,6 +1390,30 @@ def test_probe_failure_response(client, monkeypatch):
     assert bool(records[0].ok) is False
     assert records[0].reason == "yt-dlp 暂不支持这个网站或链接"
     assert records[0].detail == "Unsupported URL"
+
+
+def test_manual_probe_still_runs_in_debug_mode(client, monkeypatch):
+    import dataclasses
+
+    called = []
+    fake = ProbeResult(ok=False, reason="网络不可用", detail="offline")
+    monkeypatch.setattr(
+        tasks_routes,
+        "settings",
+        dataclasses.replace(tasks_routes.settings, _debug=True),
+    )
+
+    def fake_probe(url, **_kwargs):
+        called.append(url)
+        return fake
+
+    monkeypatch.setattr(tasks_routes, "probe_video", fake_probe)
+
+    response = client.post("/api/tasks/probe", json={"url": "https://example.com/offline"})
+
+    assert response.status_code == 200
+    assert called == ["https://example.com/offline"]
+    assert response.json()["reason"] == "网络不可用"
 
 
 def test_probe_rejects_empty_url_422(client):
@@ -817,7 +1446,7 @@ def test_list_probe_records_default_limit(client, monkeypatch):
     assert set(data[0].keys()) == {
         "id", "url", "ok", "title", "extractor", "duration",
         "formatsCount", "webpageUrl", "reason", "detail", "createdAt",
-        "language",
+        "language", "availableQualities", "formats", "thumbnail", "uploader",
     }
 
 
@@ -869,6 +1498,33 @@ def test_delete_probe_record(client, monkeypatch):
 def test_delete_probe_record_404_when_missing(client):
     res = client.delete("/api/tasks/probe/records/probe_doesnotexist")
     assert res.status_code == 404
+
+
+def test_get_probe_startup_status(client):
+    res = client.get("/api/tasks/probe/startup-status")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["state"] in {"idle", "disabled", "running", "completed"}
+    assert data["total"] == 10
+    assert len(data["sites"]) == 10
+    assert {site["id"] for site in data["sites"]} == {
+        "youtube", "vimeo", "dailymotion", "twitch", "tiktok",
+        "twitter", "instagram", "acfun", "niconico", "pornhub",
+    }
+
+
+def test_get_ytdlp_info(client):
+    """GET /api/tasks/probe/ytdlp-info 应返回提取器数量、版本和配置参数。"""
+    res = client.get("/api/tasks/probe/ytdlp-info")
+    assert res.status_code == 200
+    data = res.json()
+    assert "version" in data
+    assert "extractorsCount" in data
+    assert data["extractorsCount"] > 0
+    assert "proxyConfigured" in data
+    assert "cacheTtlSec" in data
+    assert isinstance(data["cacheTtlSec"], (int, float))
+    assert isinstance(data["browserCookiesEnabled"], bool)
 
 
 # ---------- /api/tasks/upload 上传端点边界 ----------
@@ -1032,15 +1688,16 @@ def test_upload_calls_enqueue_with_task_id(client, monkeypatch):
     assert enqueued == [data["id"]]
 
 
-def test_upload_content_length_exceeds_max_413(client, monkeypatch):
-    """Content-Length 超过 max_upload_mb 限制时直接返回 413。"""
+def test_upload_allows_file_when_multipart_content_length_exceeds_max(client, monkeypatch):
+    """multipart 总长度超过上限时，只要实际视频未超限仍应允许上传。"""
     import dataclasses
+
     enqueued = []
     monkeypatch.setattr(tasks_routes, "enqueue_pipeline", enqueued.append)
     s = dataclasses.replace(tasks_routes.settings, max_upload_mb=1)
     monkeypatch.setattr(tasks_routes, "settings", s)
 
-    # 发送请求并带 Content-Length header 2MB (> 1MB)
+    # 模拟 multipart 封装开销使请求总长度超过 1MB，但文件实际只有 4 字节。
     r = client.post(
         "/api/tasks/upload",
         headers={"Content-Length": str(2 * 1024 * 1024)},
@@ -1051,12 +1708,8 @@ def test_upload_content_length_exceeds_max_413(client, monkeypatch):
         },
         files={"file": ("clip.mp4", b"VIDEO", "video/mp4")},
     )
-    assert r.status_code == 413
-    detail = r.json()["detail"]
-    assert detail["code"] == "UPLOAD_TOO_LARGE"
-    assert "超过最大限制" in detail["message"]
-    assert detail["limits"]["maxMb"] == 1
-    assert enqueued == []
+    assert r.status_code == 201
+    assert enqueued == [r.json()["id"]]
 
 
 def test_upload_streaming_bytes_exceeds_max_413_and_cleanup(client, monkeypatch):

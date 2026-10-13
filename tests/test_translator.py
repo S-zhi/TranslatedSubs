@@ -28,6 +28,21 @@ def fake_settings(monkeypatch):
         translate_timeout=10,
     )
     monkeypatch.setattr(translator, "settings", s)
+    engine = SimpleNamespace(
+        api_type="openai_compatible", api_key="test-key",
+        base_url="https://api.deepseek.com", model="deepseek-chat", timeout=10,
+    )
+
+    class FakeEngineClient:
+        def complete(self, system, user):
+            return translator._call_deepseek(
+                [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                api_key=engine.api_key, base_url=engine.base_url,
+                model=engine.model, timeout=engine.timeout,
+            )
+
+    monkeypatch.setattr(translator, "make_engine_client", lambda _config: FakeEngineClient())
+    s.engine_config = engine
     return s
 
 
@@ -76,6 +91,7 @@ def test_translate_texts_batches(fake_settings, monkeypatch):
     out = translate_texts(
         ["a", "b", "c"], "auto", "zh-CN",
         on_batch=lambda done, total: seen.append((done, total)),
+        engine_config=fake_settings.engine_config,
     )
     assert out == ["T-a", "T-b", "T-c"]
     # batch_size=2 -> 两批：(2,3) 和 (3,3)
@@ -99,7 +115,7 @@ def test_translate_texts_retry_on_mismatch_then_fail(fake_settings, monkeypatch)
     """数量不匹配时自动减半重试；即使单条也失败时才抛错。"""
     monkeypatch.setattr(translator, "_call_deepseek", lambda *a, **k: json.dumps([]))
     with pytest.raises(TranslateError, match="单条"):
-        translate_texts(["a", "b"], "auto", "zh-CN")
+        translate_texts(["a", "b"], "auto", "zh-CN", engine_config=fake_settings.engine_config)
 
 
 def test_translate_texts_retry_succeeds_after_halving(fake_settings, monkeypatch):
@@ -116,7 +132,7 @@ def test_translate_texts_retry_succeeds_after_halving(fake_settings, monkeypatch
         return json.dumps(["ok"] * count)
 
     monkeypatch.setattr(translator, "_call_deepseek", fake)
-    result = translate_texts(["a", "b"], "auto", "zh-CN")
+    result = translate_texts(["a", "b"], "auto", "zh-CN", engine_config=fake_settings.engine_config)
     # 第一一次调用 (batch size 2) 返回了 ["only-one"]，对齐到了 index 0 ("a")，
     # 拆分后 right 子批 ("b") 仅调用 1 次，left 子批 ("a") 命中了 partial 缓存无需再次调用 LLM！
     assert result == ["only-one", "ok"]
@@ -139,7 +155,7 @@ def test_translate_texts_dedup_partial_hit(fake_settings, monkeypatch):
     monkeypatch.setattr(translator, "_call_deepseek", fake)
     # batch_size 为 4
     monkeypatch.setattr(translator.settings, "translate_batch_size", 4)
-    result = translate_texts(["item1", "item2", "item3", "item4"], "auto", "zh-CN")
+    result = translate_texts(["item1", "item2", "item3", "item4"], "auto", "zh-CN", engine_config=fake_settings.engine_config)
 
     assert result == ["T-1", "T-2", "T-item3", "T-item4"]
     # 第一次 4 条 -> 只命中前 2 条 (T-1, T-2)
@@ -173,6 +189,7 @@ def test_translate_texts_partial_response_falls_back_without_losing_results(fake
         "auto",
         "zh-CN",
         on_batch=lambda done, total: progress.append((done, total)),
+        engine_config=fake_settings.engine_config,
     )
 
     assert result == ["translated-1", "translated-2", "translated-3", "item4"]
@@ -237,6 +254,78 @@ def test_translate_srt_empty(tmp_path, out_dir):
     assert res.srt_path.exists()
 
 
+def test_translate_texts_uses_explicit_remote_batch_size(monkeypatch):
+    calls = []
+
+    def fake_fallback(batch, source_lang, target_lang, api_key, **kwargs):
+        calls.append(list(batch))
+        return [f"译:{text}" for text in batch]
+
+    monkeypatch.setattr(translator, "_translate_with_fallback", fake_fallback)
+    monkeypatch.setattr(
+        translator,
+        "settings",
+        SimpleNamespace(translate_batch_size=99, deepseek_api_key="legacy"),
+    )
+
+    translated = translator.translate_texts(
+        ["a", "b", "c", "d", "e"], "en", "zh-CN",
+        api_key="snapshot-key",
+        engine_config=SimpleNamespace(
+            api_type="openai_compatible", api_key="snapshot-key"
+        ),
+        batch_size=2,
+    )
+
+    assert translated == ["译:a", "译:b", "译:c", "译:d", "译:e"]
+    assert calls == [["a", "b"], ["c", "d"], ["e"]]
+
+
+def test_translate_texts_uses_explicit_local_batch_size(monkeypatch):
+    calls = []
+
+    class FakeManager:
+        def translate_texts(self, texts, *, cancel_check=None):
+            calls.append(list(texts))
+            return [f"译:{text}" for text in texts]
+
+    monkeypatch.setattr(translator, "get_translation_model_manager", FakeManager)
+    monkeypatch.setattr(
+        translator,
+        "settings",
+        SimpleNamespace(local_translate_batch_size=99),
+    )
+
+    translated = translator.translate_texts(
+        ["a", "b", "c", "d", "e"], "en", "zh-CN",
+        engine_config=SimpleNamespace(api_type="local_ct2"),
+        local_batch_size=2,
+    )
+
+    assert translated == ["译:a", "译:b", "译:c", "译:d", "译:e"]
+    assert calls == [["a", "b"], ["c", "d"], ["e"]]
+
+
+def test_translation_fallback_prioritizes_cancellation(monkeypatch):
+    from src.plugin_system import PluginCancelled
+
+    monkeypatch.setattr(
+        translator,
+        "_translate_batch_with_retry",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            TranslateError("bad response", code="invalid_response")
+        ),
+    )
+
+    def cancel_check():
+        raise PluginCancelled("cancelled")
+
+    with pytest.raises(PluginCancelled, match="cancelled"):
+        translator._translate_with_fallback(
+            ["hello"], "en", "zh-CN", "key", cancel_check=cancel_check,
+        )
+
+
 def test_lang_name_lookup_and_config_override(monkeypatch):
     """测试 ISO 语言名称的转换以及 SUBTRANS_LANG_NAMES 覆盖/扩展能力。"""
     from src.config.config import Settings, DEFAULT_LANG_NAMES
@@ -271,7 +360,7 @@ def test_call_deepseek_http_errors(fake_settings, monkeypatch):
 
     monkeypatch.setattr(httpx, "post", mock_post_401)
     with pytest.raises(TranslateError) as exc_info:
-        translate_texts(["hello"], "en", "zh-CN")
+        translate_texts(["hello"], "en", "zh-CN", engine_config=fake_settings.engine_config)
     assert exc_info.value.code == "unauthorized"
     assert "HTTP 401" in str(exc_info.value)
 
@@ -286,7 +375,7 @@ def test_call_deepseek_rate_limit(fake_settings, monkeypatch):
 
     monkeypatch.setattr(httpx, "post", mock_post_429)
     with pytest.raises(TranslateError) as exc_info:
-        translate_texts(["hello"], "en", "zh-CN")
+        translate_texts(["hello"], "en", "zh-CN", engine_config=fake_settings.engine_config)
     assert exc_info.value.code == "rate_limited"
 
 
@@ -298,7 +387,7 @@ def test_call_deepseek_network_error(fake_settings, monkeypatch):
 
     monkeypatch.setattr(httpx, "post", mock_post_network)
     with pytest.raises(TranslateError) as exc_info:
-        translate_texts(["hello"], "en", "zh-CN")
+        translate_texts(["hello"], "en", "zh-CN", engine_config=fake_settings.engine_config)
     assert exc_info.value.code == "network_error"
 
 
@@ -320,7 +409,7 @@ def test_fast_fail_on_permanent_errors(fake_settings, monkeypatch, status_code, 
 
     monkeypatch.setattr(httpx, "post", mock_post_err)
     with pytest.raises(TranslateError) as exc_info:
-        translate_texts(["a", "b", "c", "d"], "en", "zh-CN")
+        translate_texts(["a", "b", "c", "d"], "en", "zh-CN", engine_config=fake_settings.engine_config)
     assert exc_info.value.code == expected_code
     # 应立即抛出，不触发拆分重试 (只调用一次)
     assert called_count == 1
@@ -336,7 +425,7 @@ def test_fast_fail_on_insufficient_quota_error(fake_settings, monkeypatch):
 
     monkeypatch.setattr(translator, "_call_deepseek", fake_call)
     with pytest.raises(TranslateError) as exc_info:
-        translate_texts(["a", "b", "c", "d"], "en", "zh-CN")
+        translate_texts(["a", "b", "c", "d"], "en", "zh-CN", engine_config=fake_settings.engine_config)
     assert exc_info.value.code == "insufficient_quota"
     assert called_count == 1
 
@@ -353,7 +442,7 @@ def test_transient_error_continues_to_halve(fake_settings, monkeypatch):
     monkeypatch.setattr(translator, "_call_deepseek", fake_call)
     monkeypatch.setattr(translator.time, "sleep", sleeps.append)
     with pytest.raises(TranslateError) as exc_info:
-        translate_texts(["a", "b"], "en", "zh-CN")
+        translate_texts(["a", "b"], "en", "zh-CN", engine_config=fake_settings.engine_config)
     assert exc_info.value.code == "upstream_error"
     # 5xx 只在原批次上做有限退避重试，不再拆分成单条请求。
     assert called_count == 4
@@ -393,7 +482,7 @@ def test_network_error_retries_without_batch_fallback(fake_settings, monkeypatch
 
     monkeypatch.setattr(translator, "_call_deepseek", fake_call)
     with pytest.raises(TranslateError) as exc_info:
-        translate_texts(["a", "b"], "en", "zh-CN")
+        translate_texts(["a", "b"], "en", "zh-CN", engine_config=fake_settings.engine_config)
     assert exc_info.value.code == "network_error"
     # 初次请求 + 3 次重试；失败后不把批次递归减半。
     assert called_count == 4
@@ -409,7 +498,7 @@ def test_single_item_failure_line_index_message(fake_settings, monkeypatch):
 
     monkeypatch.setattr(translator, "_call_deepseek", fake_call)
     with pytest.raises(TranslateError) as exc_info:
-        translate_texts(["a"], "en", "zh-CN")
+        translate_texts(["a"], "en", "zh-CN", engine_config=fake_settings.engine_config)
     assert exc_info.value.code == "invalid_response"
     assert "第 1 条字幕翻译失败" in str(exc_info.value)
     assert called_count == 1

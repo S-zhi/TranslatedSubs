@@ -1,32 +1,31 @@
-"""任务相关路由（业务域：tasks）。
+"""Compatibility facade and router aggregation for task endpoints.
 
-新增其它业务时，仿照本文件建一个 APIRouter，再在 app.py 里 include 即可。
+The FastAPI endpoints are implemented in ``src.service.task`` modules.  This
+module intentionally keeps the historic import surface used by storage,
+tests, and integrations while exposing the single aggregate router.
 """
 
 from __future__ import annotations
 
-import json
-import logging
-import re
-import shutil
+import os
+
 import subprocess
 import sys
-import time
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi import HTTPException
 
 from src.config import (
     OUTPUT_VIDEO,
+    OUTPUT_VIDEO_NAMES,
     SOURCE_VIDEO_STEM,
     TRANSLATED_SRT,
     artifacts_present,
     settings,
     task_dir,
 )
-from src.core.downloader import probe_video
+from src.core.downloader import ProbeResult as CoreProbeResult
 from src.core.ffmpeg_utils import probe_duration
 from src.handler.subtitle_editor import release_lock
 from src.handler.deps import (
@@ -39,40 +38,166 @@ from src.handler.schemas import (
     ErrorDetail,
     ProbeRecordOut,
     ProbeRecordsClearOut,
+    ProbeBatchStatusOut,
     TaskCreate,
     TaskOut,
     TaskProbeIn,
     TaskProbeOut,
+    YtDlpEnvInfo,
     _probe_record_to_out,
     to_out,
 )
-from src.service.runner import cancel_pipeline, enqueue_pipeline
+from src.service.runner import _cleanup_partial_artifacts, cancel_pipeline, enqueue_pipeline
 from src.service.asset_resolver import AssetResolver, ResourceState
+from src.service.probe_batch import probe_batch_manager
+from src.service.translation_model_manager import get_translation_model_manager
+from src.service.model_runtime import resolve_engine as _resolve_engine
+from src.service.model_runtime import resolve_runtime as _resolve_runtime
+from src.service.task import task as _task
+from src.service.task import task_artifacts as _task_artifacts
+from src.service.task import task_lifecycle as _task_lifecycle
+from src.service.task import task_runtime as _task_runtime
 from src.store import (
     DOWNGRADE_REASON_DISK_FAILURE,
     DOWNGRADE_REASON_UNKNOWN,
-    DOWNGRADE_REASON_VOLUME_MIGRATED,
+    DEFAULT_TRANSLATION_ENGINE_ID,
     RESOURCE_STATUS_AVAILABLE,
     RESOURCE_STATUS_MISSING,
     ProbeStore,
     TaskStore,
     TranslationEngineStore,
 )
+from src.plugin_system import ProbeRequest, PluginCancelled, PluginError
+from src.service.plugin_plan import parse_plugin_plan, resolve_plugin_defaults, resolve_plugin_plan
+from src.plugins import get_plugin_manager
+import uuid
 
-logger = logging.getLogger(__name__)
+router = _task.router
 
-router = APIRouter(prefix="/api/tasks", tags=["tasks"])
+_BROWSER_PREVIEW_EXTENSIONS = _task._BROWSER_PREVIEW_EXTENSIONS
+_TERMINAL = _task._TERMINAL
+_DELETED_MESSAGE = _task._DELETED_MESSAGE
+_UPLOAD_VIDEO_EXTS = _task._UPLOAD_VIDEO_EXTS
 
-_TERMINAL = {"SUCCESS", "FAILED", "CANCELLED"}
 
-# 资源已丢失时给用户的简短、稳定错误文案，避免把文件系统异常 / 堆栈漏到 UI
-_DELETED_MESSAGE = "资源已删除"
+class _ProbeContext:
+    """Read-only invocation context for URL probes outside a task record."""
 
-# 允许上传的本地视频扩展名（小写，含点）
-_UPLOAD_VIDEO_EXTS = {
-    ".mp4", ".mov", ".mkv", ".webm", ".avi",
-    ".m4v", ".flv", ".ts", ".mpeg", ".mpg", ".wmv",
-}
+    def __init__(self, credential_resolver):
+        self._task_id = "probe"
+        self._invocation_id = str(uuid.uuid4())
+        self._task_dir = Path("/tmp/subtrans-plugin-probe")
+        self._credential_resolver = credential_resolver
+
+    @property
+    def task_id(self):
+        return self._task_id
+
+    @property
+    def invocation_id(self):
+        return self._invocation_id
+
+    @property
+    def task_dir(self):
+        return self._task_dir
+
+    @property
+    def purpose(self):
+        return "download"
+
+    def check_cancelled(self):
+        return None
+
+    def report_progress(self, percent):
+        return None
+
+    def register_process(self, proc):
+        return None
+
+    def unregister_process(self, proc):
+        return None
+
+    def resolve_credential(self, ref):
+        return self._credential_resolver(ref)
+
+
+def probe_video(url, *, cookies_from_browser=None, force_refresh=False):
+    """Compatibility wrapper that runs the configured download plugin probe."""
+    defaults = resolve_plugin_defaults()
+    raw_plan = resolve_plugin_plan(
+        source_type="url", source_lang="auto", target_lang="zh-CN",
+        mode="mono", burn="hard", model="local:tiny",
+        engine=DEFAULT_TRANSLATION_ENGINE_ID, need_subtitle=False,
+        quality="480p", tts_enabled=False, tts_voice="auto",
+        original_voice_mode="keep", settings=settings,
+        plugin_defaults=defaults,
+    )
+    slot = parse_plugin_plan(raw_plan)["slots"]["download"]
+
+    def resolve_credential(ref):
+        if ref == "settings:cookies_file":
+            value = getattr(settings, "cookies_file", None)
+            if isinstance(value, (str, os.PathLike)):
+                path = os.fspath(value)
+                if path:
+                    return path
+        raise PluginError("credential_missing", "download", slot["plugin_id"], "credential is unavailable")
+
+    context = _ProbeContext(resolve_credential)
+    try:
+        result = get_plugin_manager().run_probe(
+            slot["plugin_id"], slot["implementation_version"],
+            ProbeRequest(url=url, force_refresh=bool(force_refresh), cookies_from_browser=cookies_from_browser),
+            slot["config"], context,
+        )
+    except PluginCancelled as exc:
+        raise RuntimeError("probe cancelled") from exc
+    formats = [
+        {
+            "formatId": item.formatId, "ext": item.ext, "resolution": item.resolution,
+            "height": item.height, "width": item.width, "fps": item.fps,
+            "vcodec": item.vcodec, "acodec": item.acodec, "filesize": item.filesize,
+            "tbr": item.tbr, "note": item.note, "type": item.type,
+        }
+        for item in result.formats
+    ]
+    return CoreProbeResult(
+        ok=result.ok, title=result.title, extractor=result.extractor,
+        duration=result.duration, formats_count=result.formats_count,
+        webpage_url=result.webpage_url, reason=result.reason, detail=result.detail,
+        cached=result.cached, language=result.language,
+        available_qualities=list(result.available_qualities), formats=formats,
+        thumbnail=result.thumbnail, uploader=result.uploader,
+    )
+
+# Legacy endpoint names remain available as direct callables for existing
+# tests and integrations.  Route registration itself happens only in service
+# modules.
+create_task = _task_lifecycle.create_task_route
+create_upload_task = _task_lifecycle.create_upload_task_route
+list_tasks = _task_lifecycle.list_tasks_route
+get_task = _task_lifecycle.get_task_route
+probe_task = _task_lifecycle.probe_task_route
+get_probe_startup_status = _task_lifecycle.get_probe_startup_status_route
+list_probe_records = _task_lifecycle.list_probe_records_route
+clear_probe_records = _task_lifecycle.clear_probe_records_route
+delete_probe_record = _task_lifecycle.delete_probe_record_route
+get_ytdlp_info = _task_lifecycle.get_ytdlp_info_route
+delete_task = _task_lifecycle.delete_task_route
+cancel_task = _task_lifecycle.cancel_task_route
+retry_task = _task_lifecycle.retry_task_route
+check_source_video = _task_artifacts.check_source_video_route
+download_source_video = _task_artifacts.download_source_video_route
+check_download_video = _task_artifacts.check_download_video_route
+download_video = _task_artifacts.download_video_route
+check_dubbed_video = _task_artifacts.check_dubbed_video_route
+download_dubbed_video = _task_artifacts.download_dubbed_video_route
+download_subtitle = _task_artifacts.download_subtitle_route
+open_task_folder = _task_artifacts.open_task_folder_route
+folder_capability = _task_artifacts.folder_capability_route
+list_task_files = _task_artifacts.list_task_files_route
+get_task_file = _task_artifacts.get_task_file_route
+stream_progress = _task_runtime.stream_progress_route
 
 
 def _upload_error(
@@ -83,20 +208,17 @@ def _upload_error(
     limits: Optional[dict] = None,
     suggestion: Optional[str] = None,
 ) -> HTTPException:
-    detail = ErrorDetail(
+    return _task._upload_error(
+        status_code,
         code=code,
         message=message,
         limits=limits,
         suggestion=suggestion,
-    ).model_dump(exclude_none=True)
-    return HTTPException(status_code=status_code, detail=detail)
+    )
 
 
 def _require(store: TaskStore, task_id: str):
-    rec = store.get(task_id)
-    if rec is None:
-        raise HTTPException(status_code=404, detail="任务不存在")
-    return rec
+    return _task._require(store, task_id)
 
 
 def _mark_resource_missing(
@@ -104,18 +226,18 @@ def _mark_resource_missing(
     task_id: str,
     reason: str,
     downgrade_reason: str = DOWNGRADE_REASON_UNKNOWN,
+    downgrade_errno: Optional[int] = None,
 ) -> None:
-    """把一个任务的 resource_status 幂等地置为 MISSING。"""
-    rec = store.get(task_id)
-    if rec is None or rec.resource_status == RESOURCE_STATUS_MISSING:
-        return
-    store.update(
+    _task_runtime.mark_resource_missing(
+        store,
         task_id,
-        resource_status=RESOURCE_STATUS_MISSING,
-        error=reason,
+        reason,
         downgrade_reason=downgrade_reason,
-        downgraded_at=int(time.time() * 1000),
+        downgrade_errno=downgrade_errno,
     )
+
+
+_ensure_local_model_ready = _task._ensure_local_model_ready
 
 
 def _ensure_translation_engine(
@@ -123,24 +245,44 @@ def _ensure_translation_engine(
     need_subtitle: bool,
     engines: TranslationEngineStore,
 ) -> None:
-    if not need_subtitle:
-        return
-    if engine == "deepseek":
-        if not (settings.deepseek_api_key and settings.deepseek_api_key.strip()):
-            raise HTTPException(
-                status_code=422,
-                detail="缺少 DeepSeek API Key，请在 .env 配置 SUBTRANS_DEEPSEEK_API_KEY",
-            )
-        return
-    rec = engines.get(engine)
-    if rec is None:
-        raise HTTPException(status_code=422, detail="翻译引擎配置不存在")
-    if not rec.enabled:
-        raise HTTPException(status_code=422, detail="翻译引擎已停用")
-    if not (rec.api_key and rec.api_key.strip()):
-        raise HTTPException(status_code=422, detail="翻译引擎尚未配置 API Key")
-    if rec.availability != "AVAILABLE":
-        raise HTTPException(status_code=422, detail="翻译引擎尚未通过可用性检测")
+    # The shared resolver is the validation source for task creation.  Keep
+    # this historic helper for callers/tests that invoke it directly.
+    model_store = None
+    if getattr(engines, "db_path", None) is not None:
+        from src.store.model_settings_store import ModelSettingsStore
+        model_store = ModelSettingsStore(engines.db_path)
+    _resolve_engine(
+        engine, need_subtitle, engines, model_store=model_store,
+        compat_settings=settings,
+        translation_model_manager=get_translation_model_manager(),
+    )
+
+
+def resolve_runtime(**kwargs):
+    """Resolve and snapshot all model routing for a newly created task."""
+    kwargs.setdefault("compat_settings", settings)
+    kwargs.setdefault("translation_model_manager", get_translation_model_manager())
+    if "model_store" not in kwargs:
+        engines = kwargs.get("engines")
+        # The model store is Redis-backed too. Only preserve a path when an
+        # explicitly injected legacy engine store supplies one; never consult
+        # settings.db_path (that now belongs to one-time bootstrap/migration).
+        db_path = getattr(engines, "db_path", None)
+        if db_path is not None:
+            from src.store.model_settings_store import ModelSettingsStore
+            kwargs["model_store"] = ModelSettingsStore(db_path)
+    return _resolve_runtime(**kwargs)
+
+# 确保支持的语言翻译
+def _ensure_supported_translation_languages(
+    engine: str,
+    need_subtitle: bool,
+    source_lang: str,
+    target_lang: str,
+) -> None:
+    return _task._ensure_supported_translation_languages(
+        engine, need_subtitle, source_lang, target_lang
+    )
 
 
 def scan_missing_terminal(
@@ -150,539 +292,88 @@ def scan_missing_terminal(
     data_dir=None,
     downgrade_reason: Optional[str] = None,
 ) -> List[str]:
-    """扫描终态 SUCCESS 任务，把磁盘产物已丢失的降级为 MISSING。
-
-    幂等：已为 MISSING 的不再处理；运行中任务（status != SUCCESS）忽略。
-    若指定 task_id，则仅针对该任务执行单任务降级检测。
-    返回被降级的 task_id 列表，便于启动日志 / 测试断言 / 资源清理。
-    """
-    data_path = Path(data_dir if data_dir is not None else settings.data_dir)
-    downgraded: List[str] = []
-    if task_id is not None:
-        target = store.get(task_id)
-        recs = [target] if target is not None else []
-    else:
-        recs = store.list()
-
-    success_count = sum(1 for rec in recs if rec.status == "SUCCESS")
-    try:
-        data_root_unavailable = not data_path.exists()
-    except OSError:
-        data_root_unavailable = True
-
-    for rec in recs:
-        if rec.status != "SUCCESS":
-            continue
-        if rec.resource_status == RESOURCE_STATUS_MISSING:
-            continue
-
-        need_sub = bool(rec.need_subtitle)
-        if need_sub:
-            state_out, _, _ = AssetResolver.resolve_output_video(rec.id)
-            state_srt, _, _ = AssetResolver.resolve_translated_srt(rec.id)
-            if state_out == ResourceState.AVAILABLE and state_srt == ResourceState.AVAILABLE:
-                continue
-            unreadable = state_out == ResourceState.UNREADABLE or state_srt == ResourceState.UNREADABLE
-        else:
-            state_src, _, _ = AssetResolver.resolve_source(rec.id)
-            if state_src == ResourceState.AVAILABLE:
-                continue
-            unreadable = state_src == ResourceState.UNREADABLE
-
-        error_msg = "资源不可读" if unreadable else _DELETED_MESSAGE
-        if downgrade_reason is not None:
-            audit_reason = downgrade_reason
-        elif unreadable:
-            audit_reason = DOWNGRADE_REASON_DISK_FAILURE
-        elif data_root_unavailable and success_count > 1:
-            audit_reason = DOWNGRADE_REASON_VOLUME_MIGRATED
-        else:
-            audit_reason = DOWNGRADE_REASON_UNKNOWN
-
-        store.update(
-            rec.id,
-            resource_status=RESOURCE_STATUS_MISSING,
-            error=error_msg,
-            downgrade_reason=audit_reason,
-            downgraded_at=int(time.time() * 1000),
-        )
-        downgraded.append(rec.id)
-    return downgraded
-
-
-# ---------- CRUD ----------
-
-@router.post("", response_model=TaskOut, status_code=201, dependencies=[Depends(require_api_token)])
-def create_task(
-    body: TaskCreate,
-    store: TaskStore = Depends(get_store),
-    engines: TranslationEngineStore = Depends(get_translation_engine_store),
-) -> TaskOut:
-    _ensure_translation_engine(body.engine, body.needSubtitle, engines)
-    rec, created = store.create_if_no_recent_active(
-        url=body.url,
-        source_lang=body.sourceLang,
-        target_lang=body.targetLang,
-        mode=body.mode,
-        burn=body.burn,
-        model=body.model,
-        engine=body.engine,
-        need_subtitle=body.needSubtitle,
-    )
-    if not created:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "TASK_ALREADY_RUNNING",
-                "message": "该 URL 已有任务正在处理，请复用现有 task_id",
-                "taskId": rec.id,
-            },
-        )
-    enqueue_pipeline(rec.id)  # 第 2 步接入真正执行
-    return to_out(rec)
-
-
-@router.post("/upload", response_model=TaskOut, status_code=201, dependencies=[Depends(require_api_token)])
-def create_upload_task(
-    request: Request,
-    file: UploadFile = File(..., description="本地视频文件"),
-    sourceLang: str = Form("auto", min_length=1),
-    targetLang: str = Form("zh-CN", min_length=1),
-    mode: Literal["mono", "bilingual"] = Form("mono"),
-    burn: Literal["hard", "soft"] = Form("hard"),
-    model: str = Form("small", min_length=1),
-    engine: str = Form("deepseek", min_length=1),
-    needSubtitle: bool = Form(True),
-    store: TaskStore = Depends(get_store),
-    engines: TranslationEngineStore = Depends(get_translation_engine_store),
-) -> TaskOut:
-    """上传本地视频并创建任务：源文件直接落盘，跳过下载，走后续识别 / 翻译 / 烧录。
-
-    字幕模式（mode）与烧录方式（burn）与链接任务同样透传到下层流水线。
-    """
-    max_upload_bytes = settings.max_upload_mb * 1024 * 1024
-    content_length_hdr = request.headers.get("content-length")
-    if content_length_hdr:
-        try:
-            if int(content_length_hdr) > max_upload_bytes:
-                raise _upload_error(
-                    413,
-                    code="UPLOAD_TOO_LARGE",
-                    message=f"上传文件大小超过最大限制 ({settings.max_upload_mb} MB)",
-                    limits={"maxMb": settings.max_upload_mb},
-                    suggestion="请压缩或切分视频，也可以改用 URL 任务模式。",
-                )
-        except ValueError:
-            pass
-
-    filename = (file.filename or "").strip()
-    _ensure_translation_engine(engine, needSubtitle, engines)
-    ext = Path(filename).suffix.lower()
-    if ext not in _UPLOAD_VIDEO_EXTS:
-        supported_formats = sorted(_UPLOAD_VIDEO_EXTS)
-        raise _upload_error(
-            400,
-            code="UNSUPPORTED_FORMAT",
-            message=f"不支持的视频格式：{ext or '未知'}（支持 {', '.join(supported_formats)}）",
-            limits={"supportedFormats": supported_formats},
-            suggestion="请将视频转换为受支持的格式后重新上传。",
-        )
-
-    # 先建记录拿到 task_id，再把源文件落盘到该任务目录
-    rec = store.create(
-        url=filename,
-        source_lang=sourceLang,
-        target_lang=targetLang,
-        mode=mode,
-        burn=burn,
-        model=model,
-        engine=engine,
-        source_type="upload",
-        need_subtitle=needSubtitle,
-        title=Path(filename).stem or "上传的视频",
-    )
-
-    d = task_dir(rec.id)
-    d.mkdir(parents=True, exist_ok=True)
-    dest_part = d / f"{SOURCE_VIDEO_STEM}{ext}.part"
-    dest = d / f"{SOURCE_VIDEO_STEM}{ext}"
-    written_bytes = 0
-    chunk_size = 1024 * 1024  # 1MB
-    try:
-        with dest_part.open("wb") as out:
-            while True:
-                chunk = file.file.read(chunk_size)
-                if not chunk:
-                    break
-                written_bytes += len(chunk)
-                if written_bytes > max_upload_bytes:
-                    raise _upload_error(
-                        413,
-                        code="UPLOAD_TOO_LARGE",
-                        message=f"上传文件大小超过最大限制 ({settings.max_upload_mb} MB)",
-                        limits={"maxMb": settings.max_upload_mb},
-                        suggestion="请压缩或切分视频，也可以改用 URL 任务模式。",
-                    )
-                out.write(chunk)
-    except HTTPException:
-        store.delete(rec.id)
-        shutil.rmtree(d, ignore_errors=True)
-        raise
-    except Exception as e:
-        store.delete(rec.id)
-        shutil.rmtree(d, ignore_errors=True)
-        raise HTTPException(status_code=500, detail="保存上传文件失败") from e
-    finally:
-        file.file.close()
-
-    if not dest_part.exists() or dest_part.stat().st_size == 0:
-        store.delete(rec.id)
-        shutil.rmtree(d, ignore_errors=True)
-        raise HTTPException(status_code=400, detail="上传的视频文件为空")
-
-    duration_sec = probe_duration(dest_part, settings.ffprobe_bin)
-    if duration_sec is None:
-        store.delete(rec.id)
-        shutil.rmtree(d, ignore_errors=True)
-        raise HTTPException(
-            status_code=400,
-            detail="无法解析视频时长，请确认文件格式正确且 ffprobe 可用",
-        )
-
-    max_video_seconds = settings.max_video_minutes * 60
-    if duration_sec > max_video_seconds:
-        store.delete(rec.id)
-        shutil.rmtree(d, ignore_errors=True)
-        release_lock(rec.id)
-        raise _upload_error(
-            400,
-            code="UPLOAD_DURATION_EXCEEDED",
-            message=f"视频时长 ({duration_sec / 60:.1f} 分钟) 超过最大限制 ({settings.max_video_minutes} 分钟)",
-            limits={
-                "maxMinutes": settings.max_video_minutes,
-                "durationMinutes": round(duration_sec / 60, 1),
-            },
-            suggestion="请裁剪或切分视频后重新上传。",
-        )
-
-    dest_part.replace(dest)
-
-    enqueue_pipeline(rec.id)
-    return to_out(store.get(rec.id) or rec)
-
-
-@router.get("", response_model=List[TaskOut])
-def list_tasks(
-    offset: int = Query(0, ge=0, description="跳过前 N 条记录"),
-    limit: int = Query(50, ge=1, le=200, description="单页最大记录数，取值范围 1 到 200，默认 50"),
-    before_id: Optional[str] = Query(None, description="游标：仅返回 ID 早于该任务的记录"),
-    after_id: Optional[str] = Query(None, description="游标：仅返回 ID 晚于该任务的记录"),
-    store: TaskStore = Depends(get_store),
-) -> List[TaskOut]:
-    return [
-        to_out(r)
-        for r in store.list(
-            limit=limit,
-            offset=offset,
-            before_id=before_id,
-            after_id=after_id,
-        )
-    ]
-
-
-@router.get("/{task_id}", response_model=TaskOut)
-def get_task(task_id: str, store: TaskStore = Depends(get_store)) -> TaskOut:
-    return to_out(_require(store, task_id))
-
-
-@router.post("/probe", response_model=TaskProbeOut, dependencies=[Depends(require_api_token)])
-def probe_task(
-    body: TaskProbeIn,
-    probes: ProbeStore = Depends(get_probe_store),
-) -> TaskProbeOut:
-    """探测视频链接是否能被 yt-dlp 解析并找到可下载格式。
-
-    每次探测都持久化一行到 probe_records，便于用户回看历史、
-    排查"链接换格式还是不可下载"等问题。失败也会记录（含 reason/detail），
-    错误信息不会因为页面刷新而丢失。
-    """
-    result = probe_video(body.url)
-    # 探测本身失败不影响响应；同时把 ok=False 的记录也存下来，方便回看错误
-    probes.record(
-        url=body.url,
-        ok=result.ok,
-        title=result.title,
-        extractor=result.extractor,
-        duration=result.duration,
-        formats_count=result.formats_count,
-        webpage_url=result.webpage_url,
-        reason=result.reason,
-        detail=result.detail,
-        language=result.language,
-    )
-    return TaskProbeOut(
-        ok=result.ok,
-        title=result.title,
-        extractor=result.extractor,
-        duration=result.duration,
-        formatsCount=result.formats_count,
-        webpageUrl=result.webpage_url,
-        reason=result.reason,
-        detail=result.detail,
-        cached=result.cached,
-        language=result.language,
+    return _task_runtime.scan_missing_terminal(
+        store,
+        task_id=task_id,
+        data_dir=data_dir,
+        settings=settings,
+        downgrade_reason=downgrade_reason,
     )
 
 
-@router.get("/probe/records", response_model=List[ProbeRecordOut])
-def list_probe_records(
-    limit: int = Query(50, ge=1, le=500),
-    probes: ProbeStore = Depends(get_probe_store),
-) -> List[ProbeRecordOut]:
-    """按时间倒序返回最近的下载测试记录。limit 默认 50，上限 500。"""
-    return [_probe_record_to_out(r) for r in probes.list(limit=limit)]
-
-
-@router.delete("/probe/records", response_model=ProbeRecordsClearOut, dependencies=[Depends(require_api_token)])
-def clear_probe_records(
-    probes: ProbeStore = Depends(get_probe_store),
-) -> ProbeRecordsClearOut:
-    """一键清空所有下载测试历史。"""
-    deleted = probes.clear()
-    return ProbeRecordsClearOut(deleted=deleted)
-
-
-@router.delete("/probe/records/{record_id}", status_code=204, dependencies=[Depends(require_api_token)])
-def delete_probe_record(
-    record_id: str,
-    probes: ProbeStore = Depends(get_probe_store),
-) -> None:
-    """删除单条下载测试历史；不存在返回 404。"""
-    if not probes.delete(record_id):
-        raise HTTPException(status_code=404, detail="测试记录不存在")
-
-
-@router.delete("/{task_id}", status_code=204, dependencies=[Depends(require_api_token)])
-def delete_task(task_id: str, store: TaskStore = Depends(get_store)) -> None:
-    rec = _require(store, task_id)
-    if rec.status not in _TERMINAL:
-        raise HTTPException(
-            status_code=409,
-            detail="任务运行中，请先等待或调用取消接口",
-        )
-    store.delete(task_id)
-    shutil.rmtree(task_dir(task_id), ignore_errors=True)  # 连产物目录一起清
-    release_lock(task_id)
-
-
-@router.post("/{task_id}/cancel", response_model=TaskOut, dependencies=[Depends(require_api_token)])
-def cancel_task(task_id: str, store: TaskStore = Depends(get_store)) -> TaskOut:
-    """取消正在运行的任务。"""
-    rec = _require(store, task_id)
-    if rec.status in _TERMINAL:
-        raise HTTPException(status_code=409, detail="任务非运行状态，无法取消")
-    cancel_pipeline(task_id)
-    updated = store.get(task_id) or rec
-    return to_out(updated)
-
-
-@router.post("/{task_id}/retry", response_model=TaskOut, dependencies=[Depends(require_api_token)])
-def retry_task(task_id: str, store: TaskStore = Depends(get_store)) -> TaskOut:
-    """仅允许失败或已取消任务重新入队，避免运行中任务重复执行。"""
-    rec = _require(store, task_id)
-    if rec.status not in ("FAILED", "CANCELLED"):
-        raise HTTPException(status_code=409, detail="只有失败或已取消任务可以重试")
-    updated = store.update(
+def _resolve_video(task_id: str, mode: str | None = None):
+    return _task_artifacts.resolve_video(
         task_id,
-        status="PENDING",
-        progress=0,
-        current_step=None,
-        error=None,
-    )
-    enqueue_pipeline(task_id)
-    return to_out(updated)
-
-
-# ---------- 文件下载 ----------
-
-@router.head("/{task_id}/source", status_code=204)
-def check_source_video(task_id: str, store: TaskStore = Depends(get_store)):
-    """轻量确认源视频是否可用，避免前端先展示原生播放器加载态。"""
-    download_source_video(task_id, store)
-    return Response(status_code=204)
-
-
-@router.get("/{task_id}/source")
-def download_source_video(task_id: str, store: TaskStore = Depends(get_store)):
-    """返回未烧录字幕的源视频，供预览页在两个视频轨道之间切换。"""
-    _require(store, task_id)
-    state, path, message = AssetResolver.resolve_source(task_id)
-    if state == ResourceState.AVAILABLE and path is not None:
-        return FileResponse(path, filename=f"{task_id}-source{path.suffix}")
-    raise HTTPException(status_code=409, detail=message)
-
-
-@router.head("/{task_id}/download", status_code=204)
-def check_download_video(task_id: str, store: TaskStore = Depends(get_store)):
-    """轻量确认成品视频是否可用，避免前端误显示播放器转圈。"""
-    download_video(task_id, store)
-    return Response(status_code=204)
-
-
-@router.get("/{task_id}/download")
-def download_video(task_id: str, store: TaskStore = Depends(get_store)):
-    rec = _require(store, task_id)
-    if rec.status != "SUCCESS":
-        raise HTTPException(status_code=409, detail="成品视频尚未生成")
-
-    path = _resolve_video(task_id)
-    if path is not None:
-        state = AssetResolver.check_file_state(path)
-        if state == ResourceState.AVAILABLE:
-            return FileResponse(path, media_type="video/mp4", filename=f"{task_id}.mp4")
-        elif state == ResourceState.UNREADABLE:
-            if rec.resource_status == RESOURCE_STATUS_AVAILABLE:
-                _mark_resource_missing(
-                    store, task_id, "资源不可读", DOWNGRADE_REASON_DISK_FAILURE
-                )
-            raise HTTPException(status_code=409, detail="资源不可读")
-
-    # 兜底：成功任务的产物被清掉时，要把状态降级为 MISSING，
-    # 避免下次列表 / 详情接口继续暴露已失效的下载链接。
-    if rec.resource_status == RESOURCE_STATUS_AVAILABLE:
-        _mark_resource_missing(store, task_id, _DELETED_MESSAGE)
-    raise HTTPException(
-        status_code=409,
-        detail=_DELETED_MESSAGE,
+        mode,
+        task_dir=task_dir,
+        output_video=OUTPUT_VIDEO,
+        output_video_names=OUTPUT_VIDEO_NAMES,
     )
 
 
-def _resolve_video(task_id: str):
-    """定位可下载的视频：优先烧录成品 output.mp4，仅下载模式回退到 source.*（排除 .part 临时文件）。"""
-    d = task_dir(task_id)
-    out = d / OUTPUT_VIDEO
-    if out.exists():
-        return out
-    state, source_path, _ = AssetResolver.resolve_source(task_id)
-    if state == ResourceState.AVAILABLE and source_path is not None:
-        return source_path
-    return None
-
-
-@router.get("/{task_id}/subtitle")
-def download_subtitle(task_id: str, store: TaskStore = Depends(get_store)):
-    rec = _require(store, task_id)
-    path = task_dir(task_id) / TRANSLATED_SRT
-    state = AssetResolver.check_file_state(path)
-    if state == ResourceState.AVAILABLE:
-        return FileResponse(path, media_type="application/x-subrip", filename=f"{task_id}.srt")
-    elif state == ResourceState.UNREADABLE:
-        if rec.status == "SUCCESS" and rec.resource_status == RESOURCE_STATUS_AVAILABLE:
-            _mark_resource_missing(
-                store, task_id, "资源不可读", DOWNGRADE_REASON_DISK_FAILURE
-            )
-        raise HTTPException(status_code=409, detail="资源不可读")
-
-    if rec.status == "SUCCESS" and rec.resource_status == RESOURCE_STATUS_AVAILABLE:
-        _mark_resource_missing(store, task_id, _DELETED_MESSAGE)
-    raise HTTPException(
-        status_code=409,
-        detail=_DELETED_MESSAGE if rec.status == "SUCCESS" else "译文字幕尚未生成",
-    )
-
-
-@router.post("/{task_id}/folder", summary="打开任务文件夹", dependencies=[Depends(require_api_token)])
-def open_task_folder(task_id: str, store: TaskStore = Depends(get_store)) -> dict:
-    """用系统文件管理器打开任务产物目录。"""
-    if not task_id or not re.match(r"^task_[A-Za-z0-9_-]+$", task_id):
-        raise HTTPException(status_code=400, detail="task_id 格式不符合规范")
-
-    _require(store, task_id)
-    path = task_dir(task_id).resolve()
-    data_dir = settings.data_dir.resolve()
+def _task_path(task_id: str, relative_path: str = "") -> Path:
     try:
-        if not path.is_relative_to(data_dir):
-            raise HTTPException(status_code=400, detail="任务目录路径非法")
-    except ValueError:
-        raise HTTPException(status_code=400, detail="任务目录路径非法")
-
-    if not path.exists():
-        raise HTTPException(status_code=409, detail="任务目录尚未生成")
-    _open_folder(path)
-    return {"ok": True}
+        return _task_artifacts.task_path(task_id, relative_path, task_dir=task_dir)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="文件路径非法") from exc
 
 
 def _open_folder(path: Path | str) -> None:
-    """按当前系统选择文件管理器打开目录。"""
-    abs_path = Path(path).resolve()
-    if sys.platform == "darwin":
-        cmd = ["open", str(abs_path)]
-    elif sys.platform.startswith("win"):
-        cmd = ["explorer", str(abs_path)]
-    else:
-        cmd = ["xdg-open", str(abs_path)]
     try:
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=500, detail="当前系统不支持打开文件夹") from e
+        _task_artifacts.open_folder(path, platform=sys.platform, popen=subprocess.Popen)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-
-# ---------- SSE 进度 ----------
 
 def _sse_payload(rec) -> str:
-    data = {
-        "id": rec.id,
-        "status": rec.status,
-        "progress": rec.progress,
-        "currentStep": rec.current_step,
-        "title": rec.title,
-        "error": rec.error,
-        "errorCode": rec.error_code,
-        "resourceStatus": to_out(rec).resourceStatus,
-        "outputs": to_out(rec).outputs,
-    }
-    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+    return _task_runtime.sse_payload(rec, to_out=to_out)
 
 
-@router.get("/{task_id}/stream")
-def stream_progress(task_id: str, store: TaskStore = Depends(get_store)):
-    """轮询库表并以 SSE 推送进度（含心跳保活、超时断流与终态事件）。"""
-    _require(store, task_id)
-
-    def gen():
-        last = None
-        start_time = time.time()
-        last_sent = time.time()
-        timeout_sec = max(1, settings.stream_timeout_sec)
-
-        while True:
-            rec = store.get(task_id)
-            if rec is None:
-                yield 'data: {"error":"任务不存在"}\n\n'
-                return
-
-            snapshot = (rec.status, rec.progress)
-            now = time.time()
-
-            if snapshot != last:
-                if rec.status in _TERMINAL:
-                    yield f"event: end\n{_sse_payload(rec)}"
-                    return
-                yield _sse_payload(rec)
-                last = snapshot
-                last_sent = now
-            else:
-                if rec.status in _TERMINAL:
-                    yield f"event: end\n{_sse_payload(rec)}"
-                    return
-                elif now - last_sent >= 15:
-                    yield ":keepalive\n\n"
-                    last_sent = now
-
-            if now - start_time >= timeout_sec:
-                yield 'event: timeout\ndata: {"error":"stream timeout"}\n\n'
-                return
-
-            time.sleep(1)
-
-    return StreamingResponse(gen(), media_type="text/event-stream")
+__all__ = [
+    "router",
+    "settings",
+    "task_dir",
+    "enqueue_pipeline",
+    "probe_duration",
+    "probe_video",
+    "subprocess",
+    "release_lock",
+    "get_translation_model_manager",
+    "probe_batch_manager",
+    "create_task",
+    "create_upload_task",
+    "list_tasks",
+    "get_task",
+    "probe_task",
+    "get_probe_startup_status",
+    "list_probe_records",
+    "clear_probe_records",
+    "delete_probe_record",
+    "get_ytdlp_info",
+    "delete_task",
+    "cancel_task",
+    "retry_task",
+    "check_source_video",
+    "download_source_video",
+    "check_download_video",
+    "download_video",
+    "check_dubbed_video",
+    "download_dubbed_video",
+    "download_subtitle",
+    "open_task_folder",
+    "folder_capability",
+    "list_task_files",
+    "get_task_file",
+    "stream_progress",
+    "_require",
+    "_mark_resource_missing",
+    "_ensure_local_model_ready",
+    "_ensure_translation_engine",
+    "_ensure_supported_translation_languages",
+    "scan_missing_terminal",
+    "_resolve_video",
+    "_task_path",
+    "_open_folder",
+    "_sse_payload",
+    "_DELETED_MESSAGE",
+]

@@ -9,7 +9,7 @@ mode="bilingual" 时每条字幕保留原文 + 译文两行。
 翻译按配置选择 OpenAI-compatible 或 Anthropic-compatible 接口，按批发送以减少请求数。
 网络调用集中在 _call_deepseek（懒加载 httpx），便于单测 mock。
 
-旧版 DeepSeek 环境变量仍作为兼容路径保留。
+云端引擎参数仅从显式的引擎配置或 Redis 中已保存的引擎记录读取。
 """
 
 from __future__ import annotations
@@ -25,6 +25,10 @@ from typing import Callable, List, Optional
 from src.config import settings, ensure_task_dir, TRANSLATED_SRT
 from src.core.translation_engines import TranslationEngineError, make_engine_client
 from src.core.srt_utils import Subtitle, parse_srt, write_srt
+from src.service.translation_model_manager import (
+    TranslationModelError,
+    get_translation_model_manager,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +125,8 @@ def translate_texts(
     on_batch: Optional[BatchHook] = None,
     engine_config=None,
     cancel_check: Optional[Callable[[], None]] = None,
+    batch_size: Optional[int] = None,
+    local_batch_size: Optional[int] = None,
 ) -> List[str]:
     """翻译一批文本，保持顺序与数量一致。
 
@@ -128,16 +134,56 @@ def translate_texts(
     """
     if not texts:
         return []
-    key = api_key or settings.deepseek_api_key
+    api_type = (
+        getattr(engine_config, "api_type", None)
+        if engine_config is not None
+        else None
+    )
+    if isinstance(engine_config, dict):
+        api_type = engine_config.get("api_type", api_type)
+    if api_type == "local_ct2":
+        if source_lang != "en" or target_lang not in {"zh-CN", "zh"}:
+            raise TranslateError(
+                "本地翻译模型只支持 en 到 zh-CN/zh",
+                code="unsupported_language",
+            )
+        manager = get_translation_model_manager()
+        effective_local_batch_size = max(
+            1,
+            local_batch_size
+            if local_batch_size is not None
+            else getattr(settings, "local_translate_batch_size", 16),
+        )
+        translated: List[str] = []
+        for start in range(0, len(texts), effective_local_batch_size):
+            if cancel_check is not None:
+                cancel_check()
+            batch = texts[start:start + effective_local_batch_size]
+            try:
+                translated.extend(manager.translate_texts(batch, cancel_check=cancel_check))
+            except TranslationModelError as exc:
+                raise TranslateError(str(exc), code=exc.code) from exc
+            if on_batch is not None:
+                on_batch(len(translated), len(texts))
+        return translated
+
+    key = api_key
     if engine_config is not None:
         key = getattr(engine_config, "api_key", None) or (engine_config.get("api_key") if isinstance(engine_config, dict) else None)
     if not (key and str(key).strip()):
         raise TranslateError("缺少翻译引擎 API Key", code="missing_api_key")
+    if engine_config is None:
+        raise TranslateError("未提供翻译引擎配置，请从已保存的引擎配置启动", code="missing_engine_config")
 
-    batch_size = max(1, settings.translate_batch_size)
+    effective_batch_size = max(
+        1,
+        batch_size if batch_size is not None else settings.translate_batch_size,
+    )
     out: List[str] = []
-    for start in range(0, len(texts), batch_size):
-        batch = texts[start:start + batch_size]
+    for start in range(0, len(texts), effective_batch_size):
+        if cancel_check is not None:
+            cancel_check()
+        batch = texts[start:start + effective_batch_size]
         translated = _translate_with_fallback(
             batch,
             source_lang,
@@ -198,6 +244,11 @@ def _translate_with_fallback(
         if len(translated) == len(missing_indices):
             return [partial[idx] for idx in indices]
     except Exception as exc:
+        # Cancellation is control flow. In particular, the recursive fallback
+        # must not turn a PluginCancelled (or another cancellation signal) into
+        # a partial translation or a smaller retry batch.
+        if cancel_check is not None:
+            cancel_check()
         err_code = getattr(exc, "code", None)
         if err_code in (
             "unauthorized", "missing_api_key", "rate_limited", "insufficient_quota",
@@ -299,16 +350,11 @@ def _translate_batch(batch: List[str], source_lang: str, target_lang: str, api_k
         f"{numbered}"
     )
     if engine_config is None:
-        content = _call_deepseek(
-            [{"role": "system", "content": system}, {"role": "user", "content": user}],
-            api_key=api_key, base_url=settings.deepseek_base_url,
-            model=settings.deepseek_model, timeout=settings.translate_timeout,
-        )
-    else:
-        try:
-            content = make_engine_client(engine_config).complete(system, user)
-        except TranslationEngineError as exc:
-            raise TranslateError(str(exc), code=exc.code) from exc
+        raise TranslateError("未提供翻译引擎配置，请从已保存的引擎配置启动", code="missing_engine_config")
+    try:
+        content = make_engine_client(engine_config).complete(system, user)
+    except TranslationEngineError as exc:
+        raise TranslateError(str(exc), code=exc.code) from exc
     return _parse_translation_response(content, len(batch))
 
 
@@ -380,6 +426,8 @@ def translate_srt(
     api_key: Optional[str] = None,
     engine_config=None,
     cancel_check: Optional[Callable[[], None]] = None,
+    batch_size: Optional[int] = None,
+    local_batch_size: Optional[int] = None,
 ) -> TranslateResult:
     """翻译 SRT 文件到 data/{task_id}/translated.srt，时间轴保持不变。
 
@@ -414,7 +462,8 @@ def translate_srt(
     translated = translate_texts(
         [s.text for s in subs], source_lang, target_lang,
         api_key=api_key, on_batch=_on_batch, engine_config=engine_config,
-        cancel_check=cancel_check,
+        cancel_check=cancel_check, batch_size=batch_size,
+        local_batch_size=local_batch_size,
     )
 
     out_subs = [
@@ -433,19 +482,10 @@ def translate_srt(
 
 if __name__ == "__main__":
     # 独立测试入口：python -m src.core.translator <srt> [task_id] [target_lang] [mode]
-    import os
     import sys
+    from src.store import TranslationEngineStore
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-
-    # 加载项目根 .env（settings 导入时已读过环境变量，这里取 key 显式传入）
-    _env = Path(__file__).resolve().parents[2] / ".env"
-    if _env.exists():
-        for _line in _env.read_text(encoding="utf-8").splitlines():
-            _line = _line.strip()
-            if _line and not _line.startswith("#") and "=" in _line:
-                _k, _, _v = _line.partition("=")
-                os.environ.setdefault(_k.strip(), _v.strip().strip('"').strip("'"))
 
     if len(sys.argv) < 2:
         print("用法: python -m src.core.translator <srt_path> [task_id] [target_lang] [mode]")
@@ -455,10 +495,13 @@ if __name__ == "__main__":
     task = sys.argv[2] if len(sys.argv) > 2 else "manual_test"
     target = sys.argv[3] if len(sys.argv) > 3 else "zh-CN"
     m = sys.argv[4] if len(sys.argv) > 4 else "mono"
-    api_key = os.getenv("SUBTRANS_DEEPSEEK_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
+    engine = TranslationEngineStore().get("deepseek")
+    if engine is None:
+        print("未找到已保存的翻译引擎配置，请先在翻译引擎设置中配置并保存。")
+        raise SystemExit(2)
 
     def _p(p: TranslateProgress) -> None:
         print(f"\r翻译中 {p.percent:5.1f}% ({p.done}/{p.total})", end="", flush=True)
 
-    res = translate_srt(srt, task, "auto", target, mode=m, on_progress=_p, api_key=api_key)
+    res = translate_srt(srt, task, "auto", target, mode=m, on_progress=_p, engine_config=engine)
     print(f"\n翻译完成: {res.srt_path}（{res.count} 条，双语={res.bilingual}）")

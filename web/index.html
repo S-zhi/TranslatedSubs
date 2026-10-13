@@ -3,19 +3,21 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>LynxSense</title>
-    <meta name="description" content="LynxSense：敏锐感知视频中的字幕、情感、人物、事件与关键片段" />
-    <link rel="icon" href="assets/lynxsense-logo.png" type="image/png" />
+    <title>TranslatedSubs</title>
+    <meta name="description" content="TranslatedSubs：下载、转写和翻译视频字幕，预览、编辑并导出软字幕或硬字幕视频。" />
+    <link rel="icon" href="assets/translatedsubs-logo.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="styles/base.css" />
     <link rel="stylesheet" href="styles/layout.css" />
     <link rel="stylesheet" href="styles/console.css" />
     <link rel="stylesheet" href="styles/queue.css" />
+    <link rel="stylesheet" href="styles/mcp.css" />
     <link rel="stylesheet" href="styles/preview.css" />
     <link rel="stylesheet" href="styles/editor.css" />
     <link rel="stylesheet" href="styles/probe.css" />
     <link rel="stylesheet" href="styles/storage.css" />
     <link rel="stylesheet" href="styles/drive.css" />
     <link rel="stylesheet" href="styles/translation-settings.css" />
+    <link rel="stylesheet" href="styles/developer.css" />
     <script src="https://unpkg.com/@phosphor-icons/web@2.1.1"></script>
   </head>
   <body>
@@ -25,32 +27,32 @@
       <aside class="sidebar">
         <div class="brand">
           <span class="brand__mark" aria-hidden="true">
-            <img src="assets/lynxsense-logo.png" alt="" />
+            <img src="assets/translatedsubs-logo.svg" alt="" />
           </span>
-          <span class="brand__name">LynxSense</span>
+          <span class="brand__name">TranslatedSubs</span>
         </div>
 
         <nav class="nav" id="nav" aria-label="功能导航">
-          <button class="nav__item is-active" type="button" data-view="tasks">
-            <i class="ph ph-rows" aria-hidden="true"></i><span>任务</span>
+          <button class="nav__item is-active" type="button" data-view="tasks" data-route="/tasks">
+            <i class="ph ph-rows" aria-hidden="true"></i><span>快速开始</span>
           </button>
-          <button class="nav__item" type="button" data-view="preview">
+          <button class="nav__item" type="button" data-view="mcp" data-route="/mcp">
+            <i class="ph ph-robot" aria-hidden="true"></i><span>MCP 调用</span>
+          </button>
+          <button class="nav__item" type="button" data-view="preview" data-route="/preview">
             <i class="ph ph-monitor-play" aria-hidden="true"></i><span>视频预览</span>
           </button>
-          <button class="nav__item" type="button" data-view="editor">
+          <button class="nav__item" type="button" data-view="editor" data-route="/editor">
             <i class="ph ph-text-aa" aria-hidden="true"></i><span>字幕编辑</span>
           </button>
-          <button class="nav__item" type="button" data-view="probe">
-            <i class="ph ph-pulse" aria-hidden="true"></i><span>下载测试</span>
+          <button class="nav__item" type="button" data-view="model-settings" data-route="/model-settings">
+            <i class="ph ph-cpu" aria-hidden="true"></i><span>模型设置</span>
           </button>
-          <button class="nav__item" type="button" data-view="storage">
-            <i class="ph ph-hard-drives" aria-hidden="true"></i><span>本地资源</span>
+          <button class="nav__item" type="button" data-view="storage" data-route="/storage">
+            <i class="ph ph-hard-drives" aria-hidden="true"></i><span>资源看板</span>
           </button>
-          <button class="nav__item" type="button" data-view="drive">
-            <i class="ph ph-cloud-arrow-up" aria-hidden="true"></i><span>Google Drive</span>
-          </button>
-          <button class="nav__item" type="button" data-view="translation-settings">
-            <i class="ph ph-sliders-horizontal" aria-hidden="true"></i><span>高级设置</span>
+          <button class="nav__item" type="button" data-view="other-settings">
+            <i class="ph ph-sliders-horizontal" aria-hidden="true"></i><span>其他设置</span>
           </button>
         </nav>
 
@@ -59,71 +61,19 @@
         <section class="supported-sites" aria-labelledby="supportedSitesTitle">
           <div class="supported-sites__head">
             <h2 id="supportedSitesTitle">支持网站</h2>
-            <span class="supported-sites__verified"><i class="ph ph-seal-check" aria-hidden="true"></i> 10 已验证</span>
+            <span class="supported-sites__verified"><i class="ph ph-seal-check" aria-hidden="true"></i> <span id="supportedSitesCount">等待检测</span></span>
           </div>
-          <div class="supported-sites__viewport" aria-label="已验证支持的网站，自动滚动展示">
-            <div class="supported-sites__track">
-              <div class="supported-sites__group">
-                <a class="site-icon site-icon--youtube" href="https://www.youtube.com/watch?v=aqz-KE-bpKQ" target="_blank" rel="noreferrer" title="YouTube · 已验证" aria-label="打开 YouTube">
-                  <span class="site-icon__mark"><img src="https://cdn.simpleicons.org/youtube/ffffff" alt="" loading="eager" /></span><span class="site-icon__label">YouTube</span>
-                </a>
-                <a class="site-icon site-icon--dailymotion" href="https://www.dailymotion.com/video/x5q9zr" target="_blank" rel="noreferrer" title="Dailymotion · 已验证" aria-label="打开 Dailymotion">
-                  <span class="site-icon__mark"><img src="https://cdn.simpleicons.org/dailymotion/ffffff" alt="" loading="eager" /></span><span class="site-icon__label">Dailymotion</span>
-                </a>
-                <a class="site-icon site-icon--tiktok" href="https://www.tiktok.com/@scout2015/video/6718335390845095173" target="_blank" rel="noreferrer" title="TikTok · 已验证" aria-label="打开 TikTok">
-                  <span class="site-icon__mark"><img src="https://cdn.simpleicons.org/tiktok/ffffff" alt="" loading="eager" /></span><span class="site-icon__label">TikTok</span>
-                </a>
-                <a class="site-icon site-icon--wikimedia" href="https://commons.wikimedia.org/wiki/File:Big_Buck_Bunny_4K.webm" target="_blank" rel="noreferrer" title="Wikimedia Commons · 已验证" aria-label="打开 Wikimedia Commons">
-                  <span class="site-icon__mark"><img src="https://commons.wikimedia.org/favicon.ico" alt="" loading="eager" /></span><span class="site-icon__label">Wikimedia</span>
-                </a>
-                <a class="site-icon site-icon--peertube" href="https://video.blender.org/w/pAQiVCgv2CsLg79KKXUoMw" target="_blank" rel="noreferrer" title="PeerTube · 已验证" aria-label="打开 PeerTube">
-                  <span class="site-icon__mark"><img src="https://cdn.simpleicons.org/peertube/ffffff" alt="" loading="eager" /></span><span class="site-icon__label">PeerTube</span>
-                </a>
-                <a class="site-icon site-icon--niconico" href="https://www.nicovideo.jp/watch/sm9" target="_blank" rel="noreferrer" title="Niconico · 已验证" aria-label="打开 Niconico">
-                  <span class="site-icon__mark"><img src="https://cdn.simpleicons.org/niconico/ffffff" alt="" loading="eager" /></span><span class="site-icon__label">Niconico</span>
-                </a>
-                <a class="site-icon site-icon--rumble" href="https://rumble.com/v6wvon4-digital-concentration-camp.html" target="_blank" rel="noreferrer" title="Rumble · 已验证" aria-label="打开 Rumble">
-                  <span class="site-icon__mark"><img src="https://cdn.simpleicons.org/rumble/ffffff" alt="" loading="eager" /></span><span class="site-icon__label">Rumble</span>
-                </a>
-                <a class="site-icon site-icon--soundcloud" href="https://soundcloud.com/allerlei_von_nicolai/creatures" target="_blank" rel="noreferrer" title="SoundCloud · 已验证" aria-label="打开 SoundCloud">
-                  <span class="site-icon__mark"><img src="https://cdn.simpleicons.org/soundcloud/ffffff" alt="" loading="eager" /></span><span class="site-icon__label">SoundCloud</span>
-                </a>
-                <a class="site-icon site-icon--bandcamp" href="https://noseyuk.bandcamp.com/track/free-dubstep-instrumental-2013-free-download" target="_blank" rel="noreferrer" title="Bandcamp · 已验证" aria-label="打开 Bandcamp">
-                  <span class="site-icon__mark"><img src="https://cdn.simpleicons.org/bandcamp/ffffff" alt="" loading="eager" /></span><span class="site-icon__label">Bandcamp</span>
-                </a>
-                <a class="site-icon site-icon--twitch" href="https://www.twitch.tv/videos/987654321" target="_blank" rel="noreferrer" title="Twitch · 已验证" aria-label="打开 Twitch">
-                  <span class="site-icon__mark"><img src="https://cdn.simpleicons.org/twitch/ffffff" alt="" loading="eager" /></span><span class="site-icon__label">Twitch</span>
-                </a>
-              </div>
-              <div class="supported-sites__group" aria-hidden="true" inert>
-                <a class="site-icon site-icon--youtube" href="https://www.youtube.com/watch?v=aqz-KE-bpKQ" tabindex="-1" aria-hidden="true"><span class="site-icon__mark"><img src="https://cdn.simpleicons.org/youtube/ffffff" alt="" loading="eager" /></span><span class="site-icon__label">YouTube</span></a>
-                <a class="site-icon site-icon--dailymotion" href="https://www.dailymotion.com/video/x5q9zr" tabindex="-1" aria-hidden="true"><span class="site-icon__mark"><img src="https://cdn.simpleicons.org/dailymotion/ffffff" alt="" loading="eager" /></span><span class="site-icon__label">Dailymotion</span></a>
-                <a class="site-icon site-icon--tiktok" href="https://www.tiktok.com/@scout2015/video/6718335390845095173" tabindex="-1" aria-hidden="true"><span class="site-icon__mark"><img src="https://cdn.simpleicons.org/tiktok/ffffff" alt="" loading="eager" /></span><span class="site-icon__label">TikTok</span></a>
-                <a class="site-icon site-icon--wikimedia" href="https://commons.wikimedia.org/wiki/File:Big_Buck_Bunny_4K.webm" tabindex="-1" aria-hidden="true"><span class="site-icon__mark"><img src="https://commons.wikimedia.org/favicon.ico" alt="" loading="eager" /></span><span class="site-icon__label">Wikimedia</span></a>
-                <a class="site-icon site-icon--peertube" href="https://video.blender.org/w/pAQiVCgv2CsLg79KKXUoMw" tabindex="-1" aria-hidden="true"><span class="site-icon__mark"><img src="https://cdn.simpleicons.org/peertube/ffffff" alt="" loading="eager" /></span><span class="site-icon__label">PeerTube</span></a>
-                <a class="site-icon site-icon--niconico" href="https://www.nicovideo.jp/watch/sm9" tabindex="-1" aria-hidden="true"><span class="site-icon__mark"><img src="https://cdn.simpleicons.org/niconico/ffffff" alt="" loading="eager" /></span><span class="site-icon__label">Niconico</span></a>
-                <a class="site-icon site-icon--rumble" href="https://rumble.com/v6wvon4-digital-concentration-camp.html" tabindex="-1" aria-hidden="true"><span class="site-icon__mark"><img src="https://cdn.simpleicons.org/rumble/ffffff" alt="" loading="eager" /></span><span class="site-icon__label">Rumble</span></a>
-                <a class="site-icon site-icon--soundcloud" href="https://soundcloud.com/allerlei_von_nicolai/creatures" tabindex="-1" aria-hidden="true"><span class="site-icon__mark"><img src="https://cdn.simpleicons.org/soundcloud/ffffff" alt="" loading="eager" /></span><span class="site-icon__label">SoundCloud</span></a>
-                <a class="site-icon site-icon--bandcamp" href="https://noseyuk.bandcamp.com/track/free-dubstep-instrumental-2013-free-download" tabindex="-1" aria-hidden="true"><span class="site-icon__mark"><img src="https://cdn.simpleicons.org/bandcamp/ffffff" alt="" loading="eager" /></span><span class="site-icon__label">Bandcamp</span></a>
-                <a class="site-icon site-icon--twitch" href="https://www.twitch.tv/videos/987654321" tabindex="-1" aria-hidden="true"><span class="site-icon__mark"><img src="https://cdn.simpleicons.org/twitch/ffffff" alt="" loading="eager" /></span><span class="site-icon__label">Twitch</span></a>
-              </div>
-            </div>
+          <div class="supported-sites__viewport" aria-label="当前可抓取的网站，自动滚动展示">
+            <div class="supported-sites__track" id="supportedSitesTrack" role="status" aria-live="polite"></div>
           </div>
-        </section>
-
-        <section class="settings" aria-labelledby="settingsTitle">
-          <h2 id="settingsTitle" class="settings__title">通知</h2>
-          <label class="settings__row" for="notifyToggle">
-            <span class="settings__name">任务完成 / 失败时弹通知</span>
-            <span class="settings__switch">
-              <input id="notifyToggle" type="checkbox" />
-              <span class="settings__slider" aria-hidden="true"></span>
-            </span>
-          </label>
-          <p class="settings__hint" id="notifyHint">浏览器未授权时无法弹出通知。</p>
         </section>
 
         <div class="sidebar__foot">
+          <label class="locale-picker" for="localePicker">
+            <i class="ph ph-translate" aria-hidden="true"></i>
+            <span class="sr-only">界面语言</span>
+            <select id="localePicker" aria-label="界面语言"></select>
+          </label>
           <button class="iconbtn" id="themeToggle" type="button" aria-label="切换深色 / 浅色">
             <i class="ph ph-moon" aria-hidden="true"></i>
           </button>
@@ -143,6 +93,7 @@
                 id="url"
                 name="url"
                 type="text"
+                dir="ltr"
                 inputmode="url"
                 autocomplete="off"
                 aria-label="视频链接"
@@ -166,13 +117,6 @@
             <p class="console__hint" id="urlHint">粘贴单个视频页面地址，或把本地视频拖进输入框</p>
 
             <div class="params">
-              <fieldset class="param" style="border:0;margin:0;padding:0">
-                <span class="param__label">是否需要字幕</span>
-                <div class="segmented" role="radiogroup" aria-label="是否需要字幕">
-                  <label class="segmented__opt"><input type="radio" name="needSubtitle" value="on" checked /><span>需要</span></label>
-                  <label class="segmented__opt"><input type="radio" name="needSubtitle" value="off" /><span>仅下载</span></label>
-                </div>
-              </fieldset>
               <div class="param">
                 <span class="param__label">源语言</span>
                 <select class="select" id="sourceLang" name="sourceLang" aria-label="源语言">
@@ -186,29 +130,76 @@
                 </select>
               </div>
               <fieldset class="param" style="border:0;margin:0;padding:0">
-                <span class="param__label">字幕模式</span>
-                <div class="segmented" role="radiogroup" aria-label="字幕模式">
-                  <label class="segmented__opt"><input type="radio" name="mode" value="mono" checked /><span>仅译文</span></label>
-                  <label class="segmented__opt"><input type="radio" name="mode" value="bilingual" /><span>双语</span></label>
-                </div>
-              </fieldset>
-              <fieldset class="param" style="border:0;margin:0;padding:0">
                 <span class="param__label">烧录方式</span>
                 <div class="segmented" role="radiogroup" aria-label="烧录方式">
                   <label class="segmented__opt"><input type="radio" name="burn" value="hard" checked /><span>硬烧录</span></label>
                   <label class="segmented__opt"><input type="radio" name="burn" value="soft" /><span>软字幕</span></label>
                 </div>
               </fieldset>
-              <div class="param">
-                <span class="param__label">Replicate模型</span>
-                <select class="select" id="model" name="model" aria-label="Whisper 模型">
-                  <option value="small" selected>加载中</option>
-                </select>
-              </div>
-              <div class="param">
-                <span class="param__label">翻译引擎</span>
-                <select class="select" id="engine" name="engine" aria-label="翻译引擎"></select>
-              </div>
+              <details class="advanced-params">
+                <summary><i class="ph ph-sliders-horizontal" aria-hidden="true"></i><span>高级设置</span><i class="ph ph-caret-down advanced-params__chevron" aria-hidden="true"></i></summary>
+                <div class="advanced-params__body">
+                  <fieldset class="param" style="border:0;margin:0;padding:0">
+                    <span class="param__label">是否需要字幕</span>
+                    <div class="segmented" role="radiogroup" aria-label="是否需要字幕">
+                      <label class="segmented__opt"><input type="radio" name="needSubtitle" value="on" checked /><span>需要</span></label>
+                      <label class="segmented__opt"><input type="radio" name="needSubtitle" value="off" /><span>仅下载</span></label>
+                    </div>
+                  </fieldset>
+                  <fieldset class="param" style="border:0;margin:0;padding:0">
+                    <span class="param__label">字幕模式</span>
+                    <div class="segmented" role="radiogroup" aria-label="字幕模式">
+                      <label class="segmented__opt"><input type="radio" name="mode" value="mono" checked /><span>仅译文</span></label>
+                      <label class="segmented__opt"><input type="radio" name="mode" value="bilingual" /><span>双语</span></label>
+                    </div>
+                  </fieldset>
+                  <div class="param">
+                    <span class="param__label">识别模型</span>
+                    <select class="select" id="model" name="model" aria-label="Whisper 模型">
+                      <option value="" selected disabled>加载中</option>
+                    </select>
+                    <small id="whisperModelHint" class="param__hint" aria-live="polite"></small>
+                  </div>
+                  <div class="param">
+                    <span class="param__label">翻译引擎</span>
+                    <select class="select" id="engine" name="engine" aria-label="翻译引擎"></select>
+                  </div>
+                  <div class="param" id="qualityParam">
+                    <span class="param__label">下载画质</span>
+                    <select class="select" id="quality" name="quality" aria-label="下载画质">
+                      <option value="best">原画最佳 (best)</option>
+                      <option value="1080p">1080P 高清</option>
+                      <option value="720p">720P 标清</option>
+                      <option value="480p" selected>480P 省流 (默认)</option>
+                      <option value="360p">360P 极速</option>
+                      <option value="audio_only">仅提取音频 (极速)</option>
+                    </select>
+                  </div>
+                  <label class="param">
+                    <span class="param__label">生成 Kokoro 配音视频</span>
+                    <span><input type="checkbox" name="ttsEnabled" /> 按译文字幕时间轴配音（CPU）</span>
+                    <small class="muted" id="ttsHint">仅支持中文或英文目标语。</small>
+                  </label>
+                  <div class="param">
+                    <span class="param__label">配音音色</span>
+                    <select class="select" name="ttsVoice">
+                      <option value="auto" selected>按目标语自动选择</option>
+                      <option value="zf_001">中文女声 zf_001</option>
+                      <option value="zm_010">中文男声 zm_010</option>
+                      <option value="af_maple">英文女声 af_maple</option>
+                      <option value="af_sol">英文女声 af_sol</option>
+                    </select>
+                  </div>
+                  <div class="param">
+                    <span class="param__label">原始人声</span>
+                    <select class="select" name="originalVoiceMode">
+                      <option value="keep" selected>保留</option>
+                      <option value="lower">降低（Demucs 分离）</option>
+                      <option value="replace">替换（保留背景音）</option>
+                    </select>
+                  </div>
+                </div>
+              </details>
             </div>
           </form>
 
@@ -224,6 +215,66 @@
               </div>
             </div>
             <div class="queue__list" id="taskList" aria-live="polite"></div>
+          </section>
+        </section>
+
+        <section class="view" data-view="mcp" id="view-mcp">
+          <section class="mcp-guide" aria-labelledby="mcpGuideTitle">
+            <div class="mcp-guide__intro">
+              <div class="mcp-guide__eyebrow"><i class="ph ph-sparkle" aria-hidden="true"></i> MCP 工作台</div>
+              <div>
+                <h1 id="mcpGuideTitle">让 AI 直接调用字幕处理能力</h1>
+                <p>连接 MCP Server 后，AI Agent 可以帮你探测视频、创建翻译任务并跟踪处理进度。下方说明会一直保留在队列上方，随时可以查看。</p>
+              </div>
+              <div class="mcp-guide__status"><span class="mcp-guide__status-dot"></span><span>连接方式清晰 · 任务异步执行</span></div>
+            </div>
+
+            <div class="mcp-guide__columns">
+              <article class="mcp-guide__card">
+                <div class="mcp-guide__card-head">
+                  <span class="mcp-guide__icon"><i class="ph ph-list-checks" aria-hidden="true"></i></span>
+                  <div><h2>使用说明</h2><p>从连接到拿到字幕，只需三步</p></div>
+                  <span class="mcp-guide__step-count">01—03</span>
+                </div>
+                <ol class="mcp-guide__steps">
+                  <li><span>01</span><div><strong>连接 MCP 客户端</strong><p>在 Claude Desktop、Cursor 等支持 MCP 的客户端中添加本项目 Server。</p></div></li>
+                  <li><span>02</span><div><strong>告诉 AI 你要处理的视频</strong><p>提供视频链接和目标语言，AI 会先检查服务配置与视频可访问性。</p></div></li>
+                  <li><span>03</span><div><strong>等待任务完成并下载</strong><p>任务会异步进入下方队列；完成后可在任务详情中查看字幕与产物。</p></div></li>
+                </ol>
+              </article>
+
+              <article class="mcp-guide__card mcp-guide__card--connect">
+                <div class="mcp-guide__card-head">
+                  <span class="mcp-guide__icon mcp-guide__icon--accent"><i class="ph ph-plugs-connected" aria-hidden="true"></i></span>
+                  <div><h2>MCP 服务器如何接入</h2><p>本地 stdio 连接 · 推荐桌面客户端使用</p></div>
+                </div>
+                <div class="mcp-guide__code-wrap">
+                  <div class="mcp-guide__code-label"><span class="mcp-guide__code-dot"></span> claude_desktop_config.json</div>
+                  <pre><code>{
+  "mcpServers": {
+    "translatedsubs": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "src.mcp_server.server"],
+      "cwd": "/Your Project Path"
+    }
+  }
+}</code></pre>
+                </div>
+                <p class="mcp-guide__tip"><i class="ph ph-info" aria-hidden="true"></i><span>先启动业务 API，再重启 MCP 客户端。远程部署可使用 <code>streamable-http</code>，默认地址为 <code>http://127.0.0.1:3001/mcp</code>。</span></p>
+              </article>
+            </div>
+          </section>
+          <section class="queue">
+            <div class="queue__head">
+              <h2>MCP 处理队列</h2>
+              <div class="filters" id="mcpFilters" role="tablist" aria-label="按状态筛选">
+                <button class="chip is-active" data-filter="all" role="tab">全部</button>
+                <button class="chip" data-filter="active" role="tab">进行中</button>
+                <button class="chip" data-filter="done" role="tab">已完成</button>
+                <button class="chip" data-filter="failed" role="tab">失败</button>
+              </div>
+            </div>
+            <div class="queue__list" id="mcpTaskList" aria-live="polite"></div>
           </section>
         </section>
 
@@ -243,8 +294,14 @@
           <div class="editor">
             <aside class="editor__rail" aria-label="可选任务">
               <div class="editor__railhead">
-                <h2>任务</h2>
-                <span class="editor__hint" id="editorHint">选一个任务开始编辑</span>
+                <div class="editor__railtitle">
+                  <h2>任务</h2>
+                  <span class="editor__hint" id="editorHint">选一个任务开始编辑</span>
+                </div>
+                <button class="iconbtn editor__railtoggle" id="editorRailToggle" type="button" aria-expanded="true" aria-controls="editorList" title="收起任务面板">
+                  <i class="ph ph-caret-left" aria-hidden="true"></i>
+                  <span class="sr-only">收起任务面板</span>
+                </button>
               </div>
               <div class="editor__list" id="editorList"></div>
             </aside>
@@ -280,71 +337,13 @@
           </div>
         </section>
 
-        <!-- ============ 下载测试 ============ -->
-        <section class="view" data-view="probe" id="view-probe">
-          <div class="probe">
-            <header class="probe__head">
-              <div>
-                <h2>下载测试</h2>
-                <p>检查链接是否能被 yt-dlp 解析并找到可下载格式。</p>
-              </div>
-              <span class="probe__badge"><i class="ph ph-hard-drives" aria-hidden="true"></i>不下载文件</span>
-            </header>
 
-            <form class="probe__panel" id="probeForm" novalidate>
-              <div class="probe__bar" id="probeBar">
-                <span class="probe__icon" aria-hidden="true"><i class="ph ph-link-simple"></i></span>
-                <input
-                  class="probe__input"
-                  id="probeUrl"
-                  name="probeUrl"
-                  type="url"
-                  inputmode="url"
-                  autocomplete="off"
-                  aria-label="测试链接"
-                  placeholder="粘贴要测试的视频页面地址"
-                  required
-                />
-                <button class="btn btn--primary probe__go" id="probeBtn" type="submit">
-                  <i class="ph ph-pulse" aria-hidden="true"></i><span>开始测试</span>
-                </button>
-              </div>
-              <p class="probe__hint" id="probeHint">等待输入链接</p>
-            </form>
-
-            <div class="probe-result is-idle" id="probeResult" aria-live="polite">
-              <div class="probe-result__icon"><i class="ph ph-link" aria-hidden="true"></i></div>
-              <div class="probe-result__body">
-                <div class="probe-result__title">未开始</div>
-                <div class="probe-result__desc">结果会显示在这里。</div>
-              </div>
-            </div>
-
-            <!-- 测试历史：所有 probe 调用都会落库一份，方便回看与排查 -->
-            <section class="probe-history" aria-label="测试历史">
-              <header class="probe-history__head">
-                <h3>测试历史</h3>
-                <div class="probe-history__actions">
-                  <button class="btn btn--ghost btn--sm" id="probeHistoryRefresh" type="button">
-                    <i class="ph ph-arrow-clockwise" aria-hidden="true"></i><span>刷新</span>
-                  </button>
-                  <button class="btn btn--ghost btn--sm probe-history__clear" id="probeHistoryClear" type="button">
-                    <i class="ph ph-trash" aria-hidden="true"></i><span>清空</span>
-                  </button>
-                </div>
-              </header>
-              <p class="probe-history__hint" id="probeHistoryHint">点击上方"刷新"加载历史记录。</p>
-              <ul class="probe-history__list" id="probeHistoryList"></ul>
-            </section>
-          </div>
-        </section>
-
-        <!-- ============ 本地资源治理 ============ -->
+        <!-- ============ 资源看板治理 ============ -->
         <section class="view" data-view="storage" id="view-storage">
           <div class="storage">
             <header class="storage__head">
               <div>
-                <h2>本地资源</h2>
+                <h2>资源看板</h2>
                 <p>查看任务产物的占用，按条件预览并安全清理；运行中任务会被自动跳过。</p>
               </div>
               <button class="btn btn--ghost btn--sm storage__refresh" id="storageRefresh" type="button">
@@ -360,12 +359,12 @@
                 <div class="storage-card__sub" id="statTotalSub">尚未加载</div>
               </div>
               <div class="storage-card">
-                <div class="storage-card__label"><i class="ph ph-list-checks" aria-hidden="true"></i>任务数</div>
+                <div class="storage-card__label"><i class="ph ph-list-checks" aria-hidden="true"></i>完成任务数</div>
                 <div class="storage-card__value" id="statTasks">—</div>
-                <div class="storage-card__sub">含已完成 / 失败</div>
+                <div class="storage-card__sub">已完成的任务</div>
               </div>
               <div class="storage-card">
-                <div class="storage-card__label"><i class="ph ph-trash" aria-hidden="true"></i>可清理</div>
+                <div class="storage-card__label"><i class="ph ph-activity" aria-hidden="true"></i>正在运行</div>
                 <div class="storage-card__value" id="statCleanable">—</div>
                 <div class="storage-card__sub" id="statCleanableSub">非运行中任务</div>
               </div>
@@ -378,49 +377,16 @@
 
             <!-- 筛选 + 操作条 -->
             <div class="storage__bar">
-              <div class="storage__filters">
-                <label class="storage__filter">
-                  <span>产物类别</span>
-                  <select class="select select--sm" id="storageKind">
-                    <option value="">全部</option>
-                    <option value="source">源视频</option>
-                    <option value="audio">音频</option>
-                    <option value="original_srt">原文字幕</option>
-                    <option value="translated_srt">译文字幕</option>
-                    <option value="output">成品视频</option>
-                    <option value="other">其它</option>
-                  </select>
-                </label>
-                <label class="storage__filter">
-                  <span>产物保留期</span>
-                  <select class="select select--sm" id="storageRetention">
-                    <option value="0">不限</option>
-                    <option value="1">1 天以上</option>
-                    <option value="7">7 天以上</option>
-                    <option value="30">30 天以上</option>
-                    <option value="90">90 天以上</option>
-                  </select>
-                </label>
-              </div>
               <div class="storage__actions">
                 <span class="storage__selinfo" id="storageSelInfo">未选择</span>
                 <button class="btn btn--ghost btn--sm" id="storageSelectAll" type="button">
                   <i class="ph ph-check-square" aria-hidden="true"></i><span>全选</span>
-                </button>
-                <button class="btn btn--ghost btn--sm" id="storageSelectNone" type="button">
-                  <i class="ph ph-square" aria-hidden="true"></i><span>清空</span>
-                </button>
-                <button class="btn btn--primary btn--sm" id="storagePreview" type="button" disabled>
-                  <i class="ph ph-eye" aria-hidden="true"></i><span>预览清理</span>
                 </button>
                 <button class="btn btn--danger btn--sm" id="storageApply" type="button" disabled>
                   <i class="ph ph-trash" aria-hidden="true"></i><span>执行清理</span>
                 </button>
                 <button class="btn btn--ghost btn--sm" id="storageDriveUpload" type="button" disabled>
                   <i class="ph ph-cloud-arrow-up" aria-hidden="true"></i><span>上传到 Drive</span>
-                </button>
-                <button class="btn btn--ghost btn--sm" id="storageDriveDownload" type="button" disabled>
-                  <i class="ph ph-cloud-arrow-down" aria-hidden="true"></i><span>从 Drive 下载</span>
                 </button>
               </div>
             </div>
@@ -438,17 +404,6 @@
               <div class="storage-sync__body" id="storageDriveSyncBody"></div>
             </section>
 
-            <!-- 预览结果摘要 -->
-            <div class="storage__preview" id="storagePreviewBox" hidden>
-              <div class="storage__preview-head">
-                <strong>预览结果</strong>
-                <button class="iconbtn" id="storagePreviewClose" type="button" aria-label="关闭预览">
-                  <i class="ph ph-x" aria-hidden="true"></i>
-                </button>
-              </div>
-              <div class="storage__preview-body" id="storagePreviewBody"></div>
-            </div>
-
             <!-- 任务 / 产物表格 -->
             <div class="storage__tablewrap">
               <table class="storage-table" id="storageTable">
@@ -465,6 +420,7 @@
                     <th class="storage-table__artifacts">产物</th>
                     <th class="storage-table__size num">占用</th>
                     <th class="storage-table__age">创建</th>
+                    <th class="storage-table__action">操作</th>
                   </tr>
                 </thead>
                 <tbody id="storageTbody"></tbody>
@@ -477,152 +433,253 @@
           </div>
         </section>
 
-        <!-- ============ Google Drive ============ -->
-        <section class="view" data-view="drive" id="view-drive">
-          <div class="drive" id="drivePanel">
-            <header class="drive__head">
-              <div>
-                <span class="eyebrow">CLOUD / GOOGLE DRIVE</span>
-                <h2>Google Drive</h2>
-                <p>动态 loopback 授权 · 大文件断点传输 · 本地单用户空间</p>
+
+        <!-- ============ 模型设置 ============ -->
+        <section class="view" data-view="model-settings" id="view-model-settings">
+          <div class="model-settings" id="modelSettings">
+            <header class="model-settings__head">
+              <div class="model-settings__intro">
+                <span class="eyebrow">RUNTIME / MODEL STACK</span>
+                <h1>模型设置</h1>
+                <p>集中管理字幕工作台使用的语言模型、语音识别和语音合成服务。修改后会应用到下一次任务。</p>
+                <nav class="model-settings__switcher" role="tablist" aria-label="模型类型切换">
+                  <button class="model-settings__switch is-active" type="button" role="tab" data-model-kind="llm" aria-current="page" aria-selected="true" aria-controls="model-panel-llm" aria-label="切换到 LLM 模型"><i class="ph ph-brain" aria-hidden="true"></i><span>LLM</span></button>
+                  <button class="model-settings__switch" type="button" role="tab" data-model-kind="whisper" aria-selected="false" aria-controls="model-panel-whisper" aria-label="切换到 Whisper 模型"><i class="ph ph-waveform" aria-hidden="true"></i><span>Whisper</span></button>
+                  <button class="model-settings__switch" type="button" role="tab" data-model-kind="tts" aria-selected="false" aria-controls="model-panel-tts" aria-label="切换到 TTS 模型"><i class="ph ph-speaker-high" aria-hidden="true"></i><span>TTS</span></button>
+                </nav>
               </div>
-              <div class="drive__head-actions">
-                <span class="drive-status drive-status--offline" id="driveStatus" aria-live="polite">
-                  <span class="drive-status__dot" aria-hidden="true"></span><span id="driveStatusText">正在检查</span>
-                </span>
-                <button class="btn btn--ghost btn--sm" id="driveRefresh" type="button">
-                  <i class="ph ph-arrow-clockwise" aria-hidden="true"></i><span>刷新</span>
-                </button>
+              <div class="model-settings__summary" aria-live="polite">
+                <span class="model-settings__summary-label">当前配置</span>
+                <strong id="modelSettingsSummary">正在读取</strong>
               </div>
             </header>
 
-            <section class="drive__hero" aria-labelledby="driveConnectionTitle">
-              <div class="drive__hero-copy">
-                <div class="drive__orb" aria-hidden="true"><i class="ph ph-cloud-check"></i></div>
-                <div>
-                  <span class="eyebrow">AUTHENTICATION</span>
-                  <h3 id="driveConnectionTitle">连接你的 Google Drive</h3>
-                  <p id="driveAuthHint">授权后，文件只会进入 sidecar 管理的 Subtitles AI 文件夹。</p>
-                </div>
-              </div>
-              <div class="drive__auth-actions">
-                <button class="btn btn--primary" id="driveAuthAction" type="button">
-                  <i class="ph ph-arrow-square-out" aria-hidden="true"></i><span>连接 Google Drive</span>
-                </button>
-                <button class="btn btn--ghost btn--sm" id="driveDisconnect" type="button" hidden>
-                  <i class="ph ph-sign-out" aria-hidden="true"></i><span>断开连接</span>
-                </button>
-              </div>
-            </section>
-
-            <section class="drive__upload" aria-labelledby="driveUploadTitle">
-              <div class="drive__section-head">
-                <div>
-                  <span class="eyebrow">INGEST / RESUMABLE</span>
-                  <h3 id="driveUploadTitle">上传到 Drive</h3>
-                </div>
-                <span class="drive__microcopy">16 MiB chunks · 可中断</span>
-              </div>
-              <div class="drive-dropzone" id="driveDropzone" tabindex="0" role="button" aria-label="选择文件或文件夹上传">
-                <input id="driveFileInput" type="file" hidden />
-                <input id="driveFolderInput" type="file" webkitdirectory="" multiple hidden />
-                <span class="drive-dropzone__icon" aria-hidden="true"><i class="ph ph-upload-simple"></i></span>
-                <span class="drive-dropzone__title">选择文件或文件夹，或拖到这里</span>
-                <span class="drive-dropzone__hint">文件先分片写入本地，再由 sidecar 可靠上传到 Google Drive</span>
-                <span class="drive-dropzone__actions">
-                  <button class="btn btn--primary btn--sm" id="driveChooseFile" type="button">选择文件</button>
-                  <button class="btn btn--ghost btn--sm" id="driveChooseFolder" type="button">选择文件夹</button>
-                </span>
-              </div>
-              <p class="drive-folder-upload__hint" id="driveFolderUploadHint">空目录不会上传；目录结构会按相对路径在 Drive 中重建。</p>
-              <div class="drive-upload-progress" id="driveUploadProgress" hidden aria-live="polite">
-                <div class="drive-upload-progress__top">
-                  <div class="drive-upload-progress__name" id="driveUploadName">—</div>
-                  <div class="drive-upload-progress__value" id="driveUploadValue">0%</div>
-                </div>
-                <div class="drive-progress"><span id="driveUploadBar"></span></div>
-                <div class="drive-upload-progress__bottom">
-                  <span id="driveUploadBytes">等待上传</span>
-                  <button class="btn btn--ghost btn--sm" id="driveUploadCancel" type="button">取消</button>
-                </div>
-              </div>
-              <div class="drive-folder-upload-progress" id="driveFolderUploadProgress" hidden aria-live="polite">
-                <div class="drive-upload-progress__top">
-                  <div class="drive-upload-progress__name" id="driveFolderUploadName">文件夹上传</div>
-                  <div class="drive-upload-progress__value" id="driveFolderUploadValue">0%</div>
-                </div>
-                <div class="drive-progress"><span id="driveFolderUploadBar"></span></div>
-                <div class="drive-upload-progress__bottom">
-                  <span id="driveFolderUploadBytes">等待上传</span>
-                  <button class="btn btn--ghost btn--sm" id="driveFolderUploadCancel" data-action="cancel-folder" type="button">取消</button>
-                </div>
-                <div class="drive-folder-upload__entries" id="driveFolderUploadEntries"></div>
-              </div>
-            </section>
-
-            <div class="drive__grid">
-              <section class="drive-card" aria-labelledby="driveFilesTitle">
-                <header class="drive-card__head">
+            <div class="model-settings__workspace">
+              <aside class="model-settings__rail" id="modelSettingsRail" aria-label="模型类型导航">
+                <div class="model-settings__rail-head">
                   <div>
-                    <span class="eyebrow">REMOTE FILES</span>
-                    <h3 id="driveFilesTitle">文件列表</h3>
-                    <nav class="drive-breadcrumbs" id="driveBreadcrumbs" aria-label="Drive 文件夹路径"></nav>
+                    <span class="model-settings__rail-kicker">MODEL LAYERS</span>
+                    <strong>服务类型</strong>
                   </div>
-                  <span class="drive-card__count" id="driveFileCount">—</span>
-                </header>
-                <div class="drive-files" id="driveFiles" aria-live="polite">
-                  <div class="drive-empty"><i class="ph ph-spinner-gap ph-spin" aria-hidden="true"></i><span>正在读取文件…</span></div>
+                  <button class="iconbtn model-settings__collapse" id="modelSettingsCollapse" type="button" aria-label="收起模型导航" aria-expanded="true" title="收起模型导航">
+                    <i class="ph ph-sidebar-simple" aria-hidden="true"></i>
+                  </button>
                 </div>
-                <nav class="drive-files__pagination" id="driveFilesPagination" aria-label="Drive 文件分页"></nav>
-              </section>
+                <nav class="model-settings__rail-nav" role="tablist" aria-label="模型类型">
+                  <button class="model-settings__rail-item is-active" type="button" role="tab" data-model-kind="llm" aria-current="page" aria-selected="true" aria-controls="model-panel-llm">
+                    <span class="model-settings__rail-icon model-settings__rail-icon--llm"><i class="ph ph-brain" aria-hidden="true"></i></span>
+                    <span class="model-settings__rail-copy"><strong>LLM 模型</strong><small>翻译与理解</small></span>
+                    <span class="model-settings__rail-status" data-model-status="llm">读取中</span>
+                  </button>
+                  <button class="model-settings__rail-item" type="button" role="tab" data-model-kind="whisper" aria-selected="false" aria-controls="model-panel-whisper">
+                    <span class="model-settings__rail-icon model-settings__rail-icon--whisper"><i class="ph ph-waveform" aria-hidden="true"></i></span>
+                    <span class="model-settings__rail-copy"><strong>Whisper 模型</strong><small>语音转文字</small></span>
+                    <span class="model-settings__rail-status" data-model-status="whisper">读取中</span>
+                  </button>
+                  <button class="model-settings__rail-item" type="button" role="tab" data-model-kind="tts" aria-selected="false" aria-controls="model-panel-tts">
+                    <span class="model-settings__rail-icon model-settings__rail-icon--tts"><i class="ph ph-speaker-high" aria-hidden="true"></i></span>
+                    <span class="model-settings__rail-copy"><strong>TTS 模型</strong><small>文字转语音</small></span>
+                    <span class="model-settings__rail-status" data-model-status="tts">读取中</span>
+                  </button>
+                </nav>
+                <div class="model-settings__rail-foot"><i class="ph ph-lock-key" aria-hidden="true"></i><span>密钥只发送到后端，不会回显</span></div>
+              </aside>
 
-              <section class="drive-card" aria-labelledby="driveTransfersTitle">
-                <header class="drive-card__head">
-                  <div>
-                    <span class="eyebrow">TRANSFER QUEUE</span>
-                    <h3 id="driveTransfersTitle">传输队列</h3>
-                  </div>
-                  <span class="drive-card__count" id="driveTransferCount">—</span>
-                </header>
-                <div class="drive-transfers" id="driveTransfers" aria-live="polite">
-                  <div class="drive-empty"><i class="ph ph-hourglass-simple" aria-hidden="true"></i><span>暂无传输任务</span></div>
+              <div class="model-settings__main">
+                <div class="model-settings__loading" id="modelSettingsLoading" role="status" hidden>
+                  <i class="ph ph-circle-notch" aria-hidden="true"></i><span>正在读取模型配置…</span>
                 </div>
-              </section>
+
+                <section class="model-panel is-active" id="model-panel-llm" role="tabpanel" data-model-panel="llm" aria-labelledby="model-panel-llm-title">
+                  <header class="model-panel__head">
+                    <div class="model-panel__identity">
+                      <span class="model-panel__icon model-panel__icon--llm"><i class="ph ph-brain" aria-hidden="true"></i></span>
+                      <div><span class="eyebrow">01 / LANGUAGE MODEL</span><h2 id="model-panel-llm-title">LLM 模型</h2><p>负责理解上下文、组织术语并生成字幕译文。</p></div>
+                    </div>
+                    <span class="engine-status engine-status--checking" id="modelStatusLlm">正在读取</span>
+                  </header>
+                  <div class="model-panel__notice"><i class="ph ph-sparkle" aria-hidden="true"></i><span>建议使用 OpenAI 兼容接口；API Key 仅在保存时提交，留空会保留当前配置。</span></div>
+                  <div class="model-catalog" data-model-catalog="llm">
+                    <div class="model-catalog__head"><div><span class="eyebrow">CONNECTED MODELS</span><h3>已接入的 LLM 模型</h3></div><button class="model-catalog__add" type="button" data-model-add="llm" aria-label="新增 LLM 模型" title="新增 LLM 模型"><i class="ph ph-plus" aria-hidden="true"></i><span>新增模型</span></button></div>
+                    <div class="model-catalog__grid" data-model-cards="llm" aria-live="polite"></div>
+                  </div>
+                  <form class="model-form" id="modelFormLlm" data-model-form="llm" novalidate>
+                    <label class="model-toggle"><input name="enabled" type="checkbox" checked /><span><strong>启用 LLM 翻译</strong><small>关闭后，任务页不会提供翻译能力</small></span><span class="model-toggle__state"></span></label>
+                    <div class="model-form__grid model-form__grid--two">
+                      <label class="model-field"><span>服务商</span><select name="provider"><option value="deepseek">DeepSeek</option><option value="openai">OpenAI 兼容接口</option><option value="custom">自定义服务</option></select></label>
+                      <label class="model-field"><span>模型名称</span><input name="model" type="text" placeholder="deepseek-chat" required /></label>
+                    </div>
+                    <label class="model-field"><span>Base URL <em>可选</em></span><input name="baseUrl" type="url" inputmode="url" placeholder="https://api.deepseek.com/v1" /></label>
+                    <div class="model-form__grid model-form__grid--two">
+                      <label class="model-field"><span>API Key <em>留空保持不变</em></span><input name="apiKey" type="password" autocomplete="new-password" placeholder="sk-…" /></label>
+                      <label class="model-field"><span>上下文长度 <em>tokens</em></span><input name="maxTokens" type="number" min="256" max="131072" step="256" /></label>
+                    </div>
+                    <div class="model-form__grid model-form__grid--three">
+                      <label class="model-field"><span>Temperature</span><input name="temperature" type="number" min="0" max="2" step="0.1" /></label>
+                      <label class="model-field"><span>请求超时 <em>秒</em></span><input name="timeout" type="number" min="1" max="86400" step="1" /></label>
+                      <label class="model-field"><span>并发请求数</span><input name="concurrency" type="number" min="1" max="32" step="1" /></label>
+                    </div>
+                    <div class="model-form__foot"><span class="model-form__meta" id="modelMetaLlm">—</span><div class="model-form__actions"><button class="btn btn--ghost" type="button" data-model-validate="llm"><i class="ph ph-plugs-connected" aria-hidden="true"></i><span>测试连接</span></button><button class="btn btn--primary" type="submit"><i class="ph ph-floppy-disk" aria-hidden="true"></i><span>保存 LLM 设置</span></button></div></div>
+                  </form>
+                </section>
+
+                <section class="model-panel" id="model-panel-whisper" role="tabpanel" data-model-panel="whisper" aria-labelledby="model-panel-whisper-title" hidden>
+                  <header class="model-panel__head">
+                    <div class="model-panel__identity"><span class="model-panel__icon model-panel__icon--whisper"><i class="ph ph-waveform" aria-hidden="true"></i></span><div><span class="eyebrow">02 / SPEECH TO TEXT</span><h2 id="model-panel-whisper-title">Whisper 模型</h2><p>负责从视频或音频中识别原声字幕，模型文件可在本机运行。</p></div></div>
+                    <div class="model-panel__head-actions"><button class="btn btn--ghost" id="whisperImportShortcut" type="button"><i class="ph ph-folder-notch-open" aria-hidden="true"></i><span>导入本地模型</span></button><span class="engine-status engine-status--checking" id="modelStatusWhisper">正在读取</span></div>
+                  </header>
+                  <div class="model-panel__notice"><i class="ph ph-cpu" aria-hidden="true"></i><span>本地模型优先使用 CPU；通过下方模型库管理本机模型；仅已就绪的模型可以设为当前模型。</span></div>
+                  <form class="model-form" id="modelFormWhisper" data-model-form="whisper" novalidate>
+                    <p class="model-form__meta" id="whisperSettingsHint" aria-live="polite"></p>
+                    <p class="model-form__feedback" id="whisperSettingsFeedback" role="status" aria-live="polite" hidden></p>
+                    <label class="model-toggle"><input name="enabled" type="checkbox" checked /><span><strong>由模型设置统一管理 Whisper</strong><small>启用后新任务使用当前模型；关闭后可在任务页选择已就绪模型</small></span><span class="model-toggle__state"></span></label>
+                    <div class="model-form__grid model-form__grid--two">
+                      <label class="model-field"><span>运行方式</span><select name="provider" disabled><option value="local">本地模型</option></select></label>
+                      <label class="model-field"><span>模型版本</span><select name="model" id="whisperCurrentModel"><option value="">读取本地模型…</option></select></label>
+                    </div>
+                    <div class="model-form__grid model-form__grid--three">
+                      <label class="model-field"><span>默认语言</span><select name="language"><option value="auto">自动识别</option><option value="en">英语</option><option value="zh">中文</option><option value="ja">日语</option><option value="ko">韩语</option><option value="es">西班牙语</option></select></label>
+                      <label class="model-field"><span>计算设备</span><select name="device"><option value="cpu">CPU</option><option value="cuda">CUDA</option><option value="mps">Apple GPU (MPS)</option></select></label>
+                      <label class="model-field"><span>线程数</span><input name="threads" type="number" min="1" max="32" step="1" /></label>
+                    </div>
+                    <label class="model-check"><input name="wordTimestamps" type="checkbox" checked /><span><strong>生成词级时间戳</strong><small>便于后续字幕编辑和精细对齐</small></span></label>
+                    <div class="model-form__foot"><span class="model-form__meta" id="modelMetaWhisper">—</span><div class="model-form__actions"><button class="btn btn--primary" type="submit"><i class="ph ph-floppy-disk" aria-hidden="true"></i><span>保存 Whisper 设置</span></button></div></div>
+                  </form>
+<div class="audio-settings" id="localModelsSettings">
+                <header class="audio-settings__head local-model-store__head">
+                  <div class="audio-settings__intro"><span class="eyebrow">WHISPER / CPU</span><h2>模型商店（本地）</h2><p>选择官方规格直接下载，或导入已有的 Hugging Face Whisper 文件。所有模型只在本机 CPU 上运行。</p></div>
+                  <p id="localModelActionFeedback" class="local-model-action-feedback" role="status" aria-live="polite" hidden></p>
+                  <div class="local-model-store__summary-wrap"><span class="local-model-store__summary-label">模型库状态</span><span id="localModelSummary" class="local-model-store__summary" aria-live="polite"></span></div>
+                </header>
+                <div class="local-model-store__section-head"><div><span class="eyebrow">CATALOG</span><h3>官方模型</h3></div><span>预计大小随版本可能略有变化</span></div>
+                <div id="localModelsList" class="local-model-list" aria-live="polite"></div>
+                <div class="local-model-store__section-head local-model-store__section-head--import"><div><span class="eyebrow">YOUR FILES</span><h3>导入本地模型</h3></div><span>导入前会检查目录结构，模型内容由后端完成最终验证</span></div>
+                <div class="local-model-import-panel">
+                  <div class="local-model-import-panel__head">
+                    <span class="local-model-import-panel__icon"><i class="ph ph-folder-notch-open" aria-hidden="true"></i></span>
+                    <div><strong>添加你的本地 Whisper 模型</strong><p>选择包含权重和配置文件的模型目录，导入后即可在任务中使用。</p></div>
+                    <span class="local-model-import-panel__hint">仅支持 .bin / .safetensors</span>
+                  </div>
+                  <form id="localModelImportForm" class="local-model-import" novalidate>
+                    <div class="local-model-import__fields">
+                      <label class="local-model-import__field" for="localModelName"><span>模型 ID <em>必填</em></span><input id="localModelName" name="name" type="text" pattern="[a-zA-Z0-9][a-zA-Z0-9_-]*" maxlength="64" required aria-describedby="localModelNameHint localModelNameError"><small id="localModelNameHint">用于任务配置，只能使用字母、数字、下划线和短横线。</small><small class="local-model-import__error" id="localModelNameError" hidden></small></label>
+                      <label class="local-model-import__field" for="localModelLabel"><span>显示名称 <em>必填</em></span><input id="localModelLabel" name="label" type="text" maxlength="100" required aria-describedby="localModelLabelHint localModelLabelError"><small id="localModelLabelHint">输入名称后会自动生成一个可修改的模型 ID。</small><small class="local-model-import__error" id="localModelLabelError" hidden></small></label>
+                    </div>
+                    <label class="local-model-dropzone" id="localModelDropzone" for="localModelFiles" tabindex="0" aria-describedby="localModelDropzoneHint">
+                      <span class="local-model-dropzone__icon"><i class="ph ph-upload-simple" aria-hidden="true"></i></span>
+                      <span class="local-model-dropzone__copy"><strong id="localModelDropzoneTitle">拖入模型目录，或点击选择</strong><small id="localModelDropzoneHint">保留原生文件夹选择器作为兼容入口，不支持压缩包或单个权重文件。</small></span>
+                      <span class="local-model-dropzone__action">选择目录</span>
+                      <input id="localModelFiles" name="files" type="file" webkitdirectory multiple aria-describedby="localModelDropzoneHint">
+                    </label>
+                    <div class="local-model-file-summary" id="localModelFileSummary" aria-live="polite" hidden>
+                      <div class="local-model-file-summary__top"><div><span class="local-model-file-summary__eyebrow">预检结果</span><strong id="localModelFileSummaryTitle">尚未选择模型目录</strong></div><span class="local-model-file-summary__count" id="localModelFileSummaryCount"></span></div>
+                      <div class="local-model-file-summary__checks" id="localModelFileChecks"></div>
+                      <details id="localModelFileDetails" class="local-model-file-details" hidden><summary>查看文件检查详情</summary><ul id="localModelFileList"></ul></details>
+                    </div>
+                    <div class="local-model-import__feedback" id="localModelImportFeedback" hidden><i id="localModelImportFeedbackIcon" class="ph ph-info" aria-hidden="true"></i><span id="localModelImportStatus" role="status" aria-live="polite"></span></div>
+                    <div class="local-model-import__foot"><span class="local-model-import__requirements" id="localModelImportRequirements">选择模型目录后将自动检查结构</span><button class="btn btn--primary" id="localModelImportSubmit" type="submit" disabled><i class="ph ph-folder-plus" aria-hidden="true"></i><span>导入模型</span></button></div>
+                  </form>
+                </div>
+                <div id="importedModelsList" class="local-model-list" aria-live="polite"></div>
+              </div>
+
+                </section>
+
+                <section class="model-panel" id="model-panel-tts" role="tabpanel" data-model-panel="tts" aria-labelledby="model-panel-tts-title" hidden>
+                  <header class="model-panel__head">
+                    <div class="model-panel__identity"><span class="model-panel__icon model-panel__icon--tts"><i class="ph ph-speaker-high" aria-hidden="true"></i></span><div><span class="eyebrow">03 / TEXT TO SPEECH</span><h2 id="model-panel-tts-title">TTS 模型</h2><p>将译文按字幕时间轴合成为配音，并保留可调整的音色和语速。</p></div></div>
+                    <span class="engine-status engine-status--checking" id="modelStatusTts">正在读取</span>
+                  </header>
+                  <div class="model-panel__notice"><i class="ph ph-waveform" aria-hidden="true"></i><span>开启后，任务页会显示配音选项；不同语言可以在此选择对应音色。</span></div>
+                  <div class="model-catalog" data-model-catalog="tts">
+                    <div class="model-catalog__head"><div><span class="eyebrow">CONNECTED MODELS</span><h3>已接入的 TTS 模型</h3></div><button class="model-catalog__add" type="button" data-model-add="tts" aria-label="新增 TTS 模型" title="新增 TTS 模型"><i class="ph ph-plus" aria-hidden="true"></i><span>新增模型</span></button></div>
+                    <div class="model-catalog__grid" data-model-cards="tts" aria-live="polite"></div>
+                  </div>
+                  <form class="model-form" id="modelFormTts" data-model-form="tts" novalidate>
+                    <label class="model-toggle"><input name="enabled" type="checkbox" /><span><strong>启用 TTS 配音</strong><small>按译文字幕时间轴生成配音轨</small></span><span class="model-toggle__state"></span></label>
+                    <div class="model-form__grid model-form__grid--two">
+                      <label class="model-field"><span>服务商</span><select name="provider"><option value="kokoro">Kokoro · 本地 CPU</option><option value="openai">OpenAI 兼容接口</option><option value="elevenlabs">ElevenLabs</option></select></label>
+                      <label class="model-field"><span>模型名称</span><input name="model" type="text" placeholder="kokoro-v1" required /></label>
+                    </div>
+                    <div class="model-form__grid model-form__grid--two">
+                      <label class="model-field"><span>Base URL <em>云端服务可选</em></span><input name="baseUrl" type="url" inputmode="url" placeholder="https://api.openai.com/v1" /></label>
+                      <label class="model-field"><span>默认音色</span><select name="voice"><option value="auto">自动</option><option value="af_maple">af_maple · English</option><option value="af_sol">af_sol · English</option><option value="zf_001">zf_001 · 中文女声</option><option value="zm_010">zm_010 · 中文男声</option></select></label>
+                    </div>
+                    <div class="model-form__grid model-form__grid--three">
+                      <label class="model-field"><span>API Key <em>留空保持不变</em></span><input name="apiKey" type="password" autocomplete="new-password" placeholder="可选" /></label>
+                      <label class="model-field"><span>语速</span><input name="speed" type="number" min="0.5" max="2" step="0.05" /></label>
+                      <label class="model-field"><span>输出格式</span><select name="format"><option value="wav">WAV · 兼容性好</option><option value="mp3">MP3 · 文件更小</option></select></label>
+                    </div>
+                    <div class="model-form__foot"><span class="model-form__meta" id="modelMetaTts">—</span><div class="model-form__actions"><button class="btn btn--ghost" type="button" data-model-validate="tts"><i class="ph ph-play-circle" aria-hidden="true"></i><span>试听 / 检查</span></button><button class="btn btn--primary" type="submit"><i class="ph ph-floppy-disk" aria-hidden="true"></i><span>保存 TTS 设置</span></button></div></div>
+                  </form>
+                </section>
+              </div>
             </div>
+            <dialog class="model-dialog" id="modelCreateDialog" aria-labelledby="modelCreateDialogTitle">
+              <form class="model-dialog__form" id="modelCreateForm" method="dialog" novalidate>
+                <button class="model-dialog__close" type="button" data-model-dialog-close aria-label="关闭新增模型窗口"><i class="ph ph-x" aria-hidden="true"></i></button>
+                <span class="eyebrow">NEW MODEL CONNECTION</span>
+                <h2 id="modelCreateDialogTitle">新增模型</h2>
+                <p class="model-dialog__intro" id="modelCreateDialogIntro">填写模型连接信息，保存后会出现在当前类型的模型卡片中。</p>
+                <div class="model-dialog__fields">
+                  <label class="model-field"><span>显示名称</span><input name="name" type="text" placeholder="例如：翻译主模型" required /></label>
+                  <label class="model-field"><span>服务商</span><select name="provider" id="modelCreateProvider"><option value="openai">OpenAI 兼容接口</option><option value="deepseek">DeepSeek</option><option value="local">本地模型</option><option value="custom">自定义服务</option></select></label>
+                  <label class="model-field"><span>模型名称</span><input name="model" type="text" placeholder="例如：gpt-4o-mini" required /></label>
+                  <label class="model-field"><span>Base URL <em>可选</em></span><input name="baseUrl" type="url" inputmode="url" placeholder="https://api.openai.com/v1" /></label>
+                  <label class="model-field model-dialog__wide"><span>API Key <em>仅发送到后端</em></span><input name="apiKey" type="password" autocomplete="new-password" placeholder="sk-…" /></label>
+                  <label class="model-dialog__switch"><input name="enabled" type="checkbox" checked /><span><strong>立即启用这个模型</strong><small>保存后将作为当前类型的可用连接</small></span></label>
+                  <div class="model-dialog__extra" id="modelCreateExtraFields"></div>
+                </div>
+                <div class="model-dialog__feedback" id="modelCreateFeedback" role="status" aria-live="polite" hidden></div>
+                <div class="model-dialog__actions"><button class="btn btn--ghost" type="button" data-model-dialog-close>取消</button><button class="btn btn--ghost" id="modelDialogValidate" type="button"><i class="ph ph-plugs-connected" aria-hidden="true"></i><span>测试连接</span></button><button class="btn btn--primary" id="modelCreateSubmit" type="submit"><i class="ph ph-plus" aria-hidden="true"></i><span>添加模型</span></button></div>
+              </form>
+            </dialog>
           </div>
         </section>
 
-        <!-- ============ 高级设置 ============ -->
-        <section class="view" data-view="translation-settings" id="view-translation-settings">
+
+        <!-- ============ 其他设置 ============ -->
+        <section class="view" data-view="other-settings" id="view-other-settings">
           <div class="advanced-settings" id="advancedSettings">
-            <nav class="advanced-tabs" role="tablist" aria-label="高级设置分类">
-              <button class="advanced-tab is-active" id="settings-tab-replicate" type="button" role="tab" aria-selected="true" aria-controls="settings-panel-replicate" data-settings-tab="replicate">
-                <i class="ph ph-wallet" aria-hidden="true"></i><span>Replicate 账户</span>
-              </button>
+            <nav class="advanced-tabs" role="tablist" aria-label="其他设置分类">
               <button class="advanced-tab" id="settings-tab-engines" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-engines" data-settings-tab="engines" tabindex="-1">
                 <i class="ph ph-sliders-horizontal" aria-hidden="true"></i><span>翻译引擎</span>
               </button>
+              <button class="advanced-tab" id="settings-tab-audio" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-audio" data-settings-tab="audio" tabindex="-1">
+                <i class="ph ph-waveform" aria-hidden="true"></i><span>音频增强</span>
+              </button>
+              <button class="advanced-tab" id="settings-tab-probe" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-probe" data-settings-tab="probe" tabindex="-1">
+                <i class="ph ph-pulse" aria-hidden="true"></i><span>下载测试</span>
+              </button>
+              <button class="advanced-tab" id="settings-tab-drive" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-drive" data-settings-tab="drive" tabindex="-1">
+                <i class="ph ph-cloud-arrow-up" aria-hidden="true"></i><span>Google Drive</span>
+              </button>
             </nav>
 
-            <div class="advanced-tab-panel" id="settings-panel-replicate" role="tabpanel" aria-labelledby="settings-tab-replicate" data-settings-panel="replicate">
-              <section class="replicate-billing" id="replicateBilling" aria-live="polite">
-                <div class="replicate-billing__head">
-                  <div class="replicate-billing__identity">
-                    <span class="replicate-billing__icon"><i class="ph ph-wallet"></i></span>
-                    <div>
-                      <span class="eyebrow">ACCOUNT / BILLING</span>
-                      <h2>Replicate 账户余额</h2>
-                      <p>通过官方账户 API 验证 Token；如果官方未返回余额，则保留账单页入口。</p>
-                    </div>
+            <div class="advanced-tab-panel" id="settings-panel-audio" role="tabpanel" aria-labelledby="settings-tab-audio" data-settings-panel="audio" hidden>
+              <div class="audio-settings" id="audioSettings">
+                <header class="audio-settings__head">
+                  <div class="audio-settings__intro">
+                    <span class="eyebrow">AUDIO / VOCAL SEPARATION</span>
+                    <h2>人声分离</h2>
+                    <p>先从背景音乐中提取人声，再交给 Whisper 识别。适合音乐和音效盖过对白的视频。</p>
                   </div>
-                  <button class="btn btn--ghost btn--sm" id="replicateBalanceRefresh" type="button">
-                    <i class="ph ph-arrows-clockwise"></i><span>刷新</span>
-                  </button>
-                </div>
-                <div class="replicate-billing__body" id="replicateBalanceBody">
-                  <span class="engine-status engine-status--checking"><span>正在准备查询…</span></span>
-                </div>
-              </section>
+                  <div class="audio-settings__status" aria-live="polite">
+                    <span class="audio-settings__status-label">运行状态</span>
+                    <span class="engine-status engine-status--checking" id="audioSettingsStatus">正在读取</span>
+                  </div>
+                </header>
+                <div class="audio-settings__notice" id="audioSettingsNotice" hidden></div>
+                <form class="audio-settings__form" id="audioSettingsForm">
+                  <label class="audio-settings__toggle"><input id="audioSeparationEnabled" type="checkbox" /><span><strong>启用人声分离</strong><small>开启后，新任务会先进行 vocals 提取</small></span><span class="audio-settings__toggle-state">OFF</span></label>
+                  <div class="audio-settings__fields">
+                    <label class="engine-field"><span>分离模型</span><select id="audioSeparationModel"><option value="htdemucs">HT-Demucs · 质量优先</option><option value="mdx_q">MDX-Q · CPU 较轻</option></select></label>
+                    <label class="engine-field"><span>CPU 线程</span><input id="audioSeparationThreads" type="number" min="1" max="8" step="1" value="1" /></label>
+                    <label class="engine-field"><span>单任务超时 <em>秒</em></span><input id="audioSeparationTimeout" type="number" min="60" max="86400" step="60" value="1800" /></label>
+                  </div>
+                  <div class="audio-settings__foot"><span id="audioSettingsMeta">—</span><button class="btn btn--primary" id="audioSettingsSave" type="submit"><i class="ph ph-floppy-disk"></i><span>保存设置</span></button></div>
+                </form>
+              </div>
             </div>
 
             <div class="advanced-tab-panel" id="settings-panel-engines" role="tabpanel" aria-labelledby="settings-tab-engines" data-settings-panel="engines" hidden>
@@ -631,16 +688,183 @@
                   <div>
                     <span class="eyebrow">ADVANCED / TRANSLATION</span>
                     <h2>翻译引擎</h2>
-                    <p>创建多个服务商配置，按 OpenAI Compatible 或 Anthropic Compatible 协议接入。</p>
+                    <p>配置云端翻译服务，或下载本地 CPU 英译中模型。</p>
                   </div>
                   <button class="btn btn--primary" id="engineAdd" type="button"><i class="ph ph-plus"></i><span>新增配置</span></button>
                 </header>
                 <div class="translation-settings__notice">
                   <i class="ph ph-shield-check" aria-hidden="true"></i>
-                  <span>API Key 只用于后端请求，页面仅显示脱敏状态；保存后可自动检测连接和模型可用性。</span>
+                  <span>云端 API Key 只用于后端请求；本地模型无需 API Key，下载后可离线检测。</span>
                 </div>
                 <div class="engine-list" id="engineList" aria-live="polite"></div>
               </div>
+            </div>
+
+            <div class="advanced-tab-panel" id="settings-panel-probe" role="tabpanel" aria-labelledby="settings-tab-probe" data-settings-panel="probe" hidden>
+              <section class="settings-view" id="view-probe">
+                <div class="probe">
+                  <header class="probe__head">
+                    <div>
+                      <h2>下载测试</h2>
+                      <p>检查链接是否能被 yt-dlp 解析并找到可下载格式。</p>
+                    </div>
+                    <span class="probe__badge"><i class="ph ph-hard-drives" aria-hidden="true"></i>不下载文件</span>
+                  </header>
+
+                  <form class="probe__panel" id="probeForm" novalidate>
+                    <div class="probe__bar" id="probeBar">
+                      <span class="probe__icon" aria-hidden="true"><i class="ph ph-link-simple"></i></span>
+                      <input
+                        class="probe__input"
+                        id="probeUrl"
+                        name="probeUrl"
+                        type="url"
+                        inputmode="url"
+                        autocomplete="off"
+                        aria-label="测试链接"
+                        placeholder="粘贴要测试的视频页面地址"
+                        required
+                      />
+                      <button class="btn btn--primary probe__go" id="probeBtn" type="submit">
+                        <i class="ph ph-pulse" aria-hidden="true"></i><span>开始测试</span>
+                      </button>
+                    </div>
+                    <p class="probe__hint" id="probeHint">等待输入链接</p>
+                  </form>
+
+                  <!-- 测试历史：所有 probe 调用都会落库一份，方便回看与排查 -->
+                  <section class="probe-history" aria-label="测试历史">
+                    <header class="probe-history__head">
+                      <h3>测试历史</h3>
+                      <div class="probe-history__actions">
+                        <button class="btn btn--ghost btn--sm" id="probeHistoryRefresh" type="button">
+                          <i class="ph ph-arrow-clockwise" aria-hidden="true"></i><span>刷新</span>
+                        </button>
+                        <button class="btn btn--ghost btn--sm probe-history__clear" id="probeHistoryClear" type="button">
+                          <i class="ph ph-trash" aria-hidden="true"></i><span>清空</span>
+                        </button>
+                      </div>
+                    </header>
+                    <p class="probe-history__hint" id="probeHistoryHint">点击上方"刷新"加载历史记录。</p>
+                    <ul class="probe-history__list" id="probeHistoryList"></ul>
+                  </section>
+                </div>
+              </section>
+            </div>
+            <div class="advanced-tab-panel" id="settings-panel-drive" role="tabpanel" aria-labelledby="settings-tab-drive" data-settings-panel="drive" hidden>
+              <section class="settings-view" id="view-drive">
+                <div class="drive" id="drivePanel">
+                  <header class="drive__head">
+                    <div>
+                      <span class="eyebrow">CLOUD / GOOGLE DRIVE</span>
+                      <h2>Google Drive</h2>
+                      <p>动态 loopback 授权 · 大文件断点传输 · 本地单用户空间</p>
+                    </div>
+                    <div class="drive__head-actions">
+                      <span class="drive-status drive-status--offline" id="driveStatus" aria-live="polite">
+                        <span class="drive-status__dot" aria-hidden="true"></span><span id="driveStatusText">正在检查</span>
+                      </span>
+                      <button class="btn btn--ghost btn--sm" id="driveRefresh" type="button">
+                        <i class="ph ph-arrow-clockwise" aria-hidden="true"></i><span>刷新</span>
+                      </button>
+                    </div>
+                  </header>
+
+                  <section class="drive__hero" aria-labelledby="driveConnectionTitle">
+                    <div class="drive__hero-copy">
+                      <div class="drive__orb" aria-hidden="true"><i class="ph ph-cloud-check"></i></div>
+                      <div>
+                        <span class="eyebrow">AUTHENTICATION</span>
+                        <h3 id="driveConnectionTitle">连接你的 Google Drive</h3>
+                        <p id="driveAuthHint">授权后，文件只会进入 sidecar 管理的 Subtitles AI 文件夹。</p>
+                      </div>
+                    </div>
+                    <div class="drive__auth-actions">
+                      <button class="btn btn--primary" id="driveAuthAction" type="button">
+                        <i class="ph ph-arrow-square-out" aria-hidden="true"></i><span>连接 Google Drive</span>
+                      </button>
+                      <button class="btn btn--ghost btn--sm" id="driveDisconnect" type="button" hidden>
+                        <i class="ph ph-sign-out" aria-hidden="true"></i><span>断开连接</span>
+                      </button>
+                    </div>
+                  </section>
+
+                  <section class="drive__upload" aria-labelledby="driveUploadTitle">
+                    <div class="drive__section-head">
+                      <div>
+                        <span class="eyebrow">INGEST / RESUMABLE</span>
+                        <h3 id="driveUploadTitle">上传到 Drive</h3>
+                      </div>
+                      <span class="drive__microcopy">16 MiB chunks · 可中断</span>
+                    </div>
+                    <div class="drive-dropzone" id="driveDropzone" tabindex="0" role="button" aria-label="选择文件或文件夹上传">
+                      <input id="driveFileInput" type="file" hidden />
+                      <input id="driveFolderInput" type="file" webkitdirectory="" multiple hidden />
+                      <span class="drive-dropzone__icon" aria-hidden="true"><i class="ph ph-upload-simple"></i></span>
+                      <span class="drive-dropzone__title">选择文件或文件夹，或拖到这里</span>
+                      <span class="drive-dropzone__hint">文件先分片写入本地，再由 sidecar 可靠上传到 Google Drive</span>
+                      <span class="drive-dropzone__actions">
+                        <button class="btn btn--primary btn--sm" id="driveChooseFile" type="button">选择文件</button>
+                        <button class="btn btn--ghost btn--sm" id="driveChooseFolder" type="button">选择文件夹</button>
+                      </span>
+                    </div>
+                    <p class="drive-folder-upload__hint" id="driveFolderUploadHint">空目录不会上传；目录结构会按相对路径在 Drive 中重建。</p>
+                    <div class="drive-upload-progress" id="driveUploadProgress" hidden aria-live="polite">
+                      <div class="drive-upload-progress__top">
+                        <div class="drive-upload-progress__name" id="driveUploadName">—</div>
+                        <div class="drive-upload-progress__value" id="driveUploadValue">0%</div>
+                      </div>
+                      <div class="drive-progress"><span id="driveUploadBar"></span></div>
+                      <div class="drive-upload-progress__bottom">
+                        <span id="driveUploadBytes">等待上传</span>
+                        <button class="btn btn--ghost btn--sm" id="driveUploadCancel" type="button">取消</button>
+                      </div>
+                    </div>
+                    <div class="drive-folder-upload-progress" id="driveFolderUploadProgress" hidden aria-live="polite">
+                      <div class="drive-upload-progress__top">
+                        <div class="drive-upload-progress__name" id="driveFolderUploadName">文件夹上传</div>
+                        <div class="drive-upload-progress__value" id="driveFolderUploadValue">0%</div>
+                      </div>
+                      <div class="drive-progress"><span id="driveFolderUploadBar"></span></div>
+                      <div class="drive-upload-progress__bottom">
+                        <span id="driveFolderUploadBytes">等待上传</span>
+                        <button class="btn btn--ghost btn--sm" id="driveFolderUploadCancel" data-action="cancel-folder" type="button">取消</button>
+                      </div>
+                      <div class="drive-folder-upload__entries" id="driveFolderUploadEntries"></div>
+                    </div>
+                  </section>
+
+                  <div class="drive__grid">
+                    <section class="drive-card" aria-labelledby="driveFilesTitle">
+                      <header class="drive-card__head">
+                        <div>
+                          <span class="eyebrow">REMOTE FILES</span>
+                          <h3 id="driveFilesTitle">文件列表</h3>
+                          <nav class="drive-breadcrumbs" id="driveBreadcrumbs" aria-label="Drive 文件夹路径"></nav>
+                        </div>
+                        <span class="drive-card__count" id="driveFileCount">—</span>
+                      </header>
+                      <div class="drive-files" id="driveFiles" aria-live="polite">
+                        <div class="drive-empty"><i class="ph ph-spinner-gap ph-spin" aria-hidden="true"></i><span>正在读取文件…</span></div>
+                      </div>
+                      <nav class="drive-files__pagination" id="driveFilesPagination" aria-label="Drive 文件分页"></nav>
+                    </section>
+
+                    <section class="drive-card" aria-labelledby="driveTransfersTitle">
+                      <header class="drive-card__head">
+                        <div>
+                          <span class="eyebrow">TRANSFER QUEUE</span>
+                          <h3 id="driveTransfersTitle">传输队列</h3>
+                        </div>
+                        <span class="drive-card__count" id="driveTransferCount">—</span>
+                      </header>
+                      <div class="drive-transfers" id="driveTransfers" aria-live="polite">
+                        <div class="drive-empty"><i class="ph ph-hourglass-simple" aria-hidden="true"></i><span>暂无传输任务</span></div>
+                      </div>
+                    </section>
+                  </div>
+                </div>
+              </section>
             </div>
           </div>
         </section>
@@ -651,7 +875,5 @@
 
     <script src="config.js"></script>
     <script type="module" src="js/main.js"></script>
-    <script type="module" src="js/ui-replicate-billing.js"></script>
-    <script type="module" src="js/ui-advanced-settings.js"></script>
   </body>
 </html>

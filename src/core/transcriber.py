@@ -1,30 +1,27 @@
-"""流水线第③步：语音识别（Replicate-hosted Whisper）。
+"""流水线第③步：语音识别与字幕生成。
 
 输入：audio.wav（提取阶段产物） + 任务 ID
 输出：TranscribeResult（其中 srt_path 指向 data/{task_id}/original.srt）
 
-通过 Replicate 云端 API 调用 Whisper，无需本地 GPU / 模型下载。
-支持本地上传音频文件。进度通过轮询 prediction status 回调透传。
-
-依赖：replicate（Python SDK）、REPLICATE_API_TOKEN（环境变量或 .env）。
+默认使用本地 faster-whisper，也支持符合协议的自定义 HTTP 服务。
+支持本地上传音频文件。进度通过回调透传。
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import math
-import os
-import time
+import threading
+import wave
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Any, Callable, List, Optional, Protocol
 
 import httpx
-import replicate
 
 from src.config import settings, ensure_task_dir, ORIGINAL_SRT
 from src.core.srt_utils import Subtitle, decode_srt_bytes, write_srt
+from src.service.model_manager import model_manager
 
 logger = logging.getLogger(__name__)
 
@@ -63,88 +60,54 @@ class TranscribeResult:
 
 ProgressHook = Callable[[TranscribeProgress], None]
 
-_PREDICTION_STATE_FILE = "replicate_prediction.json"
-_ACTIVE_PREDICTION_STATUSES = {"starting", "processing"}
-_TERMINAL_PREDICTION_STATUSES = {"succeeded", "failed", "canceled", "aborted"}
+
+@dataclass(frozen=True)
+class TranscribeRequest:
+    """所有识别服务都必须能够处理的请求参数。"""
+
+    audio_path: Path | str
+    task_id: str
+    language: Optional[str] = None
+    model_name: Optional[str] = None
 
 
-def _load_env():
-    """手动加载项目根 .env（不依赖 python-dotenv）。"""
-    env_path = Path(__file__).resolve().parents[2] / ".env"
-    if not env_path.exists():
-        return
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, val = line.partition("=")
-        key, val = key.strip(), val.strip().strip('"').strip("'")
-        if key and val and key not in os.environ:
-            os.environ[key] = val
+@dataclass(frozen=True)
+class TranscribeResponse:
+    """识别服务返回的统一外壳，output 使用现有 segments/SRT 解析协议。"""
 
+    output: Any
+    language: Optional[str] = None
+    language_probability: Optional[float] = None
+    duration: Optional[float] = None
+
+
+class TranscriberService(Protocol):
+    """可接入 transcribe 阶段的服务协议。
+
+    服务可以直接返回 TranscribeResponse，也可以返回能被 _extract_segments
+    解析的原始 output（segments 列表、包含 segments/srt/srt_file 的字典等）。
+    """
+
+    def transcribe(
+        self,
+        request: TranscribeRequest,
+        *,
+        on_progress: Optional[ProgressHook] = None,
+        cancel_check: Optional[Callable[[], None]] = None,
+    ) -> TranscribeResponse | Any:
+        ...
+
+
+# 便于调用方按 backend 语义引用协议。
+TranscriberBackend = TranscriberService
+
+_LOCAL_WHISPER_SERVICES: dict[tuple[str, str, str, Optional[str], int], "LocalWhisperTranscriber"] = {}
 
 def _safe_callback(hook: ProgressHook, pct: Optional[float], status: str) -> None:
     try:
         hook(TranscribeProgress(percent=pct, status=status))
     except Exception:
         logger.exception("进度回调异常，已忽略")
-
-
-def _prediction_state_path(state_dir: Path) -> Path:
-    return state_dir / _PREDICTION_STATE_FILE
-
-
-def _load_prediction_id(state_dir: Path, model_ref: str) -> Optional[str]:
-    path = _prediction_state_path(state_dir)
-    if not path.exists():
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError):
-        logger.warning("Replicate prediction 状态文件不可读，忽略并重新创建: %s", path)
-        return None
-    prediction_id = payload.get("prediction_id")
-    if payload.get("model_ref") != model_ref or not isinstance(prediction_id, str):
-        logger.warning("Replicate prediction 状态与当前模型不匹配，忽略: %s", path)
-        return None
-    return prediction_id
-
-
-def _save_prediction_state(
-    state_dir: Path,
-    *,
-    prediction_id: str,
-    model_ref: str,
-    status: str,
-) -> None:
-    path = _prediction_state_path(state_dir)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    payload = {
-        "prediction_id": prediction_id,
-        "model_ref": model_ref,
-        "status": status,
-        "updated_at": int(time.time()),
-    }
-    tmp_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    tmp_path.replace(path)
-
-
-def _clear_prediction_state(state_dir: Path) -> None:
-    path = _prediction_state_path(state_dir)
-    try:
-        path.unlink(missing_ok=True)
-    except OSError:
-        logger.warning("清理 Replicate prediction 状态文件失败: %s", path, exc_info=True)
-
-
-def _sleep_with_cancel(seconds: float, cancel_check: Optional[Callable[[], None]]) -> None:
-    elapsed = 0.0
-    while elapsed < seconds:
-        _do_cancel_check(cancel_check)
-        sleep_time = min(0.5, seconds - elapsed)
-        time.sleep(sleep_time)
-        elapsed += sleep_time
-    _do_cancel_check(cancel_check)
 
 
 def _error_code_for_status(status: Optional[int]) -> str:
@@ -159,133 +122,241 @@ def _error_code_for_status(status: Optional[int]) -> str:
     return "upstream_error"
 
 
-def _run_replicate_with_retry(
-    model_ref: str,
-    build_input: Callable[[], dict],
-    *,
-    timeout: int,
-    retries: int,
-    retry_interval: float,
-    poll_interval: float,
-    state_dir: Path,
-    on_progress: Optional[ProgressHook] = None,
-    last_pct: Optional[float] = 1.0,
-    cancel_check: Optional[Callable[[], None]] = None,
-):
-    """创建并轮询 Replicate prediction，网络失败时延迟重试同一任务。
+class HttpTranscriber:
+    """符合自定义 HTTP 协议的识别服务适配器。
 
-    prediction ID 会持久化到任务目录。只要远端状态仍是 starting/processing，
-    就始终查询同一个 prediction，不会再次提交。仅在创建请求本身没有取得 ID
-    且发生网络错误时，才可能在 retry_interval 后重新创建。
+    请求：POST JSON ``{"audio_url": ..., "language": ..., "model": ..., "task_id": ...}``
+    或 multipart ``audio`` 文件；本地文件使用 multipart，远程 URL 使用 JSON。
+    响应：JSON 对象，必须包含 ``segments``（每项含 text/start/end）或 ``srt``，
+    可选 ``language``、``language_probability``、``duration``。
     """
-    _do_cancel_check(cancel_check)
-    client = replicate.Client(
-        api_token=os.getenv("REPLICATE_API_TOKEN"),
-        timeout=httpx.Timeout(float(timeout), connect=30.0),
-    )
-    prediction_id = _load_prediction_id(state_dir, model_ref)
-    network_failures = 0
-    last_exc: Exception | None = None
 
-    while True:
+    def __init__(self, *, url: str, api_key: Optional[str] = None, timeout: int = 1800):
+        self.url = url
+        self.api_key = api_key
+        self.timeout = timeout
+
+    def transcribe(
+        self,
+        request: TranscribeRequest,
+        *,
+        on_progress: Optional[ProgressHook] = None,
+        cancel_check: Optional[Callable[[], None]] = None,
+    ) -> TranscribeResponse:
+        _do_cancel_check(cancel_check)
+        headers = {"Accept": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        payload = {
+            "task_id": request.task_id,
+            "language": request.language,
+            "model": request.model_name,
+        }
+        audio_str = str(request.audio_path)
         try:
-            _do_cancel_check(cancel_check)
-            if prediction_id is None:
-                input_payload = build_input()
-                try:
-                    prediction = client.predictions.create(
-                        version=model_ref,
-                        input=input_payload,
-                        wait=False,
-                    )
-                finally:
-                    audio_file = input_payload.get("audio_path")
-                    close = getattr(audio_file, "close", None)
-                    if callable(close):
-                        close()
-                prediction_id = prediction.id
-                logger.info("Replicate prediction 已创建: id=%s", prediction_id)
-            else:
-                prediction = client.predictions.get(prediction_id)
-
-            network_failures = 0
-            status = str(getattr(prediction, "status", "")).lower()
-            _save_prediction_state(
-                state_dir,
-                prediction_id=prediction_id,
-                model_ref=model_ref,
-                status=status,
-            )
-
-            if status in _ACTIVE_PREDICTION_STATUSES:
-                if on_progress is not None:
-                    _safe_callback(on_progress, last_pct, status)
-                logger.info("Replicate prediction 等待中: id=%s status=%s", prediction_id, status)
-                _sleep_with_cancel(poll_interval, cancel_check)
-                continue
-
-            if status == "succeeded":
-                if on_progress is not None:
-                    _safe_callback(on_progress, 100.0, "succeeded")
-                return prediction.output
-
-            if status in _TERMINAL_PREDICTION_STATUSES:
-                error = getattr(prediction, "error", None) or f"prediction 状态为 {status}"
-                _clear_prediction_state(state_dir)
-                raise TranscribeError(
-                    f"Replicate 语音识别失败: {error}",
-                    code="model_error",
+            if audio_str.startswith(("http://", "https://")):
+                response = httpx.post(
+                    self.url,
+                    json={"audio_url": audio_str, **payload},
+                    headers=headers,
+                    timeout=self.timeout,
                 )
+            else:
+                with open(audio_str, "rb") as audio_file:
+                    response = httpx.post(
+                        self.url,
+                        data=payload,
+                        files={"audio": (Path(audio_str).name, audio_file)},
+                        headers=headers,
+                        timeout=self.timeout,
+                    )
+            response.raise_for_status()
+            body = response.json()
+        except FileNotFoundError:
+            raise TranscribeError(f"输入音频不存在: {audio_str}") from None
+        except httpx.TimeoutException as exc:
+            raise TranscribeError("自定义识别服务请求超时", code="network_error") from exc
+        except httpx.HTTPStatusError as exc:
+            raise TranscribeError(
+                f"自定义识别服务返回 HTTP {exc.response.status_code}",
+                code=_error_code_for_status(exc.response.status_code),
+            ) from exc
+        except httpx.RequestError as exc:
+            raise TranscribeError("自定义识别服务网络异常", code="network_error") from exc
+        except (TypeError, ValueError) as exc:
+            raise TranscribeError("自定义识别服务返回的 JSON 无法解析", code="invalid_response") from exc
 
-            raise TranscribeError(
-                f"Replicate 返回未知 prediction 状态: {status or 'empty'}",
-                code="upstream_error",
-            )
-        except (httpx.TimeoutException, httpx.TransportError) as e:
-            last_exc = e
-            network_failures += 1
-            logger.warning(
-                "Replicate 第 %d/%d 次网络失败，%s 秒后重试%s: %s",
-                network_failures,
-                retries,
-                retry_interval,
-                "查询同一 prediction" if prediction_id else "创建",
-                e,
-            )
-            if network_failures >= retries:
-                break
-            if on_progress is not None:
-                _safe_callback(on_progress, last_pct, "retrying")
-            _sleep_with_cancel(retry_interval, cancel_check)
-        except (httpx.HTTPStatusError, replicate.exceptions.ReplicateError) as e:
-            status = getattr(e, "status", None) or getattr(getattr(e, "response", None), "status_code", None)
-            raise TranscribeError(
-                f"Replicate 语音识别失败: {e}",
-                code=_error_code_for_status(status),
-            ) from e
-        except Exception as e:  # 模型报错 / 鉴权等非瞬时错误，不重试
-            if isinstance(e, TranscribeCancelledError) or type(e).__name__ == "PipelineCancelledError":
-                if prediction_id is not None:
-                    try:
-                        client.predictions.cancel(prediction_id)
-                    except Exception:
-                        logger.warning(
-                            "取消 Replicate prediction 失败: id=%s",
-                            prediction_id,
-                            exc_info=True,
+        _do_cancel_check(cancel_check)
+        if not isinstance(body, dict):
+            raise TranscribeError("自定义识别服务返回结构无法解析", code="invalid_response")
+        if on_progress is not None:
+            _safe_callback(on_progress, 100.0, "succeeded")
+        return TranscribeResponse(
+            output=body,
+            language=body.get("language") if isinstance(body.get("language"), str) else None,
+            language_probability=body.get("language_probability"),
+            duration=body.get("duration"),
+        )
+
+
+class LocalWhisperTranscriber:
+    """使用受管目录中的 CTranslate2 或 Hugging Face Whisper 模型。"""
+
+    def __init__(
+        self,
+        *,
+        model_name: str = "small",
+        device: str = "cpu",
+        compute_type: str = "int8",
+        download_root: Optional[str] = None,
+        beam_size: int = 5,
+        require_model_ready: bool = False,
+    ):
+        self.model_name = model_name
+        self.device = device
+        self.compute_type = compute_type
+        self.download_root = download_root
+        self.beam_size = max(1, int(beam_size))
+        self.require_model_ready = require_model_ready
+        self._model = None
+        self._loaded_model_name: Optional[str] = None
+        self._loaded_model_identity: Optional[tuple[int, int]] = None
+        self._model_lock = threading.Lock()
+
+    def _get_model(self, model_name: Optional[str] = None):
+        selected_model = model_name or self.model_name
+        with self._model_lock:
+            try:
+                model_ref = model_manager.resolve_path(selected_model)
+                stat = Path(model_ref).stat()
+                identity = (stat.st_dev, stat.st_ino)
+            except Exception as exc:
+                raise TranscribeError(str(exc), code="model_not_ready") from exc
+            if self._model is None or self._loaded_model_name != selected_model or self._loaded_model_identity != identity:
+                try:
+                    if model_manager.is_hf(selected_model):
+                        from transformers import WhisperForConditionalGeneration, WhisperProcessor, pipeline
+
+                        processor = WhisperProcessor.from_pretrained(model_ref, local_files_only=True, trust_remote_code=False)
+                        model = WhisperForConditionalGeneration.from_pretrained(
+                            model_ref, local_files_only=True, trust_remote_code=False,
                         )
-                    _clear_prediction_state(state_dir)
-                raise
-            if isinstance(e, TranscribeError):
-                raise
-            raise TranscribeError(f"Replicate 语音识别失败: {e}") from e
+                        self._model = pipeline(
+                            "automatic-speech-recognition", model=model,
+                            tokenizer=processor.tokenizer,
+                            feature_extractor=processor.feature_extractor,
+                            device="cpu",
+                        )
+                    else:
+                        from faster_whisper import WhisperModel
+                        self._model = WhisperModel(
+                            model_ref, device="cpu", compute_type="int8",
+                            local_files_only=True,
+                        )
+                except ImportError as exc:
+                    raise TranscribeError("本地模型推理依赖未安装", code="missing_dependency") from exc
+                except Exception as exc:
+                    raise TranscribeError(
+                        f"本地 Whisper 模型加载失败: {exc}",
+                        code="model_error",
+                    ) from exc
+                self._loaded_model_name = selected_model
+                self._loaded_model_identity = identity
+            return self._model
 
-    _do_cancel_check(cancel_check)
-    raise TranscribeError(
-        f"Replicate 语音识别多次网络失败（共尝试 {retries} 次；"
-        f"每次间隔 {retry_interval} 秒）: {last_exc}",
-        code="network_error",
-    )
+    def transcribe(
+        self,
+        request: TranscribeRequest,
+        *,
+        on_progress: Optional[ProgressHook] = None,
+        cancel_check: Optional[Callable[[], None]] = None,
+    ) -> TranscribeResponse:
+        audio_str = str(request.audio_path)
+        if audio_str.startswith(("http://", "https://")):
+            raise TranscribeError("本地 Whisper 只支持本地音频文件", code="invalid_input")
+        if not Path(audio_str).exists():
+            raise TranscribeError(f"输入音频不存在: {audio_str}", code="invalid_input")
+        _do_cancel_check(cancel_check)
+        if on_progress is not None:
+            _safe_callback(on_progress, 5.0, "processing")
+        try:
+            selected_model = request.model_name or self.model_name
+            engine = self._get_model(selected_model)
+            normalized = []
+            if model_manager.is_hf(selected_model):
+                kwargs = {"return_timestamps": True, "generate_kwargs": {"task": "transcribe"}}
+                if request.language:
+                    kwargs["generate_kwargs"]["language"] = request.language
+                result = engine(audio_str, **kwargs)
+                if not isinstance(result, dict) or not isinstance(result.get("text"), str):
+                    raise TranscribeError("本地 Whisper 输出格式无效", code="model_error")
+                audio_duration = 0.0
+                try:
+                    with wave.open(audio_str, "rb") as audio_file:
+                        audio_duration = audio_file.getnframes() / audio_file.getframerate()
+                except (OSError, ValueError, wave.Error):
+                    pass
+                for chunk in result.get("chunks", []):
+                    stamp = chunk.get("timestamp")
+                    if not isinstance(stamp, (list, tuple)) or len(stamp) != 2:
+                        raise TranscribeError("本地 Whisper 时间戳无效", code="model_error")
+                    text = str(chunk.get("text") or "").strip()
+                    if text and stamp[0] is not None:
+                        start = float(stamp[0])
+                        end = float(stamp[1]) if stamp[1] is not None else max(start + 0.02, audio_duration)
+                        if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
+                            raise TranscribeError("本地 Whisper 时间戳无效", code="model_error")
+                        normalized.append({"text": text, "start": start, "end": end})
+                detected_language = request.language
+                probability = None
+                duration = normalized[-1]["end"] if normalized else None
+            else:
+                segments, info = engine.transcribe(
+                    audio_str, language=request.language, beam_size=self.beam_size, vad_filter=True,
+                )
+                for segment in segments:
+                    _do_cancel_check(cancel_check)
+                    text = (getattr(segment, "text", "") or "").strip()
+                    if text:
+                        normalized.append({"text": text, "start": float(segment.start), "end": float(segment.end)})
+                        if on_progress is not None:
+                            _safe_callback(on_progress, min(95.0, 10.0 + len(normalized)), "processing")
+                detected_language = getattr(info, "language", None)
+                probability = getattr(info, "language_probability", None)
+                duration = getattr(info, "duration", None) or (normalized[-1]["end"] if normalized else None)
+        except TranscribeCancelledError:
+            raise
+        except TranscribeError:
+            raise
+        except Exception as exc:
+            if type(exc).__name__ == "PipelineCancelledError":
+                raise
+            raise TranscribeError(f"本地 Whisper 转写失败: {exc}", code="model_error") from exc
+        if not normalized:
+            raise TranscribeError("本地 Whisper 返回空字幕列表", code="empty_response")
+        return TranscribeResponse(
+            output={"segments": normalized},
+            language=detected_language if isinstance(detected_language, str) else request.language,
+            language_probability=probability,
+            duration=duration,
+        )
+
+
+def _build_transcriber_service(backend: Optional[str] = None) -> TranscriberService:
+    backend = str(backend or getattr(settings, "transcriber_backend", "local_whisper") or "local_whisper").strip().lower()
+    if backend in {"http", "custom", "custom_http"}:
+        url = getattr(settings, "transcriber_url", None)
+        if not url:
+            raise TranscribeError("未配置自定义转写服务地址，请先在设置页/API 配置", code="missing_service_config")
+        return HttpTranscriber(url=url, api_key=getattr(settings, "transcriber_api_key", None), timeout=getattr(settings, "transcriber_timeout", 1800))
+    if backend in {"local_whisper", "local", "whisper", "faster_whisper"}:
+        config = (getattr(settings, "local_whisper_model", "small"), getattr(settings, "local_whisper_device", "cpu"), getattr(settings, "local_whisper_compute_type", "int8"), getattr(settings, "local_whisper_download_root", None), getattr(settings, "local_whisper_beam_size", 5))
+        service = _LOCAL_WHISPER_SERVICES.get(config)
+        if service is None:
+            service = LocalWhisperTranscriber(model_name=config[0], device=config[1], compute_type=config[2], download_root=config[3], beam_size=config[4], require_model_ready=True)
+            _LOCAL_WHISPER_SERVICES[config] = service
+        return service
+    raise TranscribeError(f"不支持的识别服务: {backend}", code="invalid_service_config")
 
 
 def transcribe(
@@ -295,12 +366,14 @@ def transcribe(
     *,
     language: Optional[str] = None,
     model_name: Optional[str] = None,
+    backend: Optional[str] = None,
     cancel_check: Optional[Callable[[], None]] = None,
+    service: Optional[TranscriberService] = None,
 ) -> TranscribeResult:
     """把音频识别为原文字幕 data/{task_id}/original.srt。
 
-    通过 Replicate API（stayallive/whisper-subtitles）调用 Whisper，
-    返回带时间戳的 segments，然后转写为 SRT。
+    服务由当前 Redis 业务配置选择，默认使用本地 Whisper；``http``/``custom``
+    使用已配置的 URL 接入符合 :class:`TranscriberService` 数据协议的自定义节点。
 
     Args:
         audio_path: 输入音频（通常是 audio.wav）；支持本地路径和 HTTP(S) URL。
@@ -308,14 +381,9 @@ def transcribe(
         on_progress: 可选进度回调。
         language: 源语言代码；None / "" / "auto" 表示自动检测。
         model_name: Whisper 模型名，如 "tiny.en" / "small"。
+        service: 可选的进程内 TranscriberService；传入时优先于业务配置选择。
     """
-    # 进度提示：Replicate 简单 API 调用等待模型冷启动完成并返回结果；等待期间保持 starting/retrying 状态
-    _load_env()
-    if not os.getenv("REPLICATE_API_TOKEN"):
-        raise TranscribeError("未设置 REPLICATE_API_TOKEN（请在 .env 中配置）", code="missing_api_key")
-
     lang = None if language in (None, "", "auto") else language
-    model = model_name or "small"
 
     out_dir = ensure_task_dir(task_id)
     srt_path = out_dir / ORIGINAL_SRT
@@ -330,31 +398,40 @@ def transcribe(
         audio_str = str(p)
 
     _do_cancel_check(cancel_check)
-    logger.info("开始识别(Replicate): task=%s model=%s lang=%s", task_id, model, lang)
-
-    def build_input() -> dict:
-        # 每次尝试都重建：本地文件 handle 用过一次就废，重试必须重新打开
-        inp: dict = {"model_name": model, "vad_filter": True}
-        inp["audio_path"] = audio_str if is_remote else open(audio_str, "rb")
-        if lang:
-            inp["language"] = lang
-        return inp
+    service = service if service is not None else _build_transcriber_service(backend)
+    logger.info(
+        "开始识别(%s): task=%s model=%s lang=%s",
+        backend or getattr(settings, "transcriber_backend", "local_whisper"),
+        task_id,
+        model_name or "small",
+        lang,
+    )
 
     if on_progress is not None:
         _safe_callback(on_progress, 1.0, "starting")
 
-    output = _run_replicate_with_retry(
-        settings.replicate_whisper_model,
-        build_input,
-        timeout=settings.replicate_timeout,
-        retries=settings.replicate_retries,
-        retry_interval=settings.replicate_retry_interval,
-        poll_interval=settings.replicate_poll_interval,
-        state_dir=out_dir,
+    response = service.transcribe(
+        TranscribeRequest(
+            audio_path=audio_str,
+            task_id=task_id,
+            language=lang,
+            model_name=model_name,
+        ),
         on_progress=on_progress,
         cancel_check=cancel_check,
     )
     _do_cancel_check(cancel_check)
+
+    if isinstance(response, TranscribeResponse):
+        output = response.output
+        response_language = response.language
+        response_language_probability = response.language_probability
+        response_duration = response.duration
+    else:
+        output = response
+        response_language = None
+        response_language_probability = None
+        response_duration = None
 
     if on_progress is not None:
         _safe_callback(on_progress, 95.0, "succeeded")
@@ -369,29 +446,28 @@ def transcribe(
                 start = float(seg["start"])
                 end = float(seg["end"])
             except (KeyError, TypeError, ValueError):
-                raise TranscribeError("Replicate 返回结构无法解析", code="invalid_response") from None
+                raise TranscribeError("识别服务返回结构无法解析", code="invalid_response") from None
             if not math.isfinite(start) or not math.isfinite(end):
-                raise TranscribeError("Replicate 返回结构无法解析", code="invalid_response")
+                raise TranscribeError("识别服务返回结构无法解析", code="invalid_response")
             if end <= start:
                 raise TranscribeError("结束时间必须大于开始时间", code="invalid_response")
             subs.append(Subtitle(index=i, start=start, end=end, text=text))
 
     if not subs:
-        raise TranscribeError("Replicate 返回空字幕列表", code="empty_response")
+        raise TranscribeError("识别服务返回空字幕列表", code="empty_response")
     try:
         write_srt(subs, srt_path)
     except ValueError as exc:
-        raise TranscribeError("Replicate 返回结构无法解析", code="invalid_response") from exc
-    _clear_prediction_state(out_dir)
+        raise TranscribeError("识别服务返回结构无法解析", code="invalid_response") from exc
     if on_progress is not None:
         _safe_callback(on_progress, 100.0, "succeeded")
 
-    detected = lang or "unknown"
-    duration = subs[-1].end if subs else None
+    detected = response_language or lang or "unknown"
+    duration = response_duration if response_duration is not None else (subs[-1].end if subs else None)
     result = TranscribeResult(
         srt_path=srt_path,
         language=detected,
-        language_probability=None,
+        language_probability=response_language_probability,
         segment_count=len(subs),
         duration=duration,
     )
@@ -400,12 +476,12 @@ def transcribe(
 
 
 def _extract_segments(output) -> List[dict]:
-    """从 Replicate 返回中提取 segments 列表，兼容多种输出格式。"""
-    # 格式 1: dict 包含 srt_file（Replicate FileOutput URL），下载后解析
+    """从识别服务返回中提取 segments 列表，兼容多种输出格式。"""
+    # 格式 1: dict 包含 srt_file（远程 SRT 文件 URL），下载后解析
     if isinstance(output, dict):
         if "srt_file" in output:
             srt_url = str(output["srt_file"])
-            logger.info("下载 Replicate SRT: %s", srt_url[:80])
+            logger.info("下载远程 SRT: %s", srt_url[:80])
             srt_text = _download_text(srt_url)
             return _parse_srt_segments(srt_text)
         if "segments" in output:
@@ -414,7 +490,7 @@ def _extract_segments(output) -> List[dict]:
                 not isinstance(seg, dict) or "text" not in seg or "start" not in seg or "end" not in seg
                 for seg in segments
             ):
-                raise TranscribeError("Replicate 返回结构无法解析", code="invalid_response")
+                raise TranscribeError("识别服务返回结构无法解析", code="invalid_response")
             return segments
         if "srt" in output:
             return _parse_srt_segments(output["srt"])
@@ -430,9 +506,9 @@ def _extract_segments(output) -> List[dict]:
             for seg in output
         ):
             return output
-        raise TranscribeError("Replicate 返回结构无法解析", code="invalid_response")
+        raise TranscribeError("识别服务返回结构无法解析", code="invalid_response")
 
-    raise TranscribeError("Replicate 返回结构无法解析", code="invalid_response")
+    raise TranscribeError("识别服务返回结构无法解析", code="invalid_response")
 
 
 def _download_text(url: str) -> str:
@@ -448,9 +524,9 @@ def _download_text(url: str) -> str:
     except httpx.HTTPStatusError as exc:
         status = exc.response.status_code
         code = "unauthorized" if status in (401, 403) else "rate_limited" if status == 429 else "upstream_error"
-        raise TranscribeError(f"下载 Replicate 字幕文件失败 HTTP {status}", code=code) from exc
+        raise TranscribeError(f"下载远程字幕文件失败 HTTP {status}", code=code) from exc
     except httpx.RequestError as exc:
-        raise TranscribeError("下载 Replicate 字幕文件超时或网络异常", code="network_error") from exc
+        raise TranscribeError("下载远程字幕文件超时或网络异常", code="network_error") from exc
 
 
 def _parse_srt_segments(srt_text: str) -> List[dict]:
@@ -458,7 +534,7 @@ def _parse_srt_segments(srt_text: str) -> List[dict]:
 
     兼容两种格式：
     - 标准 SRT：每个 segment 之间用空行分隔。
-    - Replicate 输出的紧凑 SRT：无空行，按「序号 + 时间轴 + 文本」模式逐行拆分。
+    - 紧凑 SRT：无空行，按「序号 + 时间轴 + 文本」模式逐行拆分。
     """
     import re
     text = srt_text.strip()

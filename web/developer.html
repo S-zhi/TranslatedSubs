@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Developer mode · TranslatedSubs</title>
+    <meta name="description" content="TranslatedSubs 独立开发者调试工作台。" />
+    <link rel="icon" href="assets/translatedsubs-logo.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="styles/developer.css" />
+    <script src="https://unpkg.com/@phosphor-icons/web@2.1.1"></script>
+  </head>
+  <body class="developer-body">
+    <main class="developer-app">
+      <header class="developer-header">
+        <div class="developer-brand">
+          <img class="developer-brand__mark" src="assets/translatedsubs-logo.svg" alt="" />
+          <div class="developer-brand__copy">
+            <span class="developer-brand__title">TranslatedSubs</span>
+            <span class="developer-brand__subtitle">独立开发者工作台</span>
+          </div>
+          <span class="developer-badge">Developer mode</span>
+        </div>
+        <button class="developer-back" id="developerBack" type="button">
+          <i class="ph ph-arrow-left" aria-hidden="true"></i><span>返回主工作台</span>
+        </button>
+      </header>
+
+      <section class="developer-content" aria-labelledby="developerTitle">
+        <div class="developer-intro">
+          <div>
+            <span class="developer-eyebrow">Runtime diagnostics</span>
+            <h1 id="developerTitle">运行日志</h1>
+            <p>查看当前开发者页面的临时调试信息。刷新页面后，日志会重新从内存初始化。</p>
+          </div>
+          <span class="developer-intro__meta" id="developerSession">session —</span>
+        </div>
+
+        <nav class="developer-tabs" aria-label="开发者页面 Tab">
+          <button class="developer-tab is-active" type="button" role="tab" id="tabLogs" data-tab="logs" aria-selected="true">
+            <i class="ph ph-terminal-window" aria-hidden="true"></i><span>运行日志</span>
+          </button>
+          <button class="developer-tab" type="button" role="tab" id="tabYtdlp" data-tab="ytdlp" aria-selected="false">
+            <i class="ph ph-broadcast" aria-hidden="true"></i><span>yt-dlp 网站可用性</span>
+          </button>
+        </nav>
+
+        <!-- 运行日志面板 -->
+        <section class="developer-panel" id="developerLogPanel" aria-labelledby="logPanelTitle">
+          <div class="developer-panel__head">
+            <div class="developer-panel__title" id="logPanelTitle">
+              <i class="ph ph-list-bullets" aria-hidden="true"></i><span>当前会话输出</span>
+            </div>
+            <div class="developer-panel__actions" role="group" aria-label="日志操作">
+              <button class="developer-filter is-active" type="button" data-level="all">全部</button>
+              <button class="developer-filter" type="button" data-level="info">Info</button>
+              <button class="developer-filter" type="button" data-level="warn">Warn</button>
+              <button class="developer-filter" type="button" data-level="error">Error</button>
+              <button class="developer-clear" id="developerClear" type="button"><i class="ph ph-trash" aria-hidden="true"></i><span>清空</span></button>
+            </div>
+          </div>
+          <div class="developer-log" id="developerLog" aria-live="polite"></div>
+        </section>
+
+        <!-- yt-dlp 网站可用性测试面板 -->
+        <section class="developer-panel is-hidden" id="developerYtdlpPanel" aria-labelledby="ytdlpPanelTitle">
+          <!-- 统计与环境指标看板 -->
+          <div class="ytdlp-dashboard">
+            <div class="ytdlp-metric-card">
+              <span class="ytdlp-metric-label">收录网站</span>
+              <strong class="ytdlp-metric-value" id="statTotal">0</strong>
+            </div>
+            <div class="ytdlp-metric-card ytdlp-metric-card--ok">
+              <span class="ytdlp-metric-label">最近可抓取</span>
+              <strong class="ytdlp-metric-value" id="statOk">0</strong>
+            </div>
+            <div class="ytdlp-metric-card ytdlp-metric-card--fail">
+              <span class="ytdlp-metric-label">异常 / 拦截</span>
+              <strong class="ytdlp-metric-value" id="statFail">0</strong>
+            </div>
+            <div class="ytdlp-metric-card ytdlp-metric-card--idle">
+              <span class="ytdlp-metric-label">尚未验证</span>
+              <strong class="ytdlp-metric-value" id="statIdle">0</strong>
+            </div>
+            <div class="ytdlp-metric-card ytdlp-metric-card--env">
+              <span class="ytdlp-metric-label">内核版本</span>
+              <strong class="ytdlp-metric-badge" id="statEnvYtdlp">yt-dlp</strong>
+            </div>
+            <div class="ytdlp-metric-card ytdlp-metric-card--env">
+              <span class="ytdlp-metric-label">网络代理</span>
+              <strong class="ytdlp-metric-badge" id="statEnvProxy">直连无代理</strong>
+            </div>
+          </div>
+
+          <!-- 全局操作工具栏 -->
+          <div class="ytdlp-toolbar">
+            <div class="ytdlp-toolbar__primary">
+              <button type="button" class="ytdlp-btn ytdlp-btn--primary" id="btnBatchRun">
+                <i class="ph ph-play" aria-hidden="true"></i><span>一键测试选中</span>
+              </button>
+              <button type="button" class="ytdlp-btn ytdlp-btn--danger" id="btnBatchStop" style="display: none;">
+                <i class="ph ph-stop" aria-hidden="true"></i><span>停止测试</span>
+              </button>
+              <button type="button" class="ytdlp-btn ytdlp-btn--secondary" id="btnSelectAll">
+                <i class="ph ph-check-square" aria-hidden="true"></i><span>全选/反选</span>
+              </button>
+              <button type="button" class="ytdlp-btn ytdlp-btn--secondary" id="btnResetAll">
+                <i class="ph ph-arrow-counter-clockwise" aria-hidden="true"></i><span>重置状态</span>
+              </button>
+            </div>
+            <div class="ytdlp-cookie-control" aria-describedby="browserCookiesHelp">
+              <label class="ytdlp-cookie-control__label" for="browserCookiesCheck">
+                <input type="checkbox" id="browserCookiesCheck" />
+                <span>本次探测使用浏览器 Cookie</span>
+              </label>
+              <select id="browserCookiesSelect" disabled aria-label="选择 Cookie 来源浏览器">
+                <option value="">选择浏览器…</option>
+                <option value="chrome">Chrome</option>
+                <option value="chromium">Chromium</option>
+                <option value="edge">Edge</option>
+                <option value="firefox">Firefox</option>
+                <option value="brave">Brave</option>
+                <option value="vivaldi">Vivaldi</option>
+                <option value="opera">Opera</option>
+                <option value="safari">Safari</option>
+              </select>
+              <span class="ytdlp-cookie-control__help" id="browserCookiesHelp">正在读取后端 Cookie 能力…</span>
+            </div>
+            <div class="ytdlp-toolbar__secondary">
+              <button type="button" class="ytdlp-btn ytdlp-btn--secondary" id="btnAddCustomModal">
+                <i class="ph ph-plus" aria-hidden="true"></i><span>添加自定义链接</span>
+              </button>
+              <button type="button" class="ytdlp-btn ytdlp-btn--secondary" id="btnExportReport">
+                <i class="ph ph-share-network" aria-hidden="true"></i><span>导出诊断报告</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- 分类筛选与搜索栏 -->
+          <div class="ytdlp-filter-row">
+            <div class="developer-panel__actions" id="sitesCategories" role="group" aria-label="分类筛选">
+              <!-- 分类 Pills 由 JS 动态渲染 -->
+            </div>
+            <div class="ytdlp-search-box">
+              <i class="ph ph-magnifying-glass" aria-hidden="true"></i>
+              <input type="search" id="sitesSearchInput" placeholder="搜索网站名称、域名或提取器..." />
+            </div>
+          </div>
+          <p class="ytdlp-history-status" id="sitesHistoryStatus" aria-live="polite"></p>
+
+          <!-- 网站网格卡片容器 -->
+          <div class="ytdlp-sites-grid" id="sitesGrid" aria-live="polite">
+            <!-- 站点卡片由 JS 动态渲染 -->
+          </div>
+
+          <!-- 自定义网站添加浮层 -->
+          <div class="ytdlp-modal-backdrop is-hidden" id="customSiteModal" role="dialog" aria-modal="true" aria-labelledby="customSiteModalTitle">
+            <div class="ytdlp-modal">
+              <div class="ytdlp-modal__head">
+                <h3 id="customSiteModalTitle">添加自定义测试视频</h3>
+                <button type="button" class="ytdlp-btn-icon" id="btnCloseCustomModal" aria-label="关闭">
+                  <i class="ph ph-x" aria-hidden="true"></i>
+                </button>
+              </div>
+              <form id="customSiteForm" class="ytdlp-modal__body">
+                <div class="ytdlp-form-field">
+                  <label for="customNameInput">网站/频道名称 (可选)</label>
+                  <input type="text" id="customNameInput" placeholder="例如：我的自建视频站" />
+                </div>
+                <div class="ytdlp-form-field">
+                  <label for="customUrlInput">视频页面完整 URL *</label>
+                  <input type="url" id="customUrlInput" required placeholder="https://example.com/video/12345" />
+                </div>
+                <div class="ytdlp-form-field">
+                  <label for="customCatSelect">所属分类</label>
+                  <select id="customCatSelect">
+                    <option value="international">国际主流</option>
+                    <option value="domestic">国内主流</option>
+                    <option value="adult">成人/特色</option>
+                    <option value="audio">音频流媒体</option>
+                  </select>
+                </div>
+                <div class="ytdlp-form-field ytdlp-form-field--checkbox">
+                  <label>
+                    <input type="checkbox" id="customProxyCheck" />
+                    <span>该站点通常需要代理服务才能访问</span>
+                  </label>
+                </div>
+                <div class="ytdlp-modal__footer">
+                  <button type="submit" class="ytdlp-btn ytdlp-btn--primary">
+                    <i class="ph ph-plus-circle" aria-hidden="true"></i><span>确认添加并排入测试</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+    <script src="config.js"></script>
+    <script type="module" src="js/developer.js"></script>
+  </body>
+</html>

@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from collections import OrderedDict
@@ -23,12 +22,15 @@ from pydantic import BaseModel, Field
 from src.config import (
     AUDIO_FILENAME,
     OUTPUT_VIDEO,
+    OUTPUT_VIDEO_HARD,
+    OUTPUT_VIDEO_SOFT,
     ORIGINAL_SRT,
     SOURCE_VIDEO_STEM,
     TRANSLATED_SRT,
     settings,
     task_dir,
 )
+from src.config.config_repository import get_config_provider
 from src.handler.deps import get_probe_store, get_store, require_api_token
 from src.handler.subtitle_editor import release_lock
 from src.handler.tasks import _DELETED_MESSAGE, _mark_resource_missing, scan_missing_terminal
@@ -113,6 +115,8 @@ _RUNNING_STATUSES = {
     "TRANSCRIBING",
     "TRANSLATING",
     "BURNING",
+    "SYNTHESIZING",
+    "DUBBING",
 }
 
 # 产物类别：固定文件名映射到显示名/可清理性。其它文件归到 other，
@@ -206,9 +210,7 @@ class DriveSyncRequest(BaseModel):
     artifactNames: Optional[List[str]] = None
 
 
-# ---------- 保留策略配置（轻量：落到本地 JSON） ----------
-# Issue 描述允许"简化版即可"；用 settings.data_dir/.retention.json 持久化，
-# 避免拉新依赖/库表。
+# ---------- Redis 保留策略 ----------
 
 _RETENTION_FILE = ".retention.json"
 
@@ -218,37 +220,35 @@ def _retention_path() -> Path:
 
 
 def _load_retention() -> RetentionOut:
-    p = _retention_path()
-    if not p.exists():
-        return RetentionOut()
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return RetentionOut()
-    if not isinstance(data, dict):
-        return RetentionOut()
-    days = data["days"] if "days" in data else DEFAULT_RETENTION_DAYS
+    snapshot = get_config_provider().read()
+    business = snapshot.values.get("business", {})
+    days = business.get("retention_days", DEFAULT_RETENTION_DAYS)
     return RetentionOut(
         days=days,
-        updatedAt=data.get("updatedAt"),
-        lastRunAt=data.get("lastRunAt"),
+        updatedAt=snapshot.updated_at or int(time.time() * 1000),
+        lastRunAt=business.get("retention_last_run_at"),
     )
 
 
-def _save_retention(out: RetentionOut) -> None:
-    p = _retention_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(
-        json.dumps(
-            {
-                "days": out.days,
-                "updatedAt": out.updatedAt,
-                "lastRunAt": out.lastRunAt,
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
+def _save_retention(out: RetentionOut) -> RetentionOut:
+    def apply(document: dict) -> None:
+        business = document.setdefault("business", {})
+        business["retention_days"] = out.days
+
+    snapshot = get_config_provider().mutate(apply)
+    business = snapshot.values.get("business", {})
+    return RetentionOut(
+        days=business.get("retention_days", DEFAULT_RETENTION_DAYS),
+        updatedAt=snapshot.updated_at or int(time.time() * 1000),
+        lastRunAt=business.get("retention_last_run_at"),
     )
+
+
+def _record_retention_run(timestamp_ms: int) -> None:
+    def apply(document: dict) -> None:
+        document.setdefault("business", {})["retention_last_run_at"] = timestamp_ms
+
+    get_config_provider().mutate(apply)
 
 
 # ---------- 工具 ----------
@@ -325,7 +325,7 @@ def _classify(name: str) -> str:
         return "original_srt"
     if low == TRANSLATED_SRT.lower():
         return "translated_srt"
-    if low == OUTPUT_VIDEO.lower():
+    if low in {OUTPUT_VIDEO.lower(), OUTPUT_VIDEO_HARD.lower(), OUTPUT_VIDEO_SOFT.lower()}:
         return "output"
     return "other"
 
@@ -520,7 +520,7 @@ def cancel_drive_batch(batch_id: str) -> dict:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return batch.to_payload()
 
-@router.get("/stats", response_model=StorageStats)
+@router.get("/stats", response_model=StorageStats, dependencies=[Depends(require_api_token)])
 def get_stats(store: TaskStore = Depends(get_store)) -> StorageStats:
     """全量统计：总占用、类别分布、按任务的占用排行。"""
     by_kind: dict[str, int] = {k: 0 for k in _ARTIFACT_KINDS}
@@ -547,7 +547,7 @@ def get_stats(store: TaskStore = Depends(get_store)) -> StorageStats:
     )
 
 
-@router.post("/cleanup_preview", response_model=CleanupPreviewResponse)
+@router.post("/cleanup_preview", response_model=CleanupPreviewResponse, dependencies=[Depends(require_api_token)])
 def cleanup_preview(
     body: CleanupPreviewRequest,
     store: TaskStore = Depends(get_store),
@@ -703,7 +703,7 @@ def cleanup(
     return execute_cleanup(body, store, probes)
 
 
-@router.get("/retention", response_model=RetentionOut)
+@router.get("/retention", response_model=RetentionOut, dependencies=[Depends(require_api_token)])
 def get_retention() -> RetentionOut:
     """读取产物保留策略（days=None 表示不限，未配置时默认为 30 天）。"""
     return _load_retention()
@@ -716,13 +716,9 @@ def get_retention() -> RetentionOut:
 )
 def put_retention(body: RetentionIn) -> RetentionOut:
     """写入产物保留策略。自动清理只删除产物并保留任务记录。"""
-    current = _load_retention()
-    out = RetentionOut(
+    out = _save_retention(RetentionOut(
         days=body.days,
-        updatedAt=int(time.time() * 1000),
-        lastRunAt=current.lastRunAt,
-    )
-    _save_retention(out)
+    ))
 
     if body.days is not None and body.days > 0:
         from src.service.retention_scheduler import trigger_retention_cleanup_async
