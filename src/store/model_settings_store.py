@@ -28,7 +28,7 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     },
     "tts": {
         "enabled": False, "provider": "kokoro", "model": "kokoro-v1",
-        "baseUrl": "", "voice": "af_heart", "speed": 1, "format": "wav",
+        "baseUrl": "", "voice": "auto", "speed": 1, "format": "wav",
         "models": [],
     },
 }

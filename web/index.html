@@ -45,7 +45,7 @@
           <button class="nav__item" type="button" data-view="editor" data-route="/editor">
             <i class="ph ph-text-aa" aria-hidden="true"></i><span>字幕编辑</span>
           </button>
-          <button class="nav__item" type="button" data-view="other-settings" data-settings-tab="models" data-route="/settings">
+          <button class="nav__item" type="button" data-view="model-settings" data-route="/model-settings">
             <i class="ph ph-cpu" aria-hidden="true"></i><span>模型设置</span>
           </button>
           <button class="nav__item" type="button" data-view="storage" data-route="/storage">
@@ -429,6 +429,174 @@
                 <div>暂无任务产物</div>
               </div>
             </div>
+          </div>
+        </section>
+
+
+        <!-- ============ 模型设置 ============ -->
+        <section class="view" data-view="model-settings" id="view-model-settings">
+          <div class="model-settings" id="modelSettings">
+            <header class="model-settings__head">
+              <div class="model-settings__intro">
+                <span class="eyebrow">RUNTIME / MODEL STACK</span>
+                <h1>模型设置</h1>
+                <p>集中管理字幕工作台使用的语言模型、语音识别和语音合成服务。修改后会应用到下一次任务。</p>
+                <nav class="model-settings__switcher" role="tablist" aria-label="模型类型切换">
+                  <button class="model-settings__switch is-active" type="button" role="tab" data-model-kind="llm" aria-current="page" aria-selected="true" aria-controls="model-panel-llm" aria-label="切换到 LLM 模型"><i class="ph ph-brain" aria-hidden="true"></i><span>LLM</span></button>
+                  <button class="model-settings__switch" type="button" role="tab" data-model-kind="whisper" aria-selected="false" aria-controls="model-panel-whisper" aria-label="切换到 Whisper 模型"><i class="ph ph-waveform" aria-hidden="true"></i><span>Whisper</span></button>
+                  <button class="model-settings__switch" type="button" role="tab" data-model-kind="tts" aria-selected="false" aria-controls="model-panel-tts" aria-label="切换到 TTS 模型"><i class="ph ph-speaker-high" aria-hidden="true"></i><span>TTS</span></button>
+                </nav>
+              </div>
+              <div class="model-settings__summary" aria-live="polite">
+                <span class="model-settings__summary-label">当前配置</span>
+                <strong id="modelSettingsSummary">正在读取</strong>
+              </div>
+            </header>
+
+            <div class="model-settings__workspace">
+              <aside class="model-settings__rail" id="modelSettingsRail" aria-label="模型类型导航">
+                <div class="model-settings__rail-head">
+                  <div>
+                    <span class="model-settings__rail-kicker">MODEL LAYERS</span>
+                    <strong>服务类型</strong>
+                  </div>
+                  <button class="iconbtn model-settings__collapse" id="modelSettingsCollapse" type="button" aria-label="收起模型导航" aria-expanded="true" title="收起模型导航">
+                    <i class="ph ph-sidebar-simple" aria-hidden="true"></i>
+                  </button>
+                </div>
+                <nav class="model-settings__rail-nav" role="tablist" aria-label="模型类型">
+                  <button class="model-settings__rail-item is-active" type="button" role="tab" data-model-kind="llm" aria-current="page" aria-selected="true" aria-controls="model-panel-llm">
+                    <span class="model-settings__rail-icon model-settings__rail-icon--llm"><i class="ph ph-brain" aria-hidden="true"></i></span>
+                    <span class="model-settings__rail-copy"><strong>LLM 模型</strong><small>翻译与理解</small></span>
+                    <span class="model-settings__rail-status" data-model-status="llm">读取中</span>
+                  </button>
+                  <button class="model-settings__rail-item" type="button" role="tab" data-model-kind="whisper" aria-selected="false" aria-controls="model-panel-whisper">
+                    <span class="model-settings__rail-icon model-settings__rail-icon--whisper"><i class="ph ph-waveform" aria-hidden="true"></i></span>
+                    <span class="model-settings__rail-copy"><strong>Whisper 模型</strong><small>语音转文字</small></span>
+                    <span class="model-settings__rail-status" data-model-status="whisper">读取中</span>
+                  </button>
+                  <button class="model-settings__rail-item" type="button" role="tab" data-model-kind="tts" aria-selected="false" aria-controls="model-panel-tts">
+                    <span class="model-settings__rail-icon model-settings__rail-icon--tts"><i class="ph ph-speaker-high" aria-hidden="true"></i></span>
+                    <span class="model-settings__rail-copy"><strong>TTS 模型</strong><small>文字转语音</small></span>
+                    <span class="model-settings__rail-status" data-model-status="tts">读取中</span>
+                  </button>
+                </nav>
+                <div class="model-settings__rail-foot"><i class="ph ph-lock-key" aria-hidden="true"></i><span>密钥只发送到后端，不会回显</span></div>
+              </aside>
+
+              <div class="model-settings__main">
+                <div class="model-settings__loading" id="modelSettingsLoading" role="status" hidden>
+                  <i class="ph ph-circle-notch" aria-hidden="true"></i><span>正在读取模型配置…</span>
+                </div>
+
+                <section class="model-panel is-active" id="model-panel-llm" role="tabpanel" data-model-panel="llm" aria-labelledby="model-panel-llm-title">
+                  <header class="model-panel__head">
+                    <div class="model-panel__identity">
+                      <span class="model-panel__icon model-panel__icon--llm"><i class="ph ph-brain" aria-hidden="true"></i></span>
+                      <div><span class="eyebrow">01 / LANGUAGE MODEL</span><h2 id="model-panel-llm-title">LLM 模型</h2><p>负责理解上下文、组织术语并生成字幕译文。</p></div>
+                    </div>
+                    <span class="engine-status engine-status--checking" id="modelStatusLlm">正在读取</span>
+                  </header>
+                  <div class="model-panel__notice"><i class="ph ph-sparkle" aria-hidden="true"></i><span>建议使用 OpenAI 兼容接口；API Key 仅在保存时提交，留空会保留当前配置。</span></div>
+                  <div class="model-catalog" data-model-catalog="llm">
+                    <div class="model-catalog__head"><div><span class="eyebrow">CONNECTED MODELS</span><h3>已接入的 LLM 模型</h3></div><button class="model-catalog__add" type="button" data-model-add="llm" aria-label="新增 LLM 模型" title="新增 LLM 模型"><i class="ph ph-plus" aria-hidden="true"></i><span>新增模型</span></button></div>
+                    <div class="model-catalog__grid" data-model-cards="llm" aria-live="polite"></div>
+                  </div>
+                  <form class="model-form" id="modelFormLlm" data-model-form="llm" novalidate>
+                    <label class="model-toggle"><input name="enabled" type="checkbox" checked /><span><strong>启用 LLM 翻译</strong><small>关闭后，任务页不会提供翻译能力</small></span><span class="model-toggle__state"></span></label>
+                    <div class="model-form__grid model-form__grid--two">
+                      <label class="model-field"><span>服务商</span><select name="provider"><option value="deepseek">DeepSeek</option><option value="openai">OpenAI 兼容接口</option><option value="custom">自定义服务</option></select></label>
+                      <label class="model-field"><span>模型名称</span><input name="model" type="text" placeholder="deepseek-chat" required /></label>
+                    </div>
+                    <label class="model-field"><span>Base URL <em>可选</em></span><input name="baseUrl" type="url" inputmode="url" placeholder="https://api.deepseek.com/v1" /></label>
+                    <div class="model-form__grid model-form__grid--two">
+                      <label class="model-field"><span>API Key <em>留空保持不变</em></span><input name="apiKey" type="password" autocomplete="new-password" placeholder="sk-…" /></label>
+                      <label class="model-field"><span>上下文长度 <em>tokens</em></span><input name="maxTokens" type="number" min="256" max="131072" step="256" /></label>
+                    </div>
+                    <div class="model-form__grid model-form__grid--three">
+                      <label class="model-field"><span>Temperature</span><input name="temperature" type="number" min="0" max="2" step="0.1" /></label>
+                      <label class="model-field"><span>请求超时 <em>秒</em></span><input name="timeout" type="number" min="1" max="86400" step="1" /></label>
+                      <label class="model-field"><span>并发请求数</span><input name="concurrency" type="number" min="1" max="32" step="1" /></label>
+                    </div>
+                    <div class="model-form__foot"><span class="model-form__meta" id="modelMetaLlm">—</span><div class="model-form__actions"><button class="btn btn--ghost" type="button" data-model-validate="llm"><i class="ph ph-plugs-connected" aria-hidden="true"></i><span>测试连接</span></button><button class="btn btn--primary" type="submit"><i class="ph ph-floppy-disk" aria-hidden="true"></i><span>保存 LLM 设置</span></button></div></div>
+                  </form>
+                </section>
+
+                <section class="model-panel" id="model-panel-whisper" role="tabpanel" data-model-panel="whisper" aria-labelledby="model-panel-whisper-title" hidden>
+                  <header class="model-panel__head">
+                    <div class="model-panel__identity"><span class="model-panel__icon model-panel__icon--whisper"><i class="ph ph-waveform" aria-hidden="true"></i></span><div><span class="eyebrow">02 / SPEECH TO TEXT</span><h2 id="model-panel-whisper-title">Whisper 模型</h2><p>负责从视频或音频中识别原声字幕，模型文件可在本机运行。</p></div></div>
+                    <span class="engine-status engine-status--checking" id="modelStatusWhisper">正在读取</span>
+                  </header>
+                  <div class="model-panel__notice"><i class="ph ph-cpu" aria-hidden="true"></i><span>本地模型优先使用 CPU；模型下载、导入和删除仍可在“其他设置 · 模型商店”中管理。</span></div>
+                  <div class="model-catalog" data-model-catalog="whisper">
+                    <div class="model-catalog__head"><div><span class="eyebrow">CONNECTED MODELS</span><h3>已接入的 Whisper 模型</h3></div><button class="model-catalog__add" type="button" data-model-add="whisper" aria-label="新增 Whisper 模型" title="新增 Whisper 模型"><i class="ph ph-plus" aria-hidden="true"></i><span>新增模型</span></button></div>
+                    <div class="model-catalog__grid" data-model-cards="whisper" aria-live="polite"></div>
+                  </div>
+                  <form class="model-form" id="modelFormWhisper" data-model-form="whisper" novalidate>
+                    <label class="model-toggle"><input name="enabled" type="checkbox" checked /><span><strong>启用 Whisper 转写</strong><small>关闭后，新任务无法生成原始字幕</small></span><span class="model-toggle__state"></span></label>
+                    <div class="model-form__grid model-form__grid--two">
+                      <label class="model-field"><span>运行方式</span><select name="provider"><option value="local">本地模型</option><option value="replicate">Replicate 云端</option></select></label>
+                      <label class="model-field"><span>模型版本</span><select name="model"><option value="local:tiny">Tiny · 极速</option><option value="local:small">Small · 平衡</option><option value="local:medium">Medium · 清晰</option><option value="local:large-v3">Large v3 · 质量优先</option><option value="replicate:large-v2">Replicate Large v2</option></select></label>
+                    </div>
+                    <div class="model-form__grid model-form__grid--three">
+                      <label class="model-field"><span>默认语言</span><select name="language"><option value="auto">自动识别</option><option value="en">英语</option><option value="zh">中文</option><option value="ja">日语</option><option value="ko">韩语</option><option value="es">西班牙语</option></select></label>
+                      <label class="model-field"><span>计算设备</span><select name="device"><option value="cpu">CPU</option><option value="cuda">CUDA</option><option value="mps">Apple GPU (MPS)</option></select></label>
+                      <label class="model-field"><span>线程数</span><input name="threads" type="number" min="1" max="32" step="1" /></label>
+                    </div>
+                    <label class="model-check"><input name="wordTimestamps" type="checkbox" checked /><span><strong>生成词级时间戳</strong><small>便于后续字幕编辑和精细对齐</small></span></label>
+                    <div class="model-form__foot"><span class="model-form__meta" id="modelMetaWhisper">—</span><div class="model-form__actions"><button class="btn btn--ghost" type="button" data-model-validate="whisper"><i class="ph ph-shield-check" aria-hidden="true"></i><span>检查模型</span></button><button class="btn btn--primary" type="submit"><i class="ph ph-floppy-disk" aria-hidden="true"></i><span>保存 Whisper 设置</span></button></div></div>
+                  </form>
+                </section>
+
+                <section class="model-panel" id="model-panel-tts" role="tabpanel" data-model-panel="tts" aria-labelledby="model-panel-tts-title" hidden>
+                  <header class="model-panel__head">
+                    <div class="model-panel__identity"><span class="model-panel__icon model-panel__icon--tts"><i class="ph ph-speaker-high" aria-hidden="true"></i></span><div><span class="eyebrow">03 / TEXT TO SPEECH</span><h2 id="model-panel-tts-title">TTS 模型</h2><p>将译文按字幕时间轴合成为配音，并保留可调整的音色和语速。</p></div></div>
+                    <span class="engine-status engine-status--checking" id="modelStatusTts">正在读取</span>
+                  </header>
+                  <div class="model-panel__notice"><i class="ph ph-waveform" aria-hidden="true"></i><span>开启后，任务页会显示配音选项；不同语言可以在此选择对应音色。</span></div>
+                  <div class="model-catalog" data-model-catalog="tts">
+                    <div class="model-catalog__head"><div><span class="eyebrow">CONNECTED MODELS</span><h3>已接入的 TTS 模型</h3></div><button class="model-catalog__add" type="button" data-model-add="tts" aria-label="新增 TTS 模型" title="新增 TTS 模型"><i class="ph ph-plus" aria-hidden="true"></i><span>新增模型</span></button></div>
+                    <div class="model-catalog__grid" data-model-cards="tts" aria-live="polite"></div>
+                  </div>
+                  <form class="model-form" id="modelFormTts" data-model-form="tts" novalidate>
+                    <label class="model-toggle"><input name="enabled" type="checkbox" /><span><strong>启用 TTS 配音</strong><small>按译文字幕时间轴生成配音轨</small></span><span class="model-toggle__state"></span></label>
+                    <div class="model-form__grid model-form__grid--two">
+                      <label class="model-field"><span>服务商</span><select name="provider"><option value="kokoro">Kokoro · 本地 CPU</option><option value="openai">OpenAI 兼容接口</option><option value="elevenlabs">ElevenLabs</option></select></label>
+                      <label class="model-field"><span>模型名称</span><input name="model" type="text" placeholder="kokoro-v1" required /></label>
+                    </div>
+                    <div class="model-form__grid model-form__grid--two">
+                      <label class="model-field"><span>Base URL <em>云端服务可选</em></span><input name="baseUrl" type="url" inputmode="url" placeholder="https://api.openai.com/v1" /></label>
+                      <label class="model-field"><span>默认音色</span><select name="voice"><option value="auto">自动</option><option value="af_maple">af_maple · English</option><option value="af_sol">af_sol · English</option><option value="zf_001">zf_001 · 中文女声</option><option value="zm_010">zm_010 · 中文男声</option></select></label>
+                    </div>
+                    <div class="model-form__grid model-form__grid--three">
+                      <label class="model-field"><span>API Key <em>留空保持不变</em></span><input name="apiKey" type="password" autocomplete="new-password" placeholder="可选" /></label>
+                      <label class="model-field"><span>语速</span><input name="speed" type="number" min="0.5" max="2" step="0.05" /></label>
+                      <label class="model-field"><span>输出格式</span><select name="format"><option value="wav">WAV · 兼容性好</option><option value="mp3">MP3 · 文件更小</option></select></label>
+                    </div>
+                    <div class="model-form__foot"><span class="model-form__meta" id="modelMetaTts">—</span><div class="model-form__actions"><button class="btn btn--ghost" type="button" data-model-validate="tts"><i class="ph ph-play-circle" aria-hidden="true"></i><span>试听 / 检查</span></button><button class="btn btn--primary" type="submit"><i class="ph ph-floppy-disk" aria-hidden="true"></i><span>保存 TTS 设置</span></button></div></div>
+                  </form>
+                </section>
+              </div>
+            </div>
+            <dialog class="model-dialog" id="modelCreateDialog" aria-labelledby="modelCreateDialogTitle">
+              <form class="model-dialog__form" id="modelCreateForm" method="dialog" novalidate>
+                <button class="model-dialog__close" type="button" data-model-dialog-close aria-label="关闭新增模型窗口"><i class="ph ph-x" aria-hidden="true"></i></button>
+                <span class="eyebrow">NEW MODEL CONNECTION</span>
+                <h2 id="modelCreateDialogTitle">新增模型</h2>
+                <p class="model-dialog__intro" id="modelCreateDialogIntro">填写模型连接信息，保存后会出现在当前类型的模型卡片中。</p>
+                <div class="model-dialog__fields">
+                  <label class="model-field"><span>显示名称</span><input name="name" type="text" placeholder="例如：翻译主模型" required /></label>
+                  <label class="model-field"><span>服务商</span><select name="provider" id="modelCreateProvider"><option value="openai">OpenAI 兼容接口</option><option value="deepseek">DeepSeek</option><option value="local">本地模型</option><option value="custom">自定义服务</option></select></label>
+                  <label class="model-field"><span>模型名称</span><input name="model" type="text" placeholder="例如：gpt-4o-mini" required /></label>
+                  <label class="model-field"><span>Base URL <em>可选</em></span><input name="baseUrl" type="url" inputmode="url" placeholder="https://api.openai.com/v1" /></label>
+                  <label class="model-field model-dialog__wide"><span>API Key <em>仅发送到后端</em></span><input name="apiKey" type="password" autocomplete="new-password" placeholder="sk-…" /></label>
+                  <label class="model-dialog__switch"><input name="enabled" type="checkbox" checked /><span><strong>立即启用这个模型</strong><small>保存后将作为当前类型的可用连接</small></span></label>
+                  <div class="model-dialog__extra" id="modelCreateExtraFields"></div>
+                </div>
+                <div class="model-dialog__feedback" id="modelCreateFeedback" role="status" aria-live="polite" hidden></div>
+                <div class="model-dialog__actions"><button class="btn btn--ghost" type="button" data-model-dialog-close>取消</button><button class="btn btn--ghost" id="modelDialogValidate" type="button"><i class="ph ph-plugs-connected" aria-hidden="true"></i><span>测试连接</span></button><button class="btn btn--primary" id="modelCreateSubmit" type="submit"><i class="ph ph-plus" aria-hidden="true"></i><span>添加模型</span></button></div>
+              </form>
+            </dialog>
           </div>
         </section>
 

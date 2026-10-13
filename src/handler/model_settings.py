@@ -28,7 +28,9 @@ def _store() -> ModelSettingsStore:
 
 def _public_model(item: dict[str, Any], *, current: dict[str, Any]) -> dict[str, Any]:
     result = dict(item)
-    secret = result.pop("apiKey", None) or result.pop("api_key", None)
+    camel_secret = result.pop("apiKey", None)
+    snake_secret = result.pop("api_key", None)
+    secret = camel_secret or snake_secret
     is_current = bool(result.get("isCurrent", current.get("model") == result.get("model")))
     if not secret and is_current:
         secret = current.get("apiKey") or current.get("api_key")
