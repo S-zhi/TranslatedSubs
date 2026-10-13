@@ -64,12 +64,6 @@ class TaskCreate(BaseModel):
             raise ValueError("配音需要启用字幕翻译")
         if self.ttsEnabled and not self.targetLang.lower().startswith(("zh", "en")):
             raise ValueError("Kokoro 配音目前支持中文和英文目标语")
-        if self.ttsEnabled and self.ttsVoice not in {"auto", "zf_001", "zm_010", "af_maple", "af_sol"}:
-            raise ValueError("不支持的 Kokoro 音色")
-        if self.ttsEnabled and self.ttsVoice in {"zf_001", "zm_010"} and not self.targetLang.lower().startswith("zh"):
-            raise ValueError("中文音色只能用于中文目标语")
-        if self.ttsEnabled and self.ttsVoice in {"af_maple", "af_sol"} and not self.targetLang.lower().startswith("en"):
-            raise ValueError("英文音色只能用于英文目标语")
         return self
 
 

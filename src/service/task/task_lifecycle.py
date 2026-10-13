@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 from typing import Any, Callable, List, Literal, Optional
@@ -66,6 +67,7 @@ def create_url_task(
     ensure_supported_translation_languages: Callable[..., None],
     ensure_local_model_ready: Callable[..., None],
     ensure_translation_engine: Callable[..., None],
+    resolve_runtime: Callable[..., Any] | None = None,
     task_origin: str = "web",
 ) -> tuple[Any, bool]:
     """校验并创建 URL 任务；入队由 HTTP 门面在冲突检查后完成。"""
@@ -73,8 +75,23 @@ def create_url_task(
     ensure_supported_translation_languages(
         body.engine, body.needSubtitle, body.sourceLang, body.targetLang
     )
-    ensure_local_model_ready(body.model)
-    ensure_translation_engine(body.engine, body.needSubtitle, engines)
+    if resolve_runtime is not None:
+        runtime = resolve_runtime(
+            engine=body.engine,
+            need_subtitle=body.needSubtitle,
+            request_model=body.model,
+            source_lang=body.sourceLang,
+            target_lang=body.targetLang,
+            tts_enabled=body.ttsEnabled,
+            tts_voice=body.ttsVoice,
+            engines=engines,
+            ensure_local_model_ready=ensure_local_model_ready,
+        )
+        runtime_config_json = json.dumps(runtime.snapshot, ensure_ascii=False, separators=(",", ":"))
+    else:
+        ensure_local_model_ready(body.model)
+        ensure_translation_engine(body.engine, body.needSubtitle, engines)
+        runtime_config_json = None
     return store.create_if_no_recent_active(
         url=body.url,
         source_lang=body.sourceLang,
@@ -89,6 +106,7 @@ def create_url_task(
         tts_enabled=body.ttsEnabled,
         tts_voice=body.ttsVoice,
         original_voice_mode=body.originalVoiceMode,
+        runtime_config_json=runtime_config_json,
     )
 
 
@@ -116,6 +134,7 @@ def create_upload_task(
     ensure_local_model_ready: Callable[..., None],
     ensure_translation_engine: Callable[..., None],
     upload_error: Callable[..., Exception],
+    resolve_runtime: Callable[..., Any] | None = None,
     http_exception_type: type[BaseException],
     source_video_stem: str,
     upload_video_extensions: set[str],
@@ -125,18 +144,39 @@ def create_upload_task(
     max_upload_bytes = settings.max_upload_mb * 1024 * 1024
     filename = (file.filename or "").strip()
     ensure_supported_translation_languages(engine, need_subtitle, source_lang, target_lang)
-    ensure_translation_engine(engine, need_subtitle, engines)
-    ensure_local_model_ready(model)
+    if resolve_runtime is not None:
+        runtime = resolve_runtime(
+            engine=engine,
+            need_subtitle=need_subtitle,
+            request_model=model,
+            source_lang=source_lang,
+            target_lang=target_lang,
+            tts_enabled=tts_enabled,
+            tts_voice=tts_voice,
+            engines=engines,
+            ensure_local_model_ready=ensure_local_model_ready,
+        )
+        runtime_config_json = json.dumps(runtime.snapshot, ensure_ascii=False, separators=(",", ":"))
+    else:
+        ensure_translation_engine(engine, need_subtitle, engines)
+        ensure_local_model_ready(model)
+        runtime_config_json = None
 
     if tts_enabled and not need_subtitle:
         raise UploadTaskError(422, "配音需要启用字幕翻译")
     if tts_enabled and not target_lang.lower().startswith(("zh", "en")):
         raise UploadTaskError(422, "Kokoro 配音目前支持中文和英文目标语")
-    if tts_enabled and tts_voice not in {"auto", "zf_001", "zm_010", "af_maple", "af_sol"}:
+    effective_tts_voice = tts_voice
+    if runtime_config_json:
+        try:
+            effective_tts_voice = str(json.loads(runtime_config_json).get("tts", {}).get("voice") or tts_voice)
+        except (TypeError, ValueError):
+            effective_tts_voice = tts_voice
+    if tts_enabled and effective_tts_voice not in {"auto", "zf_001", "zm_010", "af_maple", "af_sol"}:
         raise UploadTaskError(422, "不支持的 Kokoro 音色")
-    if tts_enabled and tts_voice in {"zf_001", "zm_010"} and not target_lang.lower().startswith("zh"):
+    if tts_enabled and effective_tts_voice in {"zf_001", "zm_010"} and not target_lang.lower().startswith("zh"):
         raise UploadTaskError(422, "中文音色只能用于中文目标语")
-    if tts_enabled and tts_voice in {"af_maple", "af_sol"} and not target_lang.lower().startswith("en"):
+    if tts_enabled and effective_tts_voice in {"af_maple", "af_sol"} and not target_lang.lower().startswith("en"):
         raise UploadTaskError(422, "英文音色只能用于英文目标语")
 
     ext = Path(filename).suffix.lower()
@@ -164,6 +204,7 @@ def create_upload_task(
         tts_enabled=tts_enabled,
         tts_voice=tts_voice,
         original_voice_mode=original_voice_mode,
+        runtime_config_json=runtime_config_json,
     )
 
     directory = task_dir(rec.id)
@@ -332,6 +373,7 @@ def create_task_route(
         ensure_supported_translation_languages=compat._ensure_supported_translation_languages,
         ensure_local_model_ready=compat._ensure_local_model_ready,
         ensure_translation_engine=compat._ensure_translation_engine,
+        resolve_runtime=compat.resolve_runtime,
         task_origin=task_origin,
     )
     if not created:
@@ -389,6 +431,7 @@ def create_upload_task_route(
             ensure_local_model_ready=compat._ensure_local_model_ready,
             ensure_translation_engine=compat._ensure_translation_engine,
             upload_error=compat._upload_error,
+            resolve_runtime=compat.resolve_runtime,
             http_exception_type=HTTPException,
             source_video_stem=SOURCE_VIDEO_STEM,
             upload_video_extensions=compat._UPLOAD_VIDEO_EXTS,

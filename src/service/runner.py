@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import inspect
+import json
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -85,7 +86,7 @@ _RECOVERABLE_STATUSES = set(STATUSES) - {"SUCCESS", "FAILED", "CANCELLED"}
 _engine_store = TranslationEngineStore(settings.db_path)
 
 
-def _active_unified_model(kind: str) -> dict | None:
+def _active_unified_model(kind: str, db_path=None) -> dict | None:
     """Read a user-saved current model at task start.
 
     Default rows are intentionally passive so existing tasks keep their
@@ -96,7 +97,7 @@ def _active_unified_model(kind: str) -> dict | None:
     if kind not in MODEL_KINDS:
         return None
     try:
-        config = ModelSettingsStore(settings.db_path).get(kind) or {}
+        config = ModelSettingsStore(db_path or settings.db_path).get(kind) or {}
     except Exception:
         logger.exception("读取统一模型配置失败: kind=%s", kind)
         return None
@@ -130,6 +131,50 @@ def _llm_engine_config(item: dict) -> object | None:
         temperature=float(item.get("temperature") or 0.3),
         max_tokens=int(item.get("maxTokens") or 4096),
         concurrency=max(1, int(item.get("concurrency") or 1)),
+    )
+
+
+def _snapshot_engine_config(snapshot: dict, *, engine_store=None) -> object | None:
+    """Build an engine config from a persisted snapshot and current secret."""
+    source = str(snapshot.get("source") or "")
+    engine_id = str(snapshot.get("id") or "")
+    key = ""
+    if source == "unified_llm":
+        store_path = getattr(engine_store, "db_path", settings.db_path)
+        config = ModelSettingsStore(store_path).get("llm") or {}
+        card_id = snapshot.get("cardId")
+        card = next(
+            (item for item in config.get("models", [])
+             if isinstance(item, dict) and str(item.get("id")) == str(card_id)),
+            None,
+        )
+        item = dict(config)
+        if card:
+            item.update(card)
+            if not item.get("apiKey") and config.get("apiKey"):
+                item["apiKey"] = config["apiKey"]
+        key = str(item.get("apiKey") or "").strip()
+    else:
+        rec = (engine_store or _engine_store).get(engine_id)
+        key = str(getattr(rec, "api_key", None) or "").strip()
+        if not key and engine_id == "deepseek":
+            key = str(getattr(settings, "deepseek_api_key", None) or "").strip()
+    if not key and source not in {"disabled"} and str(snapshot.get("provider") or "").lower() != "local":
+        return None
+    params = snapshot.get("params") or {}
+    provider = str(snapshot.get("provider") or "").lower()
+    api_type = "anthropic_compatible" if provider in {"anthropic", "anthropic_compatible"} else (
+        "local_ct2" if provider == "local" else "openai_compatible"
+    )
+    return SimpleNamespace(
+        api_type=api_type,
+        base_url=str(snapshot.get("baseUrl") or ""),
+        model=str(snapshot.get("model") or ""),
+        api_key=key or None,
+        timeout=int(params.get("timeout") or 120),
+        temperature=float(params.get("temperature") or 0.3),
+        max_tokens=int(params.get("maxTokens") or 4096),
+        concurrency=max(1, int(params.get("concurrency") or 1)),
     )
 
 _procs: dict[str, list[subprocess.Popen]] = {}
@@ -302,15 +347,31 @@ def _run(task_id: str) -> None:
         unregister_cancellation_signal(task_id)
         return
 
-    whisper_model = _active_unified_model("whisper")
-    tts_model = _active_unified_model("tts")
-    selected_whisper = str((whisper_model or {}).get("model") or rec.model)
-    if whisper_model:
-        whisper_provider = str(whisper_model.get("provider") or "local").strip().lower()
-        if whisper_provider == "local" and not selected_whisper.lower().startswith("local:"):
-            selected_whisper = f"local:{selected_whisper}"
-        elif whisper_provider not in {"local", "whisper", "faster_whisper"} and ":" not in selected_whisper:
-            selected_whisper = f"{whisper_provider}:{selected_whisper}"
+    try:
+        runtime_snapshot = json.loads(rec.runtime_config_json) if rec.runtime_config_json else None
+    except (TypeError, ValueError):
+        runtime_snapshot = None
+    task_db_path = getattr(_store, "db_path", settings.db_path)
+    whisper_model = (
+        _active_unified_model("whisper", task_db_path)
+        if runtime_snapshot is None else None
+    )
+    tts_model = (
+        _active_unified_model("tts", task_db_path)
+        if runtime_snapshot is None else None
+    )
+    if runtime_snapshot:
+        whisper_snapshot = runtime_snapshot.get("whisper") or {}
+        selected_whisper = str(whisper_snapshot.get("model") or rec.model)
+    else:
+        selected_whisper = str((whisper_model or {}).get("model") or rec.model)
+        if whisper_model:
+            whisper_provider = str(whisper_model.get("provider") or "local").strip().lower()
+            if whisper_provider == "local" and not selected_whisper.lower().startswith("local:"):
+                selected_whisper = f"local:{selected_whisper}"
+            elif whisper_provider not in {"local", "whisper", "faster_whisper"} and ":" not in selected_whisper:
+                selected_whisper = f"{whisper_provider}:{selected_whisper}"
+    tts_snapshot = (runtime_snapshot or {}).get("tts") if runtime_snapshot else None
     params = PipelineParams(
         task_id=rec.id,
         url=rec.url,
@@ -325,11 +386,11 @@ def _run(task_id: str) -> None:
         title=rec.title,
         quality=getattr(rec, "quality", None),
         tts_enabled=bool(getattr(rec, "tts_enabled", 0)),
-        tts_voice=str((tts_model or {}).get("voice") or getattr(rec, "tts_voice", "auto")),
-        tts_speed=float((tts_model or {}).get("speed", 1.0) or 1.0),
-        tts_format=str((tts_model or {}).get("format", "wav") or "wav"),
-        tts_model=(str((tts_model or {}).get("model") or "") or None),
-        tts_provider=str((tts_model or {}).get("provider", "kokoro") or "kokoro"),
+        tts_voice=str((tts_snapshot or {}).get("voice") or (tts_model or {}).get("voice") or getattr(rec, "tts_voice", "auto")),
+        tts_speed=float((tts_snapshot or {}).get("speed", 1.0) if tts_snapshot else ((tts_model or {}).get("speed", 1.0) or 1.0)),
+        tts_format=str((tts_snapshot or {}).get("format", "wav") if tts_snapshot else ((tts_model or {}).get("format", "wav") or "wav")),
+        tts_model=(str((tts_snapshot or {}).get("model") or (tts_model or {}).get("model") or "") or None),
+        tts_provider=str((tts_snapshot or {}).get("provider") or (tts_model or {}).get("provider", "kokoro") or "kokoro"),
         original_voice_mode=getattr(rec, "original_voice_mode", "keep"),
     )
 
@@ -382,13 +443,25 @@ def _run(task_id: str) -> None:
         last_state["status"] = ev.status
         last_state["progress"] = ev.progress
 
-    # 所有任务都从持久化配置读取引擎。DeepSeek 只是旧版默认配置 ID，
-    # 由启动时的 seed 记录兼容环境变量，不再绕过数据库配置。
-    engine_config = _engine_store.get(rec.engine)
-    unified_llm = _active_unified_model("llm")
-    if unified_llm is not None and rec.engine != "local-opus-en-zh":
-        engine_config = _llm_engine_config(unified_llm) or engine_config
-    if engine_config is None:
+    # New tasks use the immutable snapshot; legacy rows retain the historical
+    # dynamic lookup behavior for backwards compatibility.
+    if runtime_snapshot:
+        snapshot_engine_store = TranslationEngineStore(getattr(_store, "db_path", settings.db_path))
+        engine_config = _snapshot_engine_config(runtime_snapshot.get("engine") or {}, engine_store=snapshot_engine_store)
+    else:
+        # Historical rows have no snapshot.  Prefer the database that owns the
+        # task, then fall back to the process singleton used by old callers.
+        task_engine_store = TranslationEngineStore(getattr(_store, "db_path", settings.db_path))
+        engine_config = task_engine_store.get(rec.engine) or _engine_store.get(rec.engine)
+        # ``deepseek`` is the only legacy alias backed by the unified LLM card.
+        # A task's explicit custom/local engine remains authoritative.
+        if rec.engine == "deepseek":
+            unified_llm = _active_unified_model(
+                "llm", getattr(_store, "db_path", settings.db_path)
+            )
+            if unified_llm is not None:
+                engine_config = _llm_engine_config(unified_llm) or engine_config
+    if engine_config is None and (runtime_snapshot or rec.engine != "deepseek"):
         _store.update(task_id, status="FAILED", error="翻译引擎配置不存在", error_code="engine_not_found")
         unregister_cancellation_signal(task_id)
         return
