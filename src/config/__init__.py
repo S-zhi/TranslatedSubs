@@ -1,6 +1,6 @@
 """配置层：全局设置与存储路径策略。"""
 
-from .config import get_runtime_settings, settings, update_runtime_settings
+from .config import get_runtime_settings, settings, settings_scope, update_runtime_settings
 from .storage import (
     ArtifactRef,
     ArtifactStore,
@@ -22,6 +22,7 @@ from .storage import (
 
 __all__ = [
     "settings",
+    "settings_scope",
     "ArtifactRef",
     "ArtifactStore",
     "artifact_store",

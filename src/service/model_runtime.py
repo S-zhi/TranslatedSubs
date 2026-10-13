@@ -14,9 +14,10 @@ from typing import Any, Callable
 from fastapi import HTTPException
 
 from src.config import settings as default_settings
+from src.config.config_repository import ConfigSnapshot, get_config_provider
 from src.store import ModelSettingsStore
 
-_SNAPSHOT_VERSION = 1
+_SNAPSHOT_VERSION = 2
 _LLM_PROVIDERS = {
     "deepseek", "openai", "openai_compatible", "anthropic",
     "anthropic_compatible", "custom",
@@ -31,15 +32,17 @@ def _error(status: int, code: str, message: str) -> HTTPException:
 def active_model_card(store: ModelSettingsStore, kind: str) -> dict[str, Any] | None:
     """Return the saved current card when unified runtime management is on."""
     config = store.get(kind) or {}
-    if not config.get("_runtimeManaged") or not config.get("enabled", True):
+    if not config.get("_runtimeManaged"):
         return None
+    if not config.get("enabled", True):
+        raise _error(422, "MODEL_DISABLED", f"统一 {kind.upper()} 模型已停用")
     models = [item for item in config.get("models", []) if isinstance(item, dict)]
     card = next((item for item in models if item.get("isCurrent")), None)
+    if card is None:
+        raise _error(422, "MODEL_NOT_SELECTED", f"统一 {kind.upper()} 模型没有当前选中卡片")
     merged = dict(config)
-    if card:
-        merged.update(card)
-        if not merged.get("apiKey") and config.get("apiKey"):
-            merged["apiKey"] = config["apiKey"]
+    merged.pop("apiKey", None)
+    merged.update(card)
     return merged
 
 
@@ -107,18 +110,20 @@ def _resolve_engine(
                 "params": _engine_params(card),
             }
         rec = engines.get("deepseek")
-        key = (getattr(rec, "api_key", None) if rec else None) or getattr(compat_settings, "deepseek_api_key", None)
+        key = getattr(rec, "api_key", None) if rec else None
         if not str(key or "").strip():
-            # Keep the legacy response text stable for existing clients.  The
-            # unified card path above returns the structured error code.
             raise HTTPException(
                 status_code=422,
-                detail="缺少 DeepSeek API Key，请在 .env 配置 SUBTRANS_DEEPSEEK_API_KEY",
+                detail="缺少 DeepSeek API Key，请在 Redis 模型设置或翻译引擎设置中配置 API Key",
             )
+        if not rec.enabled:
+            raise _error(422, "ENGINE_DISABLED", "DeepSeek 翻译引擎已停用")
+        if rec.availability != "AVAILABLE":
+            raise _error(422, "ENGINE_UNAVAILABLE", "DeepSeek 翻译引擎尚未通过可用性检测")
         return {
-            "source": "legacy", "id": engine, "provider": "deepseek",
-            "model": str(getattr(rec, "model", None) or getattr(compat_settings, "deepseek_model", "deepseek-chat")),
-            "baseUrl": str(getattr(rec, "base_url", None) or getattr(compat_settings, "deepseek_base_url", "https://api.deepseek.com")),
+            "source": "translation_store", "id": engine, "provider": "deepseek",
+            "model": rec.model,
+            "baseUrl": rec.base_url,
             "params": _engine_params({}),
         }
 
@@ -256,8 +261,22 @@ def resolve_runtime(
     compat_settings: Any = default_settings,
     ensure_local_model_ready: Callable[[str], None] | None = None,
     translation_model_manager: Any = None,
+    config_snapshot: ConfigSnapshot | None = None,
+    config_provider: Any = None,
 ) -> RuntimePlan:
-    model_store = model_store or ModelSettingsStore(getattr(compat_settings, "db_path", default_settings.db_path))
+    # One aggregate read pins model cards, engines, and business settings to
+    # one Redis revision. Secret values stay in the aggregate, but only the
+    # non-secret routing fields below are copied into the task snapshot.
+    provider = config_provider or (
+        getattr(model_store, "_provider", None)
+        or getattr(engines, "_provider", None)
+    )
+    config = config_snapshot or (provider or get_config_provider()).read()
+    if model_store is None or isinstance(model_store, ModelSettingsStore):
+        model_store = ModelSettingsStore(snapshot=config)
+    from src.store import TranslationEngineStore
+    if engines is None or isinstance(engines, TranslationEngineStore):
+        engines = TranslationEngineStore(snapshot=config)
     engine_snapshot = _resolve_engine(
         engine, need_subtitle, engines, model_store=model_store,
         compat_settings=compat_settings, translation_model_manager=translation_model_manager,
@@ -269,8 +288,11 @@ def resolve_runtime(
         ensure_local_model_ready=ensure_local_model_ready,
     )
     tts_snapshot = _resolve_tts(tts_enabled, tts_voice, model_store=model_store, target_lang=target_lang)
+    business = default_settings.capture_business_snapshot(config_snapshot=config)
     return RuntimePlan({
         "schemaVersion": _SNAPSHOT_VERSION,
+        "configRevision": config.revision,
+        "business": business,
         "engine": engine_snapshot,
         "whisper": whisper_snapshot,
         "tts": tts_snapshot,
@@ -285,9 +307,20 @@ def resolve_engine(
     model_store: ModelSettingsStore | None = None,
     compat_settings: Any = default_settings,
     translation_model_manager: Any = None,
+    config_snapshot: ConfigSnapshot | None = None,
+    config_provider: Any = None,
 ) -> dict[str, Any]:
     """Validate and resolve only the translation engine compatibility helper."""
-    model_store = model_store or ModelSettingsStore(getattr(compat_settings, "db_path", default_settings.db_path))
+    provider = config_provider or (
+        getattr(model_store, "_provider", None)
+        or getattr(engines, "_provider", None)
+    )
+    config = config_snapshot or (provider or get_config_provider()).read()
+    if model_store is None or isinstance(model_store, ModelSettingsStore):
+        model_store = ModelSettingsStore(snapshot=config)
+    from src.store import TranslationEngineStore
+    if engines is None or isinstance(engines, TranslationEngineStore):
+        engines = TranslationEngineStore(snapshot=config)
     return _resolve_engine(
         engine, need_subtitle, engines, model_store=model_store,
         compat_settings=compat_settings, translation_model_manager=translation_model_manager,

@@ -13,17 +13,25 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from src.config import settings
-from src.config.runtime_redis import start_runtime_subscription, stop_runtime_subscription
+from src.config.config_repository import (
+    ConfigUnavailable,
+    initialize_config_document,
+    start_config_subscription,
+    stop_config_subscription,
+)
+from src.config.schema import BUSINESS_DEFAULTS
+from src.config.redis_store import RevisionConflict
 
 
 from src.handler import (
     audio_settings,
+    business_settings,
     health,
     model_settings,
     srt,
@@ -50,21 +58,48 @@ from src.store import (
 
 logger = logging.getLogger(__name__)
 
+
+class DynamicCORSMiddleware(CORSMiddleware):
+    """Refresh allowed origins from the shared business snapshot per request."""
+    def __init__(self, app, **kwargs):
+        self._app = app
+        self._cors_options = kwargs
+        super().__init__(app, **kwargs)
+
+    async def __call__(self, scope, receive, send):
+        try:
+            origins = list(settings.cors_allow_origins)
+        except Exception:
+            origins = []
+        dynamic = CORSMiddleware(
+            self._app,
+            allow_origins=origins,
+            **{key: value for key, value in self._cors_options.items() if key != "allow_origins"},
+        )
+        await dynamic(scope, receive, send)
+
 # 项目根目录下的 web 前端目录（向上两级即 src/handler/app.py -> src/handler -> 项目根）
 _WEB_DIR = Path(__file__).resolve().parents[2] / "web"
 
 
 
 def create_app(debug: bool | None = None) -> FastAPI:
-    debug_mode = settings.debug if debug is None else bool(debug)
     app = FastAPI(title="TranslatedSubs API", version="0.1.0")
+
+    @app.exception_handler(ConfigUnavailable)
+    async def config_unavailable_handler(request: Request, exc: ConfigUnavailable):
+        return JSONResponse(status_code=503, content={"detail": "Redis 配置存储不可用"})
+
+    @app.exception_handler(RevisionConflict)
+    async def revision_conflict_handler(request: Request, exc: RevisionConflict):
+        return JSONResponse(status_code=409, content={"detail": "配置版本冲突"})
 
     # 本机工作台：只允许配置中的前端来源访问 API。
     app.add_middleware(
-        CORSMiddleware,
-        allow_origins=list(settings.cors_allow_origins),
-        allow_methods=["GET", "POST", "DELETE", "PUT", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "X-API-Token"],
+        DynamicCORSMiddleware,
+        allow_origins=[],
+        allow_methods=["GET", "POST", "DELETE", "PUT", "PATCH", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-API-Token", "If-Match"],
     )
 
     # 按业务挂载路由，后续新增业务在此 include 即可
@@ -76,6 +111,7 @@ def create_app(debug: bool | None = None) -> FastAPI:
     app.include_router(translation_engines.router)
     app.include_router(model_settings.router)
     app.include_router(audio_settings.router)
+    app.include_router(business_settings.router)
 
     # SPA 路由需要在静态目录挂载前显式回退到 index.html，否则直接打开
     # /tasks、/preview 等深链接时 StaticFiles 会按目录查找并返回 404。
@@ -106,6 +142,12 @@ def create_app(debug: bool | None = None) -> FastAPI:
         SUCCESS 任务的磁盘产物已不在时降级为 MISSING；PENDING 和处理中任务
         重新入队，由流水线根据已有中间产物断点续跑。两项操作都可重复执行。
         """
+        try:
+            initialize_config_document()
+        except ConfigUnavailable:
+            logger.exception("Redis shared configuration unavailable; skipping recovery startup")
+            return
+
         store = get_store()
         downgraded = tasks.scan_missing_terminal(store, data_dir=settings.data_dir)
         if downgraded:
@@ -143,19 +185,20 @@ def create_app(debug: bool | None = None) -> FastAPI:
             logger.warning("启动恢复：以下未完成任务已重新入队: %s", recovered)
 
         start_retention_scheduler()
-        start_runtime_subscription()
+        start_config_subscription()
+        effective_debug = settings.debug if debug is None else bool(debug)
         start_startup_probe(
             get_probe_store(),
             enabled=settings.startup_probe_enabled,
-            debug=debug_mode,
+            debug=effective_debug,
         )
-        if debug_mode:
+        if effective_debug:
             logger.info("debug 模式：已跳过网站连通性检查")
     @app.on_event("shutdown")
     def _shutdown_runner() -> None:
         """关闭应用时通知 runner 线程池退出。"""
         stop_startup_probe()
-        stop_runtime_subscription()
+        stop_config_subscription()
         get_translation_model_manager().cancel_warmup()
         shutdown_executor(wait=False)
 

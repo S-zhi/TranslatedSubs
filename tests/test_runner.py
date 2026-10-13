@@ -6,13 +6,17 @@ import pytest
 
 from src.service import runner
 from src.service.orchestrator import PipelineEvent
-from src.store import TaskStore
+from src.store import TaskStore, TranslationEngineStore
+from src.config.config_repository import get_config_provider
 
 
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     s = TaskStore(tmp_path / "t.db")
     monkeypatch.setattr(runner, "_store", s)  # 执行器用临时库
+    engines = TranslationEngineStore()
+    engines.ensure_default_deepseek()
+    engines.update("deepseek", api_key="sk-runner-test", availability="AVAILABLE")
     return s
 
 
@@ -306,12 +310,16 @@ def test_recover_interrupted_replicate_task_is_failed_without_requeue(store, mon
 
 def test_get_executor_dynamic_worker_update(monkeypatch):
     runner.shutdown_executor(wait=True)
-    monkeypatch.setenv("SUBTRANS_WORKERS", "3")
+    get_config_provider().mutate(
+        lambda document: document["business"].update({"pipeline_workers": 3})
+    )
     exec1 = runner.get_executor()
     assert exec1._max_workers == 3
 
-    # 修改环境变量为 5，再次 get_executor 自动平滑重构
-    monkeypatch.setenv("SUBTRANS_WORKERS", "5")
+    # Redis business config changes rebuild the pool dynamically.
+    get_config_provider().mutate(
+        lambda document: document["business"].update({"pipeline_workers": 5})
+    )
     exec2 = runner.get_executor()
     assert exec2._max_workers == 5
     assert exec2 is not exec1
@@ -357,8 +365,8 @@ def test_on_event_db_write_throttling(store, monkeypatch):
     monkeypatch.setattr(runner, "run_pipeline", fake_pipeline)
     runner._run(tid)
 
-    # Exactly 3 DB updates triggered instead of 20+
-    assert len(update_calls) == 3
+    # One immutable snapshot write plus three throttled progress writes.
+    assert len(update_calls) == 4
     assert store.get(tid).status == "SUCCESS"
 
 

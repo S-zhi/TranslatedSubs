@@ -486,7 +486,7 @@ def probe_task_route(
             detail=ErrorDetail(
                 code="BROWSER_COOKIES_DISABLED",
                 message="浏览器 Cookie 探测未启用",
-                suggestion="请在后端同一台可信机器上设置 SUBTRANS_ALLOW_COOKIES_FROM_BROWSER=1 后重试。",
+                suggestion="请在 Redis 业务配置中启用 allow_cookies_from_browser 后重试。",
             ).model_dump(exclude_none=True),
         )
     result, _record = compat._task_runtime.probe_and_record(

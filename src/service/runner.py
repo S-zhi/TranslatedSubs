@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import inspect
 import json
+import math
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -20,6 +21,9 @@ from types import SimpleNamespace
 from typing import Optional
 
 from src.config import OUTPUT_VIDEO_NAMES, artifact_name, settings, task_dir
+from src.config.config import settings_scope
+from src.config.config_repository import get_config_provider
+from src.config.schema import BUSINESS_DEFAULTS, SECRET_KEYS, validate_business_value
 from src.service.orchestrator import (
     PipelineEvent,
     PipelineParams,
@@ -83,10 +87,17 @@ def shutdown_executor(wait: bool = True) -> None:
             _current_max_workers = 0
             logger.info("流水线线程池已关闭")
 _RECOVERABLE_STATUSES = set(STATUSES) - {"SUCCESS", "FAILED", "CANCELLED"}
-_engine_store = TranslationEngineStore(settings.db_path)
+_engine_store: TranslationEngineStore | None = None
 
 
-def _active_unified_model(kind: str, db_path=None) -> dict | None:
+def _get_engine_store() -> TranslationEngineStore:
+    global _engine_store
+    if _engine_store is None:
+        _engine_store = TranslationEngineStore(settings.db_path)
+    return _engine_store
+
+
+def _active_unified_model(kind: str, db_path=None, *, snapshot=None) -> dict | None:
     """Read a user-saved current model at task start.
 
     Default rows are intentionally passive so existing tasks keep their
@@ -96,16 +107,15 @@ def _active_unified_model(kind: str, db_path=None) -> dict | None:
     """
     if kind not in MODEL_KINDS:
         return None
-    try:
-        config = ModelSettingsStore(db_path or settings.db_path).get(kind) or {}
-    except Exception:
-        logger.exception("读取统一模型配置失败: kind=%s", kind)
-        return None
+    config = ModelSettingsStore(db_path or settings.db_path, snapshot=snapshot).get(kind) or {}
     if not config.get("_runtimeManaged") or not config.get("enabled", True):
         return None
     models = [item for item in config.get("models", []) if isinstance(item, dict)]
     active = next((item for item in models if item.get("isCurrent")), None)
     merged = dict(config)
+    # The per-card identity owns its credential. Never inherit a key from the
+    # category-level compatibility field when the selected card has none.
+    merged.pop("apiKey", None)
     if active:
         merged.update(active)
     return merged
@@ -134,32 +144,35 @@ def _llm_engine_config(item: dict) -> object | None:
     )
 
 
-def _snapshot_engine_config(snapshot: dict, *, engine_store=None) -> object | None:
+def _snapshot_engine_config(snapshot: dict, *, engine_store=None, model_store=None) -> object | None:
     """Build an engine config from a persisted snapshot and current secret."""
     source = str(snapshot.get("source") or "")
     engine_id = str(snapshot.get("id") or "")
+    if source == "disabled":
+        return SimpleNamespace(
+            api_type="disabled", base_url="", model="", api_key=None,
+            timeout=120, temperature=0.3, max_tokens=4096, concurrency=1,
+        )
     key = ""
     if source == "unified_llm":
-        store_path = getattr(engine_store, "db_path", settings.db_path)
-        config = ModelSettingsStore(store_path).get("llm") or {}
+        config = (model_store or ModelSettingsStore()).get("llm") or {}
         card_id = snapshot.get("cardId")
         card = next(
             (item for item in config.get("models", [])
-             if isinstance(item, dict) and str(item.get("id")) == str(card_id)),
+             if isinstance(item, dict) and str(item.get("id")) == str(card_id)
+             ),
             None,
         )
-        item = dict(config)
-        if card:
-            item.update(card)
-            if not item.get("apiKey") and config.get("apiKey"):
-                item["apiKey"] = config["apiKey"]
+        if card is None or not card.get("enabled", True) or not config.get("enabled", True):
+            return None
+        item = card
         key = str(item.get("apiKey") or "").strip()
     else:
-        rec = (engine_store or _engine_store).get(engine_id)
+        rec = (engine_store or _get_engine_store()).get(engine_id)
+        if rec is None or not rec.enabled:
+            return None
         key = str(getattr(rec, "api_key", None) or "").strip()
-        if not key and engine_id == "deepseek":
-            key = str(getattr(settings, "deepseek_api_key", None) or "").strip()
-    if not key and source not in {"disabled"} and str(snapshot.get("provider") or "").lower() != "local":
+    if not key and str(snapshot.get("provider") or "").lower() != "local":
         return None
     params = snapshot.get("params") or {}
     provider = str(snapshot.get("provider") or "").lower()
@@ -176,6 +189,204 @@ def _snapshot_engine_config(snapshot: dict, *, engine_store=None) -> object | No
         max_tokens=int(params.get("maxTokens") or 4096),
         concurrency=max(1, int(params.get("concurrency") or 1)),
     )
+
+
+def _snapshot_invalid(condition: bool, field: str) -> None:
+    if condition:
+        raise ValueError(f"invalid runtime snapshot field: {field}")
+
+
+def _validate_runtime_snapshot(snapshot: object) -> dict:
+    """Validate a complete v2 task snapshot before constructing pipeline args.
+
+    Keep errors field-only: persisted snapshots can be manually edited and we
+    must not echo an accidentally embedded credential into task error output.
+    """
+    _snapshot_invalid(not isinstance(snapshot, dict), "root")
+    assert isinstance(snapshot, dict)
+    _snapshot_invalid(type(snapshot.get("schemaVersion")) is not int or snapshot["schemaVersion"] != 2, "schemaVersion")
+    revision = snapshot.get("configRevision")
+    _snapshot_invalid(type(revision) is not int or revision < 0, "configRevision")
+    business = snapshot.get("business")
+    _snapshot_invalid(not isinstance(business, dict), "business")
+    for key, value in business.items():
+        _snapshot_invalid(key in SECRET_KEYS, f"business.{key}")
+        try:
+            validate_business_value(key, value)
+        except (TypeError, ValueError):
+            _snapshot_invalid(True, f"business.{key}")
+
+    engine = snapshot.get("engine")
+    _snapshot_invalid(not isinstance(engine, dict), "engine")
+    _snapshot_invalid(engine.get("source") not in {"disabled", "unified_llm", "translation_store"}, "engine.source")
+    _snapshot_invalid(not isinstance(engine.get("id"), str) or not engine["id"].strip(), "engine.id")
+    for key in ("provider", "model", "baseUrl"):
+        _snapshot_invalid(not isinstance(engine.get(key), str), f"engine.{key}")
+    params = engine.get("params")
+    _snapshot_invalid(not isinstance(params, dict), "engine.params")
+    _snapshot_invalid(set(params) - {"temperature", "maxTokens", "timeout", "concurrency"} != set(), "engine.params")
+    for key, min_value, max_value, integer in (
+        ("temperature", 0, 2, False), ("maxTokens", 1, 1_000_000, True),
+        ("timeout", 1, 86_400, True), ("concurrency", 1, 256, True),
+    ):
+        if key not in params:
+            continue
+        value = params.get(key)
+        _snapshot_invalid(isinstance(value, bool) or not isinstance(value, (int, float)), f"engine.params.{key}")
+        _snapshot_invalid(not math.isfinite(value) or not min_value <= value <= max_value, f"engine.params.{key}")
+        if integer:
+            _snapshot_invalid(type(value) is not int, f"engine.params.{key}")
+    source = engine["source"]
+    _snapshot_invalid(source == "unified_llm" and (
+        not isinstance(engine.get("cardId"), str) or not engine["cardId"].strip()
+    ), "engine.cardId")
+    _snapshot_invalid(source != "disabled" and not engine["model"].strip(), "engine.model")
+
+    whisper = snapshot.get("whisper")
+    _snapshot_invalid(not isinstance(whisper, dict), "whisper")
+    _snapshot_invalid(whisper.get("source") not in {"disabled", "unified_whisper", "request"}, "whisper.source")
+    _snapshot_invalid(not isinstance(whisper.get("model"), str), "whisper.model")
+    _snapshot_invalid(whisper.get("source") != "disabled" and not whisper["model"].strip(), "whisper.model")
+    _snapshot_invalid(not isinstance(whisper.get("provider"), str), "whisper.provider")
+    _snapshot_invalid(whisper.get("cardId") is not None and not isinstance(whisper.get("cardId"), str), "whisper.cardId")
+    _snapshot_invalid(whisper.get("source") == "unified_whisper" and not whisper.get("cardId"), "whisper.cardId")
+
+    tts = snapshot.get("tts")
+    _snapshot_invalid(not isinstance(tts, dict), "tts")
+    _snapshot_invalid(type(tts.get("enabled")) is not bool, "tts.enabled")
+    _snapshot_invalid(tts.get("source") not in {"request", "unified_tts"}, "tts.source")
+    _snapshot_invalid(tts.get("cardId") is not None and not isinstance(tts.get("cardId"), str), "tts.cardId")
+    _snapshot_invalid(tts.get("source") == "unified_tts" and not tts.get("cardId"), "tts.cardId")
+    for key in ("provider", "voice", "format"):
+        _snapshot_invalid(not isinstance(tts.get(key), str), f"tts.{key}")
+    model = tts.get("model")
+    _snapshot_invalid(model is not None and not isinstance(model, str), "tts.model")
+    speed = tts.get("speed")
+    _snapshot_invalid(isinstance(speed, bool) or not isinstance(speed, (int, float)), "tts.speed")
+    _snapshot_invalid(not math.isfinite(speed) or not 0 < speed <= 4, "tts.speed")
+    _snapshot_invalid(tts.get("format") != "wav", "tts.format")
+    return snapshot
+
+
+def _validate_legacy_snapshot(snapshot: object) -> dict:
+    if not isinstance(snapshot, dict):
+        raise ValueError("invalid runtime snapshot field: root")
+    version = snapshot.get("schemaVersion", 1)
+    if type(version) is not int or version != 1:
+        raise ValueError("invalid runtime snapshot field: schemaVersion")
+    business = snapshot.get("business")
+    if business is not None:
+        if not isinstance(business, dict):
+            raise ValueError("invalid runtime snapshot field: business")
+        for key, value in business.items():
+            if key in SECRET_KEYS:
+                raise ValueError(f"invalid runtime snapshot field: business.{key}")
+            try:
+                validate_business_value(key, value)
+            except (TypeError, ValueError):
+                raise ValueError(f"invalid runtime snapshot field: business.{key}") from None
+    for route in ("engine", "whisper", "tts"):
+        value = snapshot.get(route)
+        if value is not None and not isinstance(value, dict):
+            raise ValueError(f"invalid runtime snapshot field: {route}")
+    engine = snapshot.get("engine")
+    if isinstance(engine, dict):
+        for key in ("source", "id", "provider", "model", "baseUrl"):
+            if key in engine and not isinstance(engine[key], str):
+                raise ValueError(f"invalid runtime snapshot field: engine.{key}")
+        if "params" in engine and not isinstance(engine["params"], dict):
+            raise ValueError("invalid runtime snapshot field: engine.params")
+        for key in ("temperature", "maxTokens", "timeout", "concurrency"):
+            value = (engine.get("params") or {}).get(key)
+            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)):
+                raise ValueError(f"invalid runtime snapshot field: engine.params.{key}")
+    whisper = snapshot.get("whisper")
+    if isinstance(whisper, dict):
+        for key in ("source", "provider", "model", "cardId"):
+            if key in whisper and whisper[key] is not None and not isinstance(whisper[key], str):
+                raise ValueError(f"invalid runtime snapshot field: whisper.{key}")
+    tts = snapshot.get("tts")
+    if isinstance(tts, dict):
+        if "enabled" in tts and not isinstance(tts["enabled"], bool):
+            raise ValueError("invalid runtime snapshot field: tts.enabled")
+        if "speed" in tts:
+            speed = tts["speed"]
+            if isinstance(speed, bool) or not isinstance(speed, (int, float)) or not math.isfinite(speed) or not 0 < speed <= 4:
+                raise ValueError("invalid runtime snapshot field: tts.speed")
+        for key in ("source", "provider", "model", "voice", "format", "cardId"):
+            if key in tts and tts[key] is not None and not isinstance(tts[key], str):
+                raise ValueError(f"invalid runtime snapshot field: tts.{key}")
+    revision = snapshot.get("configRevision")
+    if revision is not None and (type(revision) is not int or revision < 0):
+        raise ValueError("invalid runtime snapshot field: configRevision")
+    return snapshot
+
+
+def _upgrade_legacy_snapshot(snapshot: dict, rec, config_bundle) -> dict:
+    """Complete a null/v1 snapshot once, retaining already saved routing."""
+    from src.service.model_runtime import _resolve_engine, _resolve_tts, _resolve_whisper
+
+    engines = TranslationEngineStore(snapshot=config_bundle)
+    models = ModelSettingsStore(snapshot=config_bundle)
+    routes = dict(snapshot)
+    if not isinstance(routes.get("engine"), dict):
+        routes["engine"] = _resolve_engine(
+            rec.engine, bool(rec.need_subtitle), engines, model_store=models,
+            compat_settings=settings,
+        )
+    else:
+        saved = routes["engine"]
+        saved_source = saved.get("source")
+        defaults = {
+            "source": "translation_store", "id": rec.engine, "provider": "",
+            "model": "", "baseUrl": "", "params": {},
+        }
+        defaults.update(saved)
+        if saved_source in {None, "legacy"}:
+            defaults["source"] = "translation_store"
+        if not isinstance(defaults.get("params"), dict):
+            raise ValueError("invalid runtime snapshot field: engine.params")
+        defaults["params"] = {
+            **{"temperature": 0.3, "maxTokens": 4096, "timeout": 120, "concurrency": 1},
+            **defaults["params"],
+        }
+        routes["engine"] = defaults
+
+    if not isinstance(routes.get("whisper"), dict):
+        routes["whisper"] = _resolve_whisper(
+            rec.model, need_subtitle=bool(rec.need_subtitle), model_store=models,
+            ensure_local_model_ready=lambda _model: None,
+        )
+    else:
+        saved = routes["whisper"]
+        model = saved.get("model") or rec.model
+        prefix, separator, _ = str(model).partition(":")
+        provider = saved.get("provider") or (prefix if separator else "local")
+        routes["whisper"] = {
+            "source": "request", "cardId": None, "provider": provider,
+            "model": model, **saved,
+        }
+
+    if not isinstance(routes.get("tts"), dict):
+        routes["tts"] = _resolve_tts(
+            bool(rec.tts_enabled), rec.tts_voice or "auto", model_store=models,
+            target_lang=rec.target_lang,
+        )
+    else:
+        saved = routes["tts"]
+        routes["tts"] = {
+            "enabled": bool(rec.tts_enabled), "source": "request", "cardId": None,
+            "provider": "kokoro", "model": None, "voice": rec.tts_voice or "auto",
+            "speed": 1.0, "format": "wav", **saved,
+        }
+
+    business = settings.capture_business_snapshot(config_snapshot=config_bundle)
+    if isinstance(snapshot.get("business"), dict):
+        business.update(snapshot["business"])
+    routes["schemaVersion"] = 2
+    routes["configRevision"] = config_bundle.revision
+    routes["business"] = business
+    return _validate_runtime_snapshot(routes)
 
 _procs: dict[str, list[subprocess.Popen]] = {}
 _procs_lock = threading.Lock()
@@ -347,20 +558,74 @@ def _run(task_id: str) -> None:
         unregister_cancellation_signal(task_id)
         return
 
+    def fail_invalid_snapshot() -> None:
+        _store.update(
+            task_id, status="FAILED", error="任务配置快照损坏或字段无效",
+            error_code="runtime_snapshot_invalid",
+        )
+        _cleanup_partial_artifacts(task_id)
+        unregister_cancellation_signal(task_id)
+
     try:
         runtime_snapshot = json.loads(rec.runtime_config_json) if rec.runtime_config_json else None
+        if runtime_snapshot is not None:
+            version = runtime_snapshot.get("schemaVersion", 1) if isinstance(runtime_snapshot, dict) else None
+            if version == 2:
+                runtime_snapshot = _validate_runtime_snapshot(runtime_snapshot)
+            else:
+                runtime_snapshot = _validate_legacy_snapshot(runtime_snapshot)
     except (TypeError, ValueError):
-        runtime_snapshot = None
-    task_db_path = getattr(_store, "db_path", settings.db_path)
+        fail_invalid_snapshot()
+        return
+
+    try:
+        config_bundle = get_config_provider().read()
+    except Exception as exc:
+        logger.exception("读取 Redis 配置失败，无法执行任务: %s", task_id)
+        _store.update(
+            task_id, status="FAILED", error="Redis 配置存储不可用，无法执行任务",
+            error_code="config_unavailable",
+        )
+        unregister_cancellation_signal(task_id)
+        return
+
+    # Null/v1 rows are completed from one aggregate read and persisted once.
+    # Retries of the resulting v2 row never resolve routing from live settings.
+    if runtime_snapshot is None or runtime_snapshot.get("schemaVersion", 1) == 1:
+        try:
+            runtime_snapshot = _upgrade_legacy_snapshot(runtime_snapshot or {}, rec, config_bundle)
+        except (TypeError, ValueError):
+            fail_invalid_snapshot()
+            return
+        except Exception:
+            logger.exception("旧任务快照无法补全: task=%s", task_id)
+            _store.update(
+                task_id, status="FAILED", error="旧任务配置快照无法补全，请重新创建任务",
+                error_code="runtime_snapshot_upgrade_failed",
+            )
+            unregister_cancellation_signal(task_id)
+            return
+        encoded_snapshot = json.dumps(runtime_snapshot, ensure_ascii=False, separators=(",", ":"))
+        _store.update(task_id, runtime_config_json=encoded_snapshot)
+        rec.runtime_config_json = encoded_snapshot
+    try:
+        _validate_runtime_snapshot(runtime_snapshot)
+    except (TypeError, ValueError):
+        fail_invalid_snapshot()
+        return
+
+    has_model_snapshot = True
+    task_db_path = getattr(_store, "db_path", None)
+    model_snapshot_store = ModelSettingsStore(task_db_path, snapshot=config_bundle)
     whisper_model = (
-        _active_unified_model("whisper", task_db_path)
-        if runtime_snapshot is None else None
+        _active_unified_model("whisper", task_db_path, snapshot=config_bundle)
+        if not has_model_snapshot else None
     )
     tts_model = (
-        _active_unified_model("tts", task_db_path)
-        if runtime_snapshot is None else None
+        _active_unified_model("tts", task_db_path, snapshot=config_bundle)
+        if not has_model_snapshot else None
     )
-    if runtime_snapshot:
+    if has_model_snapshot:
         whisper_snapshot = runtime_snapshot.get("whisper") or {}
         selected_whisper = str(whisper_snapshot.get("model") or rec.model)
     else:
@@ -371,7 +636,7 @@ def _run(task_id: str) -> None:
                 selected_whisper = f"local:{selected_whisper}"
             elif whisper_provider not in {"local", "whisper", "faster_whisper"} and ":" not in selected_whisper:
                 selected_whisper = f"{whisper_provider}:{selected_whisper}"
-    tts_snapshot = (runtime_snapshot or {}).get("tts") if runtime_snapshot else None
+    tts_snapshot = runtime_snapshot.get("tts") if has_model_snapshot else None
     params = PipelineParams(
         task_id=rec.id,
         url=rec.url,
@@ -443,26 +708,27 @@ def _run(task_id: str) -> None:
         last_state["status"] = ev.status
         last_state["progress"] = ev.progress
 
-    # New tasks use the immutable snapshot; legacy rows retain the historical
-    # dynamic lookup behavior for backwards compatibility.
-    if runtime_snapshot:
-        snapshot_engine_store = TranslationEngineStore(getattr(_store, "db_path", settings.db_path))
-        engine_config = _snapshot_engine_config(runtime_snapshot.get("engine") or {}, engine_store=snapshot_engine_store)
+    # Routing fields are immutable in new task snapshots. Credentials are
+    # deliberately read from the current Redis entry addressed by the saved ID.
+    snapshot_engine_store = TranslationEngineStore(snapshot=config_bundle)
+    if has_model_snapshot:
+        engine_config = _snapshot_engine_config(
+            runtime_snapshot.get("engine") or {}, engine_store=snapshot_engine_store,
+            model_store=model_snapshot_store,
+        )
     else:
-        # Historical rows have no snapshot.  Prefer the database that owns the
-        # task, then fall back to the process singleton used by old callers.
-        task_engine_store = TranslationEngineStore(getattr(_store, "db_path", settings.db_path))
-        engine_config = task_engine_store.get(rec.engine) or _engine_store.get(rec.engine)
-        # ``deepseek`` is the only legacy alias backed by the unified LLM card.
-        # A task's explicit custom/local engine remains authoritative.
+        engine_config = snapshot_engine_store.get(rec.engine)
         if rec.engine == "deepseek":
             unified_llm = _active_unified_model(
-                "llm", getattr(_store, "db_path", settings.db_path)
+                "llm", task_db_path, snapshot=config_bundle,
             )
             if unified_llm is not None:
                 engine_config = _llm_engine_config(unified_llm) or engine_config
-    if engine_config is None and (runtime_snapshot or rec.engine != "deepseek"):
-        _store.update(task_id, status="FAILED", error="翻译引擎配置不存在", error_code="engine_not_found")
+    if engine_config is None:
+        _store.update(
+            task_id, status="FAILED", error="翻译引擎配置不存在、已停用或缺少对应 API Key",
+            error_code="engine_credentials_missing",
+        )
         unregister_cancellation_signal(task_id)
         return
     try:
@@ -471,10 +737,11 @@ def _run(task_id: str) -> None:
         }
         pipeline_kwargs["engine_config"] = engine_config
         # 保持第三方/旧测试注入的简化 runner 可用；正式编排器支持 engine_config。
-        if "engine_config" in inspect.signature(run_pipeline).parameters:
-            run_pipeline(params, on_event, **pipeline_kwargs)
-        else:
-            run_pipeline(params, on_event, api_key=None)
+        with settings_scope(runtime_snapshot["business"]):
+            if "engine_config" in inspect.signature(run_pipeline).parameters:
+                run_pipeline(params, on_event, **pipeline_kwargs)
+            else:
+                run_pipeline(params, on_event, api_key=None)
     except ResourceError as e:
         if is_cancelled_signal(task_id):
             logger.info("任务已被取消: %s", task_id)

@@ -20,15 +20,17 @@ def test_translation_engine_store_seeds_deepseek_once(tmp_path):
     assert seeded.api_type == "openai_compatible"
     assert seeded.base_url == "https://api.deepseek.com"
     assert seeded.model == "deepseek-chat"
-    assert seeded.has_api_key is True
-    assert seeded.availability == "UNKNOWN"
+    # Deprecated environment bootstrap inputs are ignored; secrets are only
+    # stored through an explicit Redis-backed update.
+    assert seeded.has_api_key is False
+    assert seeded.availability == "UNCONFIGURED"
 
     # 启动流程可重复执行，且不覆盖用户后续修改。
     store.update("deepseek", name="我的 DeepSeek")
     again = store.ensure_default_deepseek(api_key="another-key")
     assert again.id == "deepseek"
     assert again.name == "我的 DeepSeek"
-    assert again.api_key == "env-key"
+    assert again.api_key is None
 
 
 def test_api_key_rotation_audit_and_blank_update_is_noop(tmp_path):
@@ -58,26 +60,18 @@ def test_api_key_rotation_audit_and_blank_update_is_noop(tmp_path):
     assert replaced.updated_at >= original_updated
 
 
-def test_translation_engine_schema_migrates_rotation_timestamp(tmp_path):
-    import sqlite3
+def test_translation_engine_store_uses_snake_case_aggregate_fields():
+    from src.config.config_repository import get_config_provider
 
-    db = tmp_path / "legacy.db"
-    with sqlite3.connect(db) as conn:
-        conn.execute("""
-            CREATE TABLE translation_engines (
-                id TEXT PRIMARY KEY, name TEXT NOT NULL, api_type TEXT NOT NULL,
-                base_url TEXT NOT NULL, model TEXT NOT NULL, api_key TEXT,
-                enabled INTEGER NOT NULL DEFAULT 1, availability TEXT NOT NULL,
-                last_checked_at INTEGER, last_error TEXT, created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
-            )
-        """)
-        conn.execute(
-            "INSERT INTO translation_engines VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            ("legacy", "Legacy", "openai_compatible", "https://e.test", "m", "k",
-             1, "UNKNOWN", None, None, 1, 1),
-        )
-    loaded = TranslationEngineStore(db).get("legacy")
+    get_config_provider().mutate(lambda document: document["engines"]["byId"].update({
+        "legacy": {
+            "id": "legacy", "name": "Legacy", "api_type": "openai_compatible",
+            "base_url": "https://e.test", "model": "m", "api_key": "k",
+            "enabled": 1, "availability": "UNKNOWN", "created_at": 1,
+            "updated_at": 1,
+        },
+    }))
+    loaded = TranslationEngineStore().get("legacy")
     assert loaded is not None
     assert loaded.api_key == "k"
     assert loaded.api_key_rotated_at is None
@@ -179,8 +173,10 @@ def test_reset_dangling_checking(tmp_path):
         base_url="https://e2.test", model="m2", api_key=None,
     )
     # 强制设置空 key 和 CHECKING
-    with store._connect() as conn:
-        conn.execute("UPDATE translation_engines SET availability = 'CHECKING', api_key = '' WHERE id = ?", (c2.id,))
+    from src.config.config_repository import get_config_provider
+    get_config_provider().mutate(lambda document: document["engines"]["byId"][c2.id].update(
+        availability="CHECKING", api_key="",
+    ))
 
     # 重置悬空 CHECKING
     reset_count = store.reset_dangling_checking()
@@ -269,8 +265,10 @@ def test_whitespace_api_key_store_handling(tmp_path):
     assert updated_e1.availability == "UNCONFIGURED"
 
     # 5. reset_dangling_checking 将带有空白串的 CHECKING 状态恢复为 UNCONFIGURED
-    with store._connect() as conn:
-        conn.execute("UPDATE translation_engines SET availability = 'CHECKING', api_key = '   ' WHERE id = ?", (e1.id,))
+    from src.config.config_repository import get_config_provider
+    get_config_provider().mutate(lambda document: document["engines"]["byId"][e1.id].update(
+        availability="CHECKING", api_key="   ",
+    ))
     assert store.reset_dangling_checking() == 1
     assert store.get(e1.id).availability == "UNCONFIGURED"
 

@@ -12,7 +12,7 @@
 curl -fsSL https://github.com/S-zhi/TranslatedSubs/releases/latest/download/install.sh | sudo bash
 ```
 
-脚本会安装 FFmpeg、uv、Python 3.12 和锁定依赖，创建持久化目录、systemd 服务并执行健康检查。默认本地翻译不需要 API Key；需要显式使用 DeepSeek 时再配置 `.env`。
+脚本会安装 FFmpeg、Redis、uv、Python 3.12 和锁定依赖，创建持久化目录、机器引导配置与 systemd 服务并执行健康检查。默认本地翻译不需要 API Key。
 
 如果希望执行前先检查脚本，可以下载后再运行：
 
@@ -22,13 +22,7 @@ less /tmp/translatedsubs-install.sh
 sudo bash /tmp/translatedsubs-install.sh
 ```
 
-用于 CI 的非交互模式：
-
-```bash
-sudo bash /opt/subtitles-ai/install.sh --non-interactive
-```
-
-非交互方式可能把密钥留在 Shell 历史或 CI 配置中，日常部署优先使用交互模式。安装完成后：
+安装器不会收集 API Key。安装完成后：
 
 ```bash
 systemctl status subtitles-ai --no-pager
@@ -40,6 +34,7 @@ curl http://127.0.0.1:8000/api/health
 
 - Python 3.10–3.12（推荐 3.12）
 - `uv`
+- 正在运行的 Redis 服务。Python 依赖 `redis>=5` 只是客户端库，不会安装或启动 Redis。
 - FFmpeg、FFprobe；硬字幕还要求 FFmpeg 含 `subtitles`/libass 滤镜
 - 首次下载本地翻译/识别模型时需要网络；服务启动本身不需要云端 API Key
 - 建议至少 2 核 CPU、4 GB 内存，并为视频产物预留足够磁盘空间
@@ -48,8 +43,12 @@ curl http://127.0.0.1:8000/api/health
 
 ```bash
 sudo apt update
-sudo apt install -y curl ca-certificates git ffmpeg fontconfig fonts-noto-cjk
+sudo apt install -y curl ca-certificates git ffmpeg redis-server fontconfig fonts-noto-cjk
+sudo systemctl enable --now redis-server
+redis-cli ping
 ```
+
+`redis-cli ping` 应输出 `PONG`。也可以使用已有或远程 Redis 服务，并在 `config.local.json` 中填写其地址。
 
 确认 FFmpeg 和硬字幕能力：
 
@@ -94,51 +93,18 @@ uv sync --frozen --no-dev --extra local-translation
 
 ## 3. 配置服务
 
-复制配置模板：
+安装器会在 `/opt/subtitles-ai/config.local.json` 写入本机引导配置，业务配置保存在 Redis。确认 Redis、本地数据目录与 HTTP 监听设置：
 
 ```bash
-cd /opt/subtitles-ai
-cp .env.example .env
-chmod 600 .env
+sudo systemctl status redis-server --no-pager
+sudo cat /opt/subtitles-ai/config.local.json
 ```
 
-编辑 `.env`。默认本地翻译不需要密钥；下面的 DeepSeek 配置仅在显式选择云端兼容引擎时填写：
+引导文件包含 `redis.url`、`redis.namespace`、`paths.dataDir`、`paths.dbPath` 和 `http.host`/`http.port`。手动部署时，可先从仓库的 `config.example.json` 复制为 `config.local.json`，并将 Redis URL、数据路径和监听地址改为当前机器的值。该文件只负责机器连接与路径，不要提交到 Git。
 
-```ini
-SUBTRANS_DEEPSEEK_API_KEY=你的-deepseek-api-key
-```
+启动后，在 Web 工作台“设置”页面或配置 API 管理并发、上传限制、cookies 路径、转写服务、模型和 API Key。业务设置写入 Redis，保存后新请求立即生效，无需重启。Redis 的数据目录/volume 与应用数据目录都应持久化并纳入备份。
 
-服务器上建议把数据和 SQLite 数据库放到独立持久化目录：
-
-```bash
-sudo mkdir -p /var/lib/subtitles-ai/data
-sudo chown -R "$USER":"$USER" /var/lib/subtitles-ai
-```
-
-然后修改 `.env`：
-
-```ini
-SUBTRANS_DATA_DIR=/var/lib/subtitles-ai/data
-SUBTRANS_DB=/var/lib/subtitles-ai/data/db/app.db
-```
-
-常用的资源参数如下，可先保留默认值，再根据服务器性能调整：
-
-```ini
-SUBTRANS_WORKERS=8
-SUBTRANS_DOWNLOAD_WORKERS=2
-SUBTRANS_DL_CONCURRENT_FRAGMENTS=4
-SUBTRANS_MAX_UPLOAD_MB=2048
-SUBTRANS_MAX_VIDEO_MINUTES=180
-```
-
-如果目标站点要求登录或年龄验证，可导出 Netscape 格式 cookies 文件，并在 `.env` 中写绝对路径：
-
-```ini
-SUBTRANS_COOKIES=/var/lib/subtitles-ai/cookies.txt
-```
-
-`.env`、cookies、`app.db` 和 `data/` 都包含敏感信息或任务数据，不要提交到 Git。
+升级旧部署时，旧 `.env` 不会自动加载。只在明确执行一次性迁移时，将仍需保留的值通过配置迁移 CLI 的 `--legacy-env-file` 参数导入；先备份 Redis/SQLite，再执行迁移，并在完成后移除旧文件。不要提交旧 `.env`、cookies、API Key 或 `config.local.json`。
 
 ## 4. 首次启动与验证
 
@@ -146,7 +112,7 @@ SUBTRANS_COOKIES=/var/lib/subtitles-ai/cookies.txt
 
 ```bash
 cd /opt/subtitles-ai
-uv run uvicorn src.handler.app:app --host 0.0.0.0 --port 8000
+uv run python -m src.cli
 ```
 
 不要在生产环境使用 `./scripts/start.sh`：该脚本面向本地开发，启用了 `--reload`，并且会强制编译和启动 Google Drive sidecar。
@@ -168,14 +134,14 @@ curl http://127.0.0.1:8000/api/health/ready
 
 ## 5. 使用 systemd 后台运行
 
-服务采用进程内任务队列和 SQLite，建议只运行 **1 个 Uvicorn 进程**，不要添加 `--workers 2` 等多进程参数。任务并发由 `.env` 中的 `SUBTRANS_WORKERS` 控制。
+服务采用进程内任务队列和 SQLite，建议只运行 **1 个 Uvicorn 进程**，不要添加 `--workers 2` 等多进程参数。任务并发通过 Web 工作台设置或配置 API 调整。
 
 创建专用系统用户并移交目录权限：
 
 ```bash
 sudo useradd --system --home /opt/subtitles-ai --shell /usr/sbin/nologin subtitles-ai 2>/dev/null || true
 sudo chown -R subtitles-ai:subtitles-ai /opt/subtitles-ai /var/lib/subtitles-ai
-sudo chmod 600 /opt/subtitles-ai/.env
+sudo chmod 640 /opt/subtitles-ai/config.local.json
 ```
 
 创建 `/etc/systemd/system/subtitles-ai.service`：
@@ -191,7 +157,7 @@ Type=simple
 User=subtitles-ai
 Group=subtitles-ai
 WorkingDirectory=/opt/subtitles-ai
-ExecStart=/opt/subtitles-ai/.venv/bin/uvicorn src.handler.app:app --host 0.0.0.0 --port 8000
+ExecStart=/opt/subtitles-ai/.venv/bin/python -m src.cli
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
@@ -228,7 +194,7 @@ sudo systemctl stop subtitles-ai
 正式对外提供服务时，建议让 Uvicorn 只监听 `127.0.0.1:8000`，再由 Nginx/Caddy 提供 HTTPS、访问认证和上传限制。将 systemd 中的启动参数改为：
 
 ```ini
-ExecStart=/opt/subtitles-ai/.venv/bin/uvicorn src.handler.app:app --host 127.0.0.1 --port 8000
+ExecStart=/opt/subtitles-ai/.venv/bin/python -m src.cli --host 127.0.0.1 --port 8000
 ```
 
 Nginx 反向代理的最小示例：
@@ -254,7 +220,7 @@ server {
 }
 ```
 
-配置域名证书，并在 Nginx/Caddy、VPN 或零信任网关层增加身份认证。项目支持通过 `SUBTRANS_API_TOKEN` 保护全量 API（包括任务列表、详情、媒体/字幕下载、SSE 进度流与数据变更等，支持 HTTP Header `Authorization`/`X-API-Token` 或 URL 参数 `?token=`/`?api_token=`），但当前 Web 工作台默认未集成 Token 自动携带逻辑；如果主要通过浏览器访问 UI，建议通过网关/VPN 进行接入防护，或在客户端请求中携带 Token。
+配置域名证书，并在 Nginx/Caddy、VPN 或零信任网关层增加身份认证。项目可通过业务配置中的 API Token 保护全量 API（包括任务列表、详情、媒体/字幕下载、SSE 进度流与数据变更等，支持 HTTP Header `Authorization`/`X-API-Token` 或 URL 参数 `?token=`/`?api_token=`）；如果主要通过浏览器访问 UI，建议通过网关/VPN 进行接入防护，或在客户端请求中携带 Token。
 
 ## 7. 更新、备份与故障排查
 
@@ -276,12 +242,12 @@ sudo systemctl start subtitles-ai
 | 现象 | 检查方式 |
 | --- | --- |
 | 服务启动后立即退出 | `journalctl -u subtitles-ai -n 200 --no-pager` |
-| readiness 提示缺密钥 | 检查 `/opt/subtitles-ai/.env`，修改后重启服务 |
+| readiness 提示缺密钥 | 在 Web 工作台设置页或配置 API 检查对应模型/业务设置；保存后无需重启 |
 | `data_directory`/`database_directory` 不可写 | 检查 `/var/lib/subtitles-ai` 的属主和权限 |
 | 硬字幕不可用 | 运行 `ffmpeg -hide_banner -filters \| grep ' subtitles '`，或任务改选软字幕 |
-| 视频 URL 下载失败 | 更新依赖中的 yt-dlp，必要时配置 `SUBTRANS_COOKIES` |
+| 视频 URL 下载失败 | 更新依赖中的 yt-dlp，必要时在设置页配置 cookies 文件或浏览器 cookies 权限 |
 | 浏览器无法访问 | 检查 `systemctl status`、监听地址、安全组和防火墙 |
-| 接口返回 401 | 检查是否设置了 `SUBTRANS_API_TOKEN`，以及客户端是否发送 Bearer Header、`X-API-Token` Header 或 `?token=`/`?api_token=` URL 参数 |
+| 接口返回 401 | 检查 Redis 业务设置中的 API Token，以及客户端是否发送 Bearer Header、`X-API-Token` Header 或 `?token=`/`?api_token=` URL 参数 |
 
 ## 8. 可选：Google Drive sidecar
 

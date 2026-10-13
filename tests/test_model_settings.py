@@ -13,6 +13,7 @@ def test_model_settings_defaults_and_masked_key(tmp_path, monkeypatch):
     result = _store().get_all()
     assert set(result) == {"llm", "whisper", "tts"}
     assert result["llm"]["models"][0]["id"] == "llm-deepseek"
+    assert not result["llm"]["models"][0]["apiKey"]
     assert result["tts"]["voice"] == "auto"
 
 
@@ -25,13 +26,13 @@ def test_model_settings_routes_partial_update_and_create(tmp_path, monkeypatch):
     with TestClient(app) as client:
         response = client.get("/api/settings/models")
         assert response.status_code == 200
-        assert response.json()["llm"]["hasApiKey"] is True
+        assert response.json()["llm"]["hasApiKey"] is False
         assert "apiKey" not in response.json()["llm"]
 
         updated = client.put("/api/settings/models", json={"llm": {"model": "deepseek-reasoner", "apiKey": ""}})
         assert updated.status_code == 200
         assert updated.json()["llm"]["model"] == "deepseek-reasoner"
-        assert updated.json()["llm"]["hasApiKey"] is True
+        assert updated.json()["llm"]["hasApiKey"] is False
 
         created = client.post("/api/settings/models/tts", json={
             "id": "client-supplied-id", "name": "Demo", "provider": "kokoro",

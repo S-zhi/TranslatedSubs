@@ -4,6 +4,7 @@ __pycache__/
 data/
 *.db
 .env
+config.local.json
 .claude
 .python-version
 error.log

@@ -3,8 +3,8 @@
 启动：
     uv run uvicorn src.transcriber_server:app --host 0.0.0.0 --port 8010
 
-客户端可将 SUBTRANS_TRANSCRIBER_URL 配置为 http://127.0.0.1:8010/transcribe，
-并把 SUBTRANS_TRANSCRIBER_BACKEND 设置为 http。
+在业务设置页/API 中将转写后端设为自定义 HTTP，并把服务地址设为
+http://127.0.0.1:8010/transcribe。
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ async def transcribe_audio(request: Request, authorization: Optional[str] = Head
     """接收音频文件并返回标准 segments 响应。"""
     expected_key = settings.transcriber_api_key
     if not expected_key:
-        raise HTTPException(status_code=503, detail="转写服务未配置 SUBTRANS_TRANSCRIBER_API_KEY")
+        raise HTTPException(status_code=503, detail="请先在设置页/API 配置转写服务 API Key")
     provided_key = authorization[7:].strip() if authorization and authorization.startswith("Bearer ") else ""
     if not secrets.compare_digest(provided_key, expected_key):
         raise HTTPException(status_code=401, detail="无效的转写服务 API Key")

@@ -20,17 +20,16 @@ uv sync --extra local-translation
 
 模型输出可作为初稿；专有名词、语境和字幕表达仍需人工校对。
 
-本地翻译默认每批处理 16 条字幕（云端批量仍为 8 条），可用
-`SUBTRANS_LOCAL_TRANSLATE_BATCH` 调整。CPU 推理默认使用 1 个 inter-op、4 个
-intra-op 线程；需要时可用 `SUBTRANS_LOCAL_CT2_INTER_THREADS` 和
-`SUBTRANS_LOCAL_CT2_INTRA_THREADS` 覆盖。
+本地翻译默认每批处理 16 条字幕（云端批量仍为 8 条），可在设置页/API 修改本地翻译批次大小。
+CPU 推理默认使用 1 个 inter-op、4 个 intra-op 线程；需要时可在设置页/API 修改线程数，
+新任务会使用最新配置，模型运行时会按线程配置重新加载。
 
 ## 存储和离线使用
 
 安装目录为：
 
 ```text
-<SUBTRANS_DATA_DIR>/models/translation/opus-mt-en-zh
+<config.local.json 的 paths.dataDir>/models/translation/opus-mt-en-zh
 ```
 
 首次点击“下载并转换”时需要访问固定的 Hugging Face 模型版本。此后翻译和设置页的验证烟测只从该目录加载 tokenizer 与 CTranslate2 模型，不会调用在线翻译服务。保留模型目录和可选 Python 依赖即可离线使用。

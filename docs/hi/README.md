@@ -33,6 +33,16 @@ TranslatedSubs वीडियो और ऑडियो को समझने 
 
 ## सोर्स कोड से बिल्ड करें
 
+### ज़रूरी निर्भरताएँ
+
+सोर्स कोड से चलाने के लिए Python 3.10–3.12, `uv`, Git (केवल repository clone करने के लिए), hard subtitles जोड़ने हेतु `subtitles` (libass) फ़िल्टर वाला FFmpeg/FFprobe और चालू Redis सेवा चाहिए। `uv sync` Python libraries इंस्टॉल करता है, जिसमें Redis client (`redis>=5`) शामिल है; यह Redis server को इंस्टॉल या शुरू नहीं करता। यदि आपके पास पहले से remote Redis है, तो `config.local.json` में `redis.url` पर उसका पता सेट करें और दूसरा server इंस्टॉल न करें। Go 1.23 या नया संस्करण केवल Google Drive sidecar के लिए चाहिए; Node.js केवल frontend tests के लिए चाहिए। ये वैकल्पिक सुविधाएँ शुरू करने के लिए ज़रूरी नहीं हैं; केवल वही इंस्टॉल करें जिनका उपयोग करना है (एक ही कमांड में कई विकल्प जोड़ सकते हैं):
+
+- `uv sync --extra local-translation`: स्थानीय अनुवाद, डिफ़ॉल्ट रूप से अंग्रेज़ी से चीनी।
+- `uv sync --extra hf-models`: Hugging Face Whisper models।
+- `uv sync --extra tts`: Kokoro dubbing; सिस्टम पर `espeak-ng` भी इंस्टॉल करें ([TTS](../tts.md) देखें)।
+
+Python packages इंस्टॉल करने से model weights शामिल नहीं होते। पहला task शुरू करने से पहले Settings में स्थानीय अनुवाद और Whisper models डाउनलोड या import करें और उनकी readiness जाँचें। Kokoro पहली बार voice generate करते समय weights डाउनलोड करता है। Voice separation चालू करने पर Demucs अलग से इंस्टॉल करें।
+
 ### macOS पर बिल्ड
 
 macOS पर प्रोजेक्ट को स्थानीय रूप से चलाने के लिए Python 3.10–3.12, `uv` और libass support वाला FFmpeg चाहिए। API वेब वर्कबेंच भी उपलब्ध कराता है, इसलिए Node.js अलग से इंस्टॉल करने की आवश्यकता नहीं है।
@@ -42,19 +52,23 @@ macOS पर प्रोजेक्ट को स्थानीय रूप 
 ```sh
 git clone https://github.com/S-zhi/TranslatedSubs.git
 cd TranslatedSubs
-brew install uv
+brew install uv redis
 brew tap homebrew-ffmpeg/ffmpeg
 brew install ffmpeg-full
 uv sync
-cp .env.example .env
+cp config.example.json config.local.json
+brew services start redis
+redis-cli ping
 ```
 
-ज़रूरी क्लाउड API कुंजियाँ `.env` में जोड़ें या सेवा शुरू होने के बाद कॉन्फ़िगर करें; बाद में कॉन्फ़िगर करना सुझाया गया तरीका है।
+आख़िरी कमांड का उत्तर `PONG` होना चाहिए। API शुरू करने से पहले इसे चलाएँ।
+
+सेवा शुरू होने के बाद Settings या API में मॉडल क्रेडेंशियल और व्यवसाय सेटिंग कॉन्फ़िगर करें। ये Redis में सहेजे जाते हैं और पुनः शुरू किए बिना लागू होते हैं.
 
 API और वेब वर्कबेंच शुरू करें:
 
 ```sh
-uv run uvicorn src.handler.app:app --port 8000
+uv run python -m src.cli
 ```
 
 <http://127.0.0.1:8000/> खोलें। सेवा की स्थिति और FFmpeg में हार्ड-सबटाइटल फ़िल्टर की उपलब्धता जाँचें:
@@ -91,15 +105,24 @@ Windows 10 या 11 पर PowerShell से TranslatedSubs को सोर्
    cd TranslatedSubs
    uv python install 3.12
    uv sync --python 3.12 --locked
-   Copy-Item .env.example .env
+   Copy-Item config.example.json config.local.json
    ```
 
-   ज़रूरी क्लाउड API कुंजियाँ `.env` में जोड़ें या सेवा शुरू होने के बाद कॉन्फ़िगर करें; बाद में कॉन्फ़िगर करना सुझाया गया तरीका है।
+4. Linux containers के लिए सेट किए गए Docker Desktop से Redis तैयार करें। यदि आपके पास पहले से remote Redis है, तो `config.local.json` में `redis.url` पर उसका पता सेट करके इस चरण को छोड़ सकते हैं।
+
+   ```powershell
+   docker run -d --name translatedsubs-redis --restart unless-stopped -p 127.0.0.1:6379:6379 -v translatedsubs-redis-data:/data redis:7-alpine redis-server --appendonly yes
+   docker exec translatedsubs-redis redis-cli ping
+   ```
+
+   दूसरी कमांड का उत्तर `PONG` होना चाहिए।
+
+   सेवा शुरू होने के बाद Settings या API में मॉडल क्रेडेंशियल और व्यवसाय सेटिंग कॉन्फ़िगर करें। ये Redis में सहेजे जाते हैं और पुनः शुरू किए बिना लागू होते हैं.
 
 API और वेब वर्कबेंच शुरू करें:
 
 ```powershell
-uv run --locked uvicorn src.handler.app:app --host 127.0.0.1 --port 8000
+uv run --locked python -m src.cli --host 127.0.0.1 --port 8000
 ```
 
 <http://127.0.0.1:8000/> खोलें। सेवा की स्थिति जाँचने के लिए:
@@ -114,12 +137,36 @@ curl.exe http://127.0.0.1:8000/api/health/ready
 रिपॉज़िटरी की मूल डायरेक्टरी में ये कमांड चलाएँ:
 
 ```bash
-cp .env.example .env
-# डिफ़ॉल्ट स्थानीय अनुवादक को API कुंजी की आवश्यकता नहीं है; क्लाउड कुंजी केवल आवश्यकता होने पर सेट करें।
-docker build -t translatedsubs:local . && docker run -d --name translatedsubs --restart unless-stopped -p 8000:8000 --env-file .env -e SUBTRANS_DATA_DIR=/data -e SUBTRANS_DB=/data/db/app.db -v translatedsubs-data:/data translatedsubs:local
+cp config.example.json config.local.json
 ```
 
-मौजूदा कंटेनर को अपग्रेड करते समय `translatedsubs-data` की जगह वर्तमान वॉल्यूम का नाम दें, ताकि कार्य डेटाबेस और तैयार फ़ाइलें सुरक्षित रहें। मौजूदा `SUBTRANS_*` पर्यावरण चर समर्थित हैं।
+`config.local.json` संपादित करके API को Compose Redis सेवा और `/data` paths के लिए सेट करें:
+
+```json
+{
+  "redis": {
+    "url": "redis://redis:6379/0",
+    "namespace": "translatedsubs-local"
+  },
+  "paths": {
+    "dataDir": "/data",
+    "dbPath": "/data/db/app.db"
+  },
+  "http": {
+    "host": "0.0.0.0",
+    "port": 8000
+  }
+}
+```
+
+फिर services शुरू करें:
+
+```bash
+# डिफ़ॉल्ट स्थानीय अनुवादक को API कुंजी की आवश्यकता नहीं है; क्लाउड कुंजी केवल आवश्यकता होने पर सेट करें।
+docker compose up -d --build
+```
+
+Compose API और Redis डाउनलोड करके शुरू करता है; host पर Redis, Python, `uv` या FFmpeg इंस्टॉल करने की ज़रूरत नहीं है। अपग्रेड के समय Redis और data persistent volumes सुरक्षित रखें। डिफ़ॉल्ट image में केवल आधारभूत dependencies हैं; optional extras इस्तेमाल करने के लिए ज़रूरी extras और system packages को `Dockerfile` में जोड़कर image फिर से बनाएँ। Model weights अलग से डाउनलोड होते हैं। पुराने `.env` संस्करण से आने पर API शुरू करने से पहले [.env से migration गाइड](../local-quick-start.md) का पालन करें।
 
 <http://localhost:8000/> खोलें। API चल रही है या नहीं, यह जाँचने के लिए `curl http://127.0.0.1:8000/api/health` चलाएँ; सही उत्तर में `"ok":true` होगा। `/api/health/ready` अनुवाद कुंजी, FFmpeg, स्टोरेज और हार्ड सबटाइटल फ़िल्टर की स्थिति भी दिखाता है। स्थानीय विकास और Linux पर तैनाती के लिए [दस्तावेज़ सूची (चीनी में)](../README.md) देखें।
 
@@ -141,23 +188,16 @@ docker build -t translatedsubs:local . && docker run -d --name translatedsubs --
 
 ## मुख्य कॉन्फ़िगरेशन और डेटा
 
-`.env.example` की प्रति बनाएँ और बिना API कुंजी के सेवा शुरू करें। डिफ़ॉल्ट अनुवादक CPU पर स्थानीय रूप से अंग्रेज़ी → सरलीकृत चीनी अनुवाद करता है; `uv sync --extra local-translation` से निर्भरताएँ इंस्टॉल करें और सेटिंग में मॉडल डाउनलोड करें। DeepSeek चुनने पर ही `SUBTRANS_DEEPSEEK_API_KEY` सेट करें। सभी सेटिंग और उनके डिफ़ॉल्ट मान [पर्यावरण चर टेम्पलेट](../../.env.example) में हैं। सामान्य सेटिंग ये हैं:
+`config.example.json` को `config.local.json` में कॉपी करें और Redis शुरू करें। मॉडल क्रेडेंशियल और सेवा सेटिंग Settings या configuration API से बदलें। मान Redis में सहेजे जाते हैं और सेवा पुनः शुरू किए बिना नई रिक्वेस्ट पर लागू होते हैं।
 
-| सेटिंग | उपयोग |
-| --- | --- |
-| `SUBTRANS_DEEPSEEK_API_KEY` | स्पष्ट क्लाउड संगत पथ के लिए वैकल्पिक DeepSeek कुंजी। |
-| `SUBTRANS_DATA_DIR`, `SUBTRANS_DB` | फ़ाइलों और SQLite कार्य डेटाबेस का स्थान; Docker उदाहरण दोनों को स्थायी वॉल्यूम में रखता है। |
-| `SUBTRANS_COOKIES` | उन वेबसाइटों के लिए Cookie फ़ाइल जो लॉगिन या उम्र सत्यापन माँगती हैं। |
-| `SUBTRANS_WORKERS`, `SUBTRANS_DOWNLOAD_WORKERS` | प्रक्रिया और डाउनलोड के समानांतर चलने वाले कामों की सीमा। |
-
-कंटेनर अपग्रेड करते समय मौजूदा वॉल्यूम दोबारा उपयोग करें और परिणामों के साथ SQLite डेटाबेस भी सुरक्षित रखें। `.env`, Cookie, OAuth क्रेडेंशियल या जाँच के दौरान बनी मीडिया फ़ाइलें रिपॉज़िटरी में जमा न करें। Google Drive के लिए अलग sidecar चाहिए; [स्थानीय त्वरित शुरुआत (चीनी में)](../local-quick-start.md) देखें।
+Bootstrap फ़ाइल में मशीन के Redis, डेटा-पथ और listener सेटिंग हैं। अपग्रेड के समय डेटा और Redis volumes सुरक्षित रखें। `config.local.json`, `.env`, Cookie, OAuth क्रेडेंशियल या परीक्षण मीडिया को repository में न जोड़ें। Google Drive के लिए अलग sidecar चाहिए; [स्थानीय त्वरित शुरुआत (चीनी में)](../local-quick-start.md) देखें।
 
 ## आम समस्याएँ
 
 - API जवाब देती है, लेकिन काम शुरू नहीं होता: `/api/health/ready` के `checks` और `capabilities` में कुंजी, FFmpeg/FFprobe, yt-dlp और स्टोरेज की स्थिति देखें।
 - `MODEL_NOT_READY`: चुने हुए Whisper मॉडल को स्थानीय मॉडल सेटिंग में डाउनलोड और जाँचें।
 - हार्ड सबटाइटल उपलब्ध नहीं हैं: libass वाला FFmpeg स्थापित करें या अलग सबटाइटल चुनें। फ़िल्टर की जाँच `ffmpeg -hide_banner -filters | grep ' subtitles '` से करें।
-- लिंक डाउनलोड नहीं होता: पहले डाउनलोड जाँच चलाएँ; लॉगिन ज़रूरी हो तो [स्थानीय गाइड (चीनी में)](../local-quick-start.md) के अनुसार `SUBTRANS_COOKIES` भरें।
+- लिंक डाउनलोड नहीं होता: पहले डाउनलोड जाँच चलाएँ; लॉगिन ज़रूरी हो तो [स्थानीय गाइड (चीनी में)](../local-quick-start.md) के अनुसार cookie file setting भरें।
 
 ## दस्तावेज़
 
@@ -172,7 +212,7 @@ docker build -t translatedsubs:local . && docker run -d --name translatedsubs --
 
 ## विकास
 
-यह परियोजना Python 3.10–3.12, FastAPI, FFmpeg और साधारण JavaScript का उपयोग करती है। स्थानीय विकास के लिए `uv sync` और फिर `uv run uvicorn src.handler.app:app --port 8000` चलाएँ; यही सेवा वेब इंटरफ़ेस भी उपलब्ध कराती है। Python जाँच `uv run pytest -q` से और फ्रंटएंड जाँच `web/` में `npm test` से करें। वास्तविक क्लाउड सेवाओं वाली जाँच अलग से सक्रिय करनी होती है; [AGENTS.md (चीनी में)](../../AGENTS.md) देखें।
+यह परियोजना Python 3.10–3.12, FastAPI, FFmpeg और साधारण JavaScript का उपयोग करती है। स्थानीय विकास के लिए `uv sync` और फिर `uv run python -m src.cli` चलाएँ; यही सेवा वेब इंटरफ़ेस भी उपलब्ध कराती है। Python जाँच `uv run pytest -q` से और फ्रंटएंड जाँच `web/` में `npm test` से करें। वास्तविक क्लाउड सेवाओं वाली जाँच अलग से सक्रिय करनी होती है; [AGENTS.md (चीनी में)](../../AGENTS.md) देखें।
 
 `src/handler/` HTTP API देता है; `src/core/` डाउनलोड, प्रतिलेखन और सबटाइटल संभालता है; `src/service/` और `src/store/` काम तथा डेटा रखते हैं; `src/mcp_server/` MCP जोड़ता है; `web/` ब्राउज़र कार्यक्षेत्र है। विकास नियम [CONTRIBUTING.md (चीनी में)](../../.github/CONTRIBUTING.md) में हैं। सुरक्षा समस्या [SECURITY.md](../../.github/SECURITY.md) के अनुसार निजी तौर पर बताएँ, सार्वजनिक Issue में नहीं।
 

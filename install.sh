@@ -2,14 +2,7 @@
 
 # TranslatedSubs 一键安装器（Ubuntu / Debian）。
 #
-# 交互模式：
-#   sudo bash install.sh
-#
-# 非交互模式（适合 CI；注意避免把密钥写入 Shell 历史）：
-#   sudo env SUBTRANS_DEEPSEEK_API_KEY=... \
-#     bash install.sh --non-interactive
-#
-# 脚本负责：安装系统依赖、拉取仓库、交互写入密钥、安装 Python/项目依赖、
+# 脚本负责：安装系统依赖（含 Redis）、拉取仓库、写入机器本地引导配置、安装 Python/项目依赖、
 # 创建低权限 systemd 服务并启动健康检查。重复执行可用于更新依赖和服务配置。
 
 set -Eeuo pipefail
@@ -24,7 +17,6 @@ SERVICE_NAME="${SUBTRANS_SERVICE_NAME:-subtitles-ai}"
 SERVICE_USER="${SUBTRANS_SERVICE_USER:-subtitles-ai}"
 API_BIND_HOST="${SUBTRANS_API_HOST:-0.0.0.0}"
 API_PORT="${SUBTRANS_API_PORT:-8000}"
-NON_INTERACTIVE=0
 START_SERVICE=1
 
 log() {
@@ -45,12 +37,10 @@ usage() {
 用法：sudo bash install.sh [选项]
 
 选项：
-  --non-interactive  不询问输入；密钥必须通过环境变量提供或已存在于 .env
   --no-start         安装并创建 systemd 服务，但暂不启动
   -h, --help         显示帮助
 
 可用环境变量：
-  SUBTRANS_DEEPSEEK_API_KEY       DeepSeek API Key
   SUBTRANS_INSTALL_DIR            安装目录，默认 /opt/subtitles-ai
   SUBTRANS_DATA_DIR               产物目录，默认 /var/lib/subtitles-ai/data
   SUBTRANS_DB                     SQLite 路径，默认 /var/lib/subtitles-ai/data/db/app.db
@@ -65,9 +55,6 @@ EOF
 
 while (($#)); do
   case "$1" in
-    --non-interactive)
-      NON_INTERACTIVE=1
-      ;;
     --no-start)
       START_SERVICE=0
       ;;
@@ -144,7 +131,8 @@ apt-get install -y --no-install-recommends \
   ffmpeg \
   fontconfig \
   fonts-noto-cjk \
-  git
+  git \
+  redis-server
 
 if ! command -v uv >/dev/null 2>&1; then
   log "安装 uv 到 /usr/local/bin"
@@ -166,87 +154,8 @@ if [[ ! -f "${PROJECT_DIR}/pyproject.toml" ]]; then
 fi
 [[ -f "${PROJECT_DIR}/src/handler/app.py" ]] || die "安装目录不是有效的 TranslatedSubs 仓库：${PROJECT_DIR}"
 
-ENV_FILE="${PROJECT_DIR}/.env"
-if [[ ! -f "${ENV_FILE}" ]]; then
-  cp "${PROJECT_DIR}/.env.example" "${ENV_FILE}"
-  chmod 600 "${ENV_FILE}"
-fi
-
-read_env_value() {
-  local key="$1" line
-  while IFS= read -r line || [[ -n "${line}" ]]; do
-    if [[ "${line}" == "${key}="* ]]; then
-      printf '%s' "${line#*=}"
-      return 0
-    fi
-  done < "${ENV_FILE}"
-  return 0
-}
-
-prompt_secret() {
-  local variable_name="$1" label="$2" supplied existing entered resolved
-  supplied="${!variable_name-}"
-  existing="$(read_env_value "${variable_name}")"
-  resolved=""
-
-  if [[ -n "${supplied}" ]]; then
-    resolved="${supplied}"
-  elif ((NON_INTERACTIVE)); then
-    resolved="${existing}"
-  else
-    [[ -r /dev/tty ]] || die "当前没有交互终端；请使用环境变量注入密钥并添加 --non-interactive"
-    if [[ -n "${existing}" ]]; then
-      printf '%s（留空则保留现有值）：' "${label}" > /dev/tty
-    else
-      printf '%s：' "${label}" > /dev/tty
-    fi
-    IFS= read -r -s entered < /dev/tty
-    printf '\n' > /dev/tty
-    resolved="${entered:-${existing}}"
-  fi
-
-  [[ -n "${resolved}" ]] || die "缺少 ${variable_name}"
-  [[ "${resolved}" != *$'\n'* && "${resolved}" != *$'\r'* ]] || die "${variable_name} 不能包含换行"
-  printf -v "${variable_name}" '%s' "${resolved}"
-}
-
-update_env_key() {
-  local key="$1" value="$2" line found=0 temporary
-  temporary="$(mktemp "${PROJECT_DIR}/.env.tmp.XXXXXX")"
-  chmod 600 "${temporary}"
-  while IFS= read -r line || [[ -n "${line}" ]]; do
-    if [[ "${line}" == "${key}="* ]]; then
-      printf '%s=%s\n' "${key}" "${value}" >> "${temporary}"
-      found=1
-    else
-      printf '%s\n' "${line}" >> "${temporary}"
-    fi
-  done < "${ENV_FILE}"
-  if ((found == 0)); then
-    printf '\n%s=%s\n' "${key}" "${value}" >> "${temporary}"
-  fi
-  mv "${temporary}" "${ENV_FILE}"
-  chmod 600 "${ENV_FILE}"
-}
-
-prompt_secret SUBTRANS_DEEPSEEK_API_KEY "请输入 DeepSeek API Key（输入不会回显）"
-
-EXISTING_DATA_DIR="$(read_env_value SUBTRANS_DATA_DIR)"
-EXISTING_DB_PATH="$(read_env_value SUBTRANS_DB)"
-if [[ -n "${SUBTRANS_DATA_DIR:-}" ]]; then
-  DATA_DIR="${SUBTRANS_DATA_DIR}"
-elif [[ "${EXISTING_DATA_DIR}" = /* ]]; then
-  DATA_DIR="${EXISTING_DATA_DIR}"
-else
-  DATA_DIR="${DEFAULT_DATA_ROOT}/data"
-fi
-if [[ -n "${SUBTRANS_DB:-}" ]]; then
-  DB_PATH="${SUBTRANS_DB}"
-elif [[ "${EXISTING_DB_PATH}" = /* ]]; then
-  DB_PATH="${EXISTING_DB_PATH}"
-else
-  DB_PATH="${DATA_DIR}/db/app.db"
-fi
+DATA_DIR="${SUBTRANS_DATA_DIR:-${DEFAULT_DATA_ROOT}/data}"
+DB_PATH="${SUBTRANS_DB:-${DATA_DIR}/db/app.db}"
 [[ "${DATA_DIR}" = /* ]] || die "SUBTRANS_DATA_DIR 必须是绝对路径"
 [[ "${DB_PATH}" = /* ]] || die "SUBTRANS_DB 必须是绝对路径"
 [[ "${DATA_DIR}" != *[[:space:]]* ]] || die "SUBTRANS_DATA_DIR 不能包含空格"
@@ -255,11 +164,6 @@ fi
 [[ "${DB_PATH}" =~ ^/[A-Za-z0-9._/-]+$ ]] || die "SUBTRANS_DB 包含不支持的字符"
 assert_safe_managed_dir "${DATA_DIR}"
 assert_safe_managed_dir "$(dirname "${DB_PATH}")"
-
-update_env_key SUBTRANS_DEEPSEEK_API_KEY "${SUBTRANS_DEEPSEEK_API_KEY}"
-update_env_key SUBTRANS_DATA_DIR "${DATA_DIR}"
-update_env_key SUBTRANS_DB "${DB_PATH}"
-unset SUBTRANS_DEEPSEEK_API_KEY
 
 log "安装 Python 3.12 和锁定依赖"
 PYTHON_INSTALL_DIR="${PROJECT_DIR}/.uv-python"
@@ -282,12 +186,24 @@ if ! id "${SERVICE_USER}" >/dev/null 2>&1; then
   useradd --system --gid "${SERVICE_USER}" --home-dir "${PROJECT_DIR}" --shell /usr/sbin/nologin "${SERVICE_USER}"
 fi
 
+log "准备 Redis 服务和机器本地配置"
+systemctl enable --now redis-server.service
+if [[ ! -f "${PROJECT_DIR}/config.local.json" ]]; then
+  cat > "${PROJECT_DIR}/config.local.json" <<EOF
+{
+  "redis": {"url": "redis://127.0.0.1:6379/0", "namespace": "translatedsubs-local"},
+  "paths": {"dataDir": "${DATA_DIR}", "dbPath": "${DB_PATH}"},
+  "http": {"host": "${API_BIND_HOST}", "port": ${API_PORT}}
+}
+EOF
+fi
+chmod 640 "${PROJECT_DIR}/config.local.json"
+
 install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0750 "${DATA_DIR}" "$(dirname "${DB_PATH}")"
 chown -R "${SERVICE_USER}:${SERVICE_USER}" "${PROJECT_DIR}"
 if [[ -e "${DB_PATH}" ]]; then
   chown "${SERVICE_USER}:${SERVICE_USER}" "${DB_PATH}"
 fi
-chmod 600 "${ENV_FILE}"
 
 UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 log "写入 systemd 服务 ${UNIT_FILE}"
@@ -296,13 +212,15 @@ cat > "${UNIT_FILE}" <<EOF
 Description=TranslatedSubs FastAPI Service
 After=network-online.target
 Wants=network-online.target
+After=redis-server.service
+Wants=redis-server.service
 
 [Service]
 Type=simple
 User=${SERVICE_USER}
 Group=${SERVICE_USER}
 WorkingDirectory=${PROJECT_DIR}
-ExecStart=${PROJECT_DIR}/.venv/bin/uvicorn src.handler.app:app --host ${API_BIND_HOST} --port ${API_PORT}
+ExecStart=${PROJECT_DIR}/.venv/bin/python -m src.cli
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30
@@ -361,3 +279,5 @@ else
 fi
 log "服务状态：systemctl status ${SERVICE_NAME} --no-pager"
 log "实时日志：journalctl -u ${SERVICE_NAME} -f"
+log "本机引导配置：${PROJECT_DIR}/config.local.json"
+log "业务模型/API 设置请在 Web 工作台或配置 API 中管理；保存后无需重启服务"

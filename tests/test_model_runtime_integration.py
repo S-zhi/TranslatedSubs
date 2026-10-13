@@ -6,6 +6,8 @@ import json
 import dataclasses
 from types import SimpleNamespace
 
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from src.handler.app import app
@@ -17,6 +19,7 @@ from src.service.model_runtime import resolve_runtime
 from src.service.orchestrator import PipelineEvent
 from src.handler import tasks as tasks_routes
 from src.store import ModelSettingsStore, TaskStore, TranslationEngineStore
+from src.config.config_repository import get_config_provider
 
 
 class _ReadyTranslationManager:
@@ -58,6 +61,7 @@ def _save_cards(model_store: ModelSettingsStore) -> None:
                 "provider": "openai_compatible",
                 "model": "configured-v1",
                 "baseUrl": "https://llm.example/v1",
+                "apiKey": "sk-unified-secret",
                 "isCurrent": True,
             }],
         },
@@ -121,6 +125,9 @@ def test_saved_settings_are_snapshotted_and_used_by_runner(tmp_path, monkeypatch
     assert runtime.snapshot["engine"]["model"] == "configured-v1"
     assert runtime.snapshot["whisper"]["model"] == "local:small"
     assert runtime.snapshot["tts"]["voice"] == "af_maple"
+    assert runtime.snapshot["schemaVersion"] == 2
+    assert runtime.snapshot["configRevision"] > 0
+    assert "business" in runtime.snapshot
 
     rec, created = tasks_routes._task_lifecycle.create_url_task(
         body=_body(),
@@ -170,6 +177,230 @@ def test_saved_settings_are_snapshotted_and_used_by_runner(tmp_path, monkeypatch
         "api_key": "sk-unified-secret",
     }
     assert task_store.get(rec.id).status == "SUCCESS"
+
+
+def test_deepseek_does_not_fall_back_to_settings_secret():
+    with pytest.raises(HTTPException) as exc_info:
+        resolve_runtime(
+            engine="deepseek", need_subtitle=True, request_model="local:tiny",
+            source_lang="en", target_lang="zh-CN", tts_enabled=False,
+            tts_voice="auto", engines=TranslationEngineStore(),
+            model_store=ModelSettingsStore(),
+            compat_settings=SimpleNamespace(deepseek_api_key="sk-env-secret"),
+            ensure_local_model_ready=lambda _model: None,
+        )
+    assert exc_info.value.status_code == 422
+    assert "Redis" in str(exc_info.value.detail)
+
+
+def test_runtime_rejects_disabled_unified_card(tmp_path):
+    store = ModelSettingsStore()
+    store.update({"llm": {
+        "enabled": False,
+        "models": [{"id": "llm-off", "provider": "openai_compatible",
+                    "model": "m", "apiKey": "sk-secret", "isCurrent": True}],
+    }})
+    with pytest.raises(HTTPException) as exc_info:
+        resolve_runtime(
+            engine="deepseek", need_subtitle=True, request_model="local:tiny",
+            source_lang="en", target_lang="zh-CN", tts_enabled=False,
+            tts_voice="auto", engines=TranslationEngineStore(), model_store=store,
+            ensure_local_model_ready=lambda _model: None,
+        )
+    assert exc_info.value.detail["code"] == "MODEL_DISABLED"
+
+
+def test_runner_fails_closed_when_snapshotted_model_card_is_disabled(tmp_path, monkeypatch):
+    provider = get_config_provider()
+    store = ModelSettingsStore()
+    engines = TranslationEngineStore()
+    engines.ensure_default_deepseek()
+    engines.update("deepseek", api_key="sk-engine", availability="AVAILABLE")
+    _save_cards(store)
+    monkeypatch.setattr(model_runtime.importlib.util, "find_spec", lambda _name: object())
+    runtime = resolve_runtime(
+        engine="deepseek", need_subtitle=True, request_model="local:tiny",
+        source_lang="en", target_lang="zh-CN", tts_enabled=False,
+        tts_voice="auto", engines=engines, model_store=store,
+        ensure_local_model_ready=lambda _model: None,
+    )
+    rec = TaskStore(tmp_path / "tasks.db").create(
+        url="https://example.test/card", source_lang="en", target_lang="zh-CN",
+        mode="mono", burn="soft", model="local:tiny", engine="deepseek",
+        runtime_config_json=json.dumps(runtime.snapshot),
+    )
+    store.update({"llm": {"enabled": False}})
+    task_store = TaskStore(tmp_path / "tasks.db")
+    monkeypatch.setattr(runner, "_store", task_store)
+    monkeypatch.setattr(runner, "run_pipeline", lambda *_args, **_kwargs: pytest.fail("must fail closed"))
+    runner._run(rec.id)
+    assert task_store.get(rec.id).status == "FAILED"
+    assert task_store.get(rec.id).error_code == "engine_credentials_missing"
+
+
+def test_legacy_task_persists_routing_and_business_snapshot_for_retry(tmp_path, monkeypatch):
+    config_provider = get_config_provider()
+    config_provider.mutate(lambda document: document["business"].update({"download_quality": "360p"}))
+    engines = TranslationEngineStore()
+    engines.ensure_default_deepseek()
+    engines.update("deepseek", api_key="sk-legacy", availability="AVAILABLE")
+    task_store = TaskStore(tmp_path / "tasks.db")
+    rec = task_store.create(
+        url="https://example.test/legacy", source_lang="en", target_lang="zh-CN",
+        mode="mono", burn="soft", model="local:tiny", engine="deepseek",
+    )
+    monkeypatch.setattr(runner, "_store", task_store)
+    observed = []
+    def fake_pipeline(_params, on_event, *, api_key=None, engine_config=None):
+        from src.config import settings
+        observed.append(settings.download_quality)
+        on_event(PipelineEvent("SUCCESS", 100, None, outputs={}))
+    monkeypatch.setattr(runner, "run_pipeline", fake_pipeline)
+    runner._run(rec.id)
+    persisted = json.loads(task_store.get(rec.id).runtime_config_json)
+    assert persisted["business"]["download_quality"] == "360p"
+    assert "engine" in persisted and "whisper" in persisted and "tts" in persisted
+    config_provider.mutate(lambda document: document["business"].update({"download_quality": "720p"}))
+    runner._run(rec.id)
+    assert observed == ["360p", "360p"]
+
+
+def test_malformed_snapshot_fails_without_dynamic_fallback(tmp_path, monkeypatch):
+    task_store = TaskStore(tmp_path / "tasks.db")
+    rec = task_store.create(
+        url="https://example.test/bad-snapshot", source_lang="en", target_lang="zh-CN",
+        mode="mono", burn="soft", model="local:tiny", engine="deepseek",
+        runtime_config_json="[",
+    )
+    monkeypatch.setattr(runner, "_store", task_store)
+    monkeypatch.setattr(runner, "run_pipeline", lambda *_args, **_kwargs: pytest.fail("must not run"))
+    runner._run(rec.id)
+    assert task_store.get(rec.id).status == "FAILED"
+    assert task_store.get(rec.id).error_code == "runtime_snapshot_invalid"
+
+
+@pytest.mark.parametrize("damage", ["engine-type", "tts-speed"])
+def test_structurally_invalid_v2_snapshot_fails_and_cleans_up(tmp_path, monkeypatch, damage):
+    task_store = TaskStore(tmp_path / f"invalid-{damage}.db")
+    snapshot = {
+        "schemaVersion": 2, "configRevision": 1, "business": {},
+        "engine": {"source": "disabled", "id": "deepseek", "provider": "",
+                   "model": "", "baseUrl": "", "params": {}},
+        "whisper": {"source": "disabled", "cardId": None, "provider": "", "model": ""},
+        "tts": {"enabled": False, "source": "request", "cardId": None,
+                "provider": "", "model": "", "voice": "auto", "speed": 1.0,
+                "format": "wav"},
+    }
+    if damage == "engine-type":
+        snapshot["engine"] = []
+    else:
+        snapshot["tts"]["speed"] = "bad"
+    rec = task_store.create(
+        url="https://example.test/invalid", source_lang="en", target_lang="zh-CN",
+        mode="mono", burn="soft", model="local:tiny", engine="deepseek",
+        runtime_config_json=json.dumps(snapshot),
+    )
+    monkeypatch.setattr(runner, "_store", task_store)
+    monkeypatch.setattr(runner, "run_pipeline", lambda *_args, **_kwargs: pytest.fail("invalid snapshot must not run"))
+    cleanup_calls = []
+    unregister_calls = []
+    monkeypatch.setattr(runner, "_cleanup_partial_artifacts", cleanup_calls.append)
+    monkeypatch.setattr(runner, "unregister_cancellation_signal", unregister_calls.append)
+
+    runner._run(rec.id)
+
+    saved = task_store.get(rec.id)
+    assert saved.status == "FAILED"
+    assert saved.error_code == "runtime_snapshot_invalid"
+    assert damage not in (saved.error or "")
+    assert cleanup_calls == [rec.id]
+    assert unregister_calls == [rec.id]
+
+
+def test_partial_v1_routing_is_completed_once_and_preserved_on_retry(tmp_path, monkeypatch):
+    provider = get_config_provider()
+    engines = TranslationEngineStore()
+    engines.ensure_default_deepseek()
+    engines.update("deepseek", api_key="sk-live", availability="AVAILABLE")
+    task_store = TaskStore(tmp_path / "v1-partial.db")
+    v1 = {
+        "schemaVersion": 1,
+        "engine": {
+            "source": "legacy", "id": "deepseek", "provider": "deepseek",
+            "model": "fixed-v1-model", "baseUrl": "https://old.example/v1",
+            "params": {},
+        },
+        "whisper": {"model": "local:tiny"},
+    }
+    rec = task_store.create(
+        url="https://example.test/v1", source_lang="en", target_lang="zh-CN",
+        mode="mono", burn="soft", model="local:small", engine="deepseek",
+        runtime_config_json=json.dumps(v1),
+    )
+    monkeypatch.setattr(runner, "_store", task_store)
+    observed = []
+
+    def fake_pipeline(params, on_event, *, api_key=None, engine_config=None):
+        observed.append((params.model, engine_config.model))
+        on_event(PipelineEvent("SUCCESS", 100, None, outputs={}))
+
+    monkeypatch.setattr(runner, "run_pipeline", fake_pipeline)
+    runner._run(rec.id)
+    first = json.loads(task_store.get(rec.id).runtime_config_json)
+    assert first["schemaVersion"] == 2
+    assert first["engine"]["source"] == "translation_store"
+    assert first["engine"]["model"] == "fixed-v1-model"
+    assert first["whisper"]["model"] == "local:tiny"
+    assert first["tts"]["enabled"] is False
+    assert "api_key" not in first["engine"]
+
+    provider.mutate(lambda document: document["engines"]["byId"]["deepseek"].update(
+        model="changed-model", api_key="sk-rotated",
+    ))
+    runner._run(rec.id)
+    assert observed == [("local:tiny", "fixed-v1-model"), ("local:tiny", "fixed-v1-model")]
+
+
+def test_queued_engine_uses_rotated_key_without_revalidation(tmp_path, monkeypatch):
+    engines = TranslationEngineStore()
+    engine = engines.create(
+        name="Rotatable", api_type="openai_compatible", base_url="https://llm.example/v1",
+        model="fixed-model", api_key="first-key",
+    )
+    engines.update(engine.id, availability="AVAILABLE")
+    runtime = resolve_runtime(
+        engine=engine.id, need_subtitle=True, request_model="local:tiny",
+        source_lang="en", target_lang="zh-CN", tts_enabled=False, tts_voice="auto",
+        engines=engines, ensure_local_model_ready=lambda _model: None,
+    )
+    task_store = TaskStore(tmp_path / "rotated-key.db")
+    rec = task_store.create(
+        url="https://example.test/key-rotation", source_lang="en", target_lang="zh-CN",
+        mode="mono", burn="soft", model="local:tiny", engine=engine.id,
+        runtime_config_json=json.dumps(runtime.snapshot),
+    )
+    engines.update(engine.id, api_key="second-key")
+    assert engines.get(engine.id).availability == "UNKNOWN"
+    monkeypatch.setattr(runner, "_store", task_store)
+    observed = []
+
+    def fake_pipeline(_params, on_event, *, api_key=None, engine_config=None):
+        observed.append(engine_config.api_key)
+        on_event(PipelineEvent("SUCCESS", 100, None, outputs={}))
+
+    monkeypatch.setattr(runner, "run_pipeline", fake_pipeline)
+    runner._run(rec.id)
+    assert observed == ["second-key"]
+
+
+def test_download_only_snapshot_does_not_require_translation_engine():
+    from src.service.runner import _snapshot_engine_config
+
+    engine_config = _snapshot_engine_config({
+        "source": "disabled", "id": "deepseek", "provider": "",
+    })
+    assert engine_config is not None
+    assert engine_config.api_type == "disabled"
 
 
 def test_local_engine_remains_authoritative_over_unified_llm(tmp_path, monkeypatch):
@@ -253,6 +484,7 @@ def test_http_save_then_create_persists_runtime_snapshot(tmp_path, monkeypatch):
                         "provider": "openai_compatible",
                         "model": "http-configured",
                         "baseUrl": "https://http.example/v1",
+                        "apiKey": "sk-http-secret",
                         "isCurrent": True,
                     }],
                 },

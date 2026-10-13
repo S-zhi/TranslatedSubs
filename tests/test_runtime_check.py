@@ -58,7 +58,7 @@ def test_readiness_reports_missing_local_dependencies(monkeypatch, tmp_path):
     assert any("ctranslate2" in item for item in result["missing"])
 
 
-def test_deepseek_key_does_not_bypass_missing_local_model(monkeypatch, tmp_path):
+def test_process_environment_key_is_ignored_and_does_not_bypass_missing_local_model(monkeypatch, tmp_path):
     monkeypatch.setattr(runtime_check, "settings", _settings(tmp_path))
     monkeypatch.setenv("DEEPSEEK_API_KEY", "secret")
     import src.handler.deps as deps
@@ -69,7 +69,7 @@ def test_deepseek_key_does_not_bypass_missing_local_model(monkeypatch, tmp_path)
     monkeypatch.setattr(runtime_check, "has_subtitles_filter", lambda _: True)
     monkeypatch.setattr(runtime_check, "_check_writable_directory", lambda _: "writable")
     result = runtime_check.build_readiness()
-    assert result["checks"]["deepseek_api_key"] == "available"
+    assert result["checks"]["deepseek_api_key"] == "missing"
     assert result["checks"]["translation_engine"] == "missing"
     assert result["initialized"] is False
 

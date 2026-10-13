@@ -1,0 +1,23 @@
+{
+  "redis": {
+    "url": "redis://127.0.0.1:6379/0",
+    "namespace": "translatedsubs-local"
+  },
+  "paths": {
+    "dataDir": "data",
+    "dbPath": "data/db/app.db"
+  },
+  "mcp": {
+    "baseUrl": "http://127.0.0.1:8000",
+    "timeout": 15,
+    "transport": "stdio",
+    "host": "127.0.0.1",
+    "port": 3001,
+    "path": "/mcp",
+    "logLevel": "INFO"
+  },
+  "http": {
+    "host": "127.0.0.1",
+    "port": 8000
+  }
+}

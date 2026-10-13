@@ -145,7 +145,7 @@ class _DownloadConcurrencyLimiter:
     """只限制媒体下载阶段的并发，不占用后续字幕处理的下载名额。
 
     使用条件变量而不是固定大小的 ``Semaphore``，这样运行中修改
-    ``SUBTRANS_DOWNLOAD_WORKERS`` 后，新任务会使用最新配置；已经运行中的下载
+    设置页/API 中的下载并发数后，新任务会使用最新配置；已经运行中的下载
     不会被强行打断。每次 ``slot`` 退出都会释放名额，即使 yt-dlp 抛出异常。
     """
 
