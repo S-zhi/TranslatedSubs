@@ -11,24 +11,31 @@ from __future__ import annotations
 
 import logging
 import threading
+import uuid
+import wave
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Callable, Optional
 
 from src.config import settings, task_dir
-from src.core.audio_extractor import extract_audio
-from src.core.downloader import download_video
-from src.core.subtitle_burner import burn_subtitles
-from src.core.transcriber import TranscribeCancelledError, TranscribeError, transcribe
-from src.core.translator import translate_srt
-from src.core.tts import TTSError, generate_timeline_audio
-from src.core.ffmpeg_utils import probe_duration, run_ffmpeg
-from src.core.vocal_separator import (
-    VocalSeparationCancelledError,
-    VocalSeparationError,
-    cached_vocals_are_current,
-    separate_vocals,
+from src.plugin_system import (
+    AudioExtractRequest,
+    AudioExtractResult,
+    DownloadRequest,
+    DubMuxRequest,
+    PluginCancelled,
+    PluginError,
+    ProbeRequest,
+    ProbeResult,
+    SubtitleRenderRequest,
+    TTSRequest,
+    TranscribeRequest,
+    TranslateRequest,
+    VocalSeparateRequest,
 )
+from src.plugin_system.context import PluginContext
 from src.service.asset_resolver import AssetResolver, ResourceError, ResourceState
 from src.store import DEFAULT_TRANSLATION_ENGINE_ID
 
@@ -159,6 +166,132 @@ def _check_cancelled(task_id: str) -> None:
         raise PipelineCancelledError("任务已被用户取消")
 
 
+def _stage_for_purpose(purpose: str) -> str:
+    return {
+        "download": "download",
+        "extract.asr": "audio_extract",
+        "extract.dubbing": "audio_extract",
+        "separate.asr": "vocal_separate",
+        "separate.dubbing": "vocal_separate",
+        "transcribe": "transcribe",
+        "translate": "translate",
+        "tts": "tts",
+        "render.subtitle": "render",
+        "render.dub_mux": "render",
+    }.get(purpose, "download")
+
+
+def _purpose_band(purpose: str, params: PipelineParams) -> tuple[str, int, int]:
+    status = {
+        "download": "DOWNLOADING",
+        "extract.asr": "EXTRACTING",
+        "extract.dubbing": "SYNTHESIZING",
+        "separate.asr": "EXTRACTING",
+        "separate.dubbing": "DUBBING",
+        "transcribe": "TRANSCRIBING",
+        "translate": "TRANSLATING",
+        "tts": "SYNTHESIZING",
+        "render.subtitle": "BURNING",
+        "render.dub_mux": "DUBBING",
+    }[purpose]
+    if purpose == "download" and not params.need_subtitle:
+        return status, 0, 100
+    if purpose == "extract.dubbing":
+        return status, 94, 95
+    if purpose == "separate.asr":
+        return status, 35, 35
+    if purpose == "separate.dubbing":
+        return status, 95, 96
+    if purpose == "tts":
+        return status, 95, 97
+    if purpose == "render.subtitle" and params.tts_enabled:
+        return status, 85, 94
+    if purpose == "render.dub_mux":
+        return status, 97, 100
+    return (status, *_BANDS[status])
+
+
+class _PipelinePluginContext:
+    """Fresh host callback context for one Manager invocation."""
+
+    def __init__(self, pipeline: "PipelineContext", purpose: str) -> None:
+        self._pipeline = pipeline
+        self._task_id = pipeline.task_id
+        self._invocation_id = str(uuid.uuid4())
+        self._task_dir = pipeline.directory
+        self._purpose = purpose
+        self._active = True
+        self._lock = threading.RLock()
+
+    @property
+    def task_id(self) -> str:
+        return self._task_id
+
+    @property
+    def invocation_id(self) -> str:
+        return self._invocation_id
+
+    @property
+    def task_dir(self) -> Path:
+        return self._task_dir
+
+    @property
+    def purpose(self) -> str:
+        return self._purpose
+
+    def check_cancelled(self) -> None:
+        if is_cancelled_signal(self._task_id):
+            raise PluginCancelled("plugin invocation cancelled")
+
+    def report_progress(self, percent: float | None) -> None:
+        with self._lock:
+            if not self._active:
+                return
+            self.check_cancelled()
+            status, low, high = _purpose_band(self._purpose, self._pipeline.params)
+            scaled = low if percent is None else _scale(low, high, percent)
+            try:
+                self._pipeline.emit(status, scaled)
+            except PipelineCancelledError as exc:
+                raise PluginCancelled("plugin invocation cancelled") from exc
+
+    def register_process(self, proc) -> None:
+        from src.service.runner import register_process
+        register_process(self._task_id, proc)
+
+    def unregister_process(self, proc) -> None:
+        from src.service.runner import unregister_process
+        unregister_process(self._task_id, proc)
+
+    def resolve_credential(self, ref: str) -> str:
+        return self._pipeline.credential_resolver(ref)
+
+    def finish(self) -> None:
+        with self._lock:
+            self._active = False
+
+
+def _result_paths(result: object) -> set[Path]:
+    paths = set()
+    for name in (
+        "source_path", "audio_path", "vocal_path", "background_path",
+        "original_srt", "translated_srt", "speech_audio", "mixed_audio", "video_path",
+    ):
+        value = getattr(result, name, None)
+        if isinstance(value, Path):
+            paths.add(value)
+    return paths
+
+
+def _wav_duration(path: Path) -> float | None:
+    try:
+        with wave.open(str(path), "rb") as audio:
+            rate = audio.getframerate()
+            return audio.getnframes() / rate if rate > 0 else None
+    except (OSError, wave.Error):
+        return None
+
+
 @dataclass
 class PipelineResources:
     """责任链阶段之间传递的任务产物。
@@ -181,8 +314,10 @@ class PipelineContext:
 
     params: PipelineParams
     on_event: EventHook
-    api_key: Optional[str] = None
-    engine_config: object = None
+    plugin_manager: object
+    plugin_plan: Mapping
+    credential_resolver: Callable[[str], str]
+    legacy_cache: bool = False
     resources: PipelineResources = field(default_factory=PipelineResources)
     progress: int = 0
     current_step: Optional[str] = None
@@ -192,6 +327,8 @@ class PipelineContext:
     # 与后续分离阶段不一致。直接构造 Context 的旧调用方可留 None，回退
     # 到动态 settings（主要用于单元测试和自定义责任链）。
     vocal_separation_enabled: Optional[bool] = None
+    _unpublished: set[Path] = field(default_factory=set)
+    _pending_purposes: set[str] = field(default_factory=set)
 
     @property
     def task_id(self) -> str:
@@ -239,8 +376,154 @@ class PipelineContext:
         resource_state, path, _ = resolver(self.task_id)
         return resource_state == ResourceState.AVAILABLE and path is not None
 
+    def check_cancelled(self) -> None:
+        if is_cancelled_signal(self.task_id):
+            raise PipelineCancelledError("任务已被用户取消")
+
+    @property
+    def directory(self) -> Path:
+        return task_dir(self.task_id).resolve()
+
+    def _slot(self, purpose: str) -> Mapping:
+        try:
+            return self.plugin_plan["slots"][purpose]
+        except (KeyError, TypeError) as exc:
+            raise PluginError("invalid_input", _stage_for_purpose(purpose), "host", "required plugin slot is missing", exc) from exc
+
+    def invoke(
+        self,
+        purpose: str,
+        request,
+        *,
+        stage: str,
+        operation: str,
+        inputs: dict[str, object],
+        output_names: tuple[str, ...],
+        upstream_purposes: Optional[dict[str, str]] = None,
+        legacy_compatible: bool = False,
+        cache_check: bool = True,
+    ):
+        slot = self._slot(purpose)
+        self.directory.mkdir(parents=True, exist_ok=True)
+        plugin_id = slot["plugin_id"]
+        version = slot["implementation_version"]
+        config = dict(slot["config"])
+        legacy_allowed_plugin = {
+            "download": "builtin.ytdlp",
+            "audio_extract": "builtin.ffmpeg_audio",
+            "vocal_separate": "builtin.vocal_demucs",
+            "transcribe": "builtin.whisper",
+            "translate": "builtin.translation_engine",
+            "tts": "builtin.kokoro",
+            "render": "builtin.ffmpeg_render",
+        }[stage]
+        effective_outputs = output_names
+        if purpose == "download" and not effective_outputs:
+            state, source, _ = AssetResolver.resolve_source(self.task_id)
+            if state == ResourceState.AVAILABLE and source is not None:
+                effective_outputs = (source.name,)
+        if cache_check and effective_outputs and AssetResolver.plugin_cache_matches(
+            self.task_id,
+            stage=stage,
+            operation=operation,
+            purpose=purpose,
+            plugin_id=plugin_id,
+            implementation_version=version,
+            config=config,
+            inputs=inputs,
+            output_names=effective_outputs,
+            upstream_purposes=upstream_purposes,
+            legacy_cache=(self.legacy_cache and plugin_id == legacy_allowed_plugin and version == "1"),
+            legacy_compatible=legacy_compatible,
+        ):
+            self._emit_stage_complete(purpose)
+            return None
+
+        output_paths = {self.directory / name for name in output_names}
+        self._unpublished.update(output_paths)
+        self._pending_purposes.add(purpose)
+        preexisting_download_files = set()
+        if purpose == "download":
+            preexisting_download_files = {
+                path.resolve() for pattern in ("source.*", "*.part", "*.ytdl", "*.tmp")
+                for path in self.directory.glob(pattern)
+            }
+        invocation_context = _PipelinePluginContext(self, purpose)
+        try:
+            result = self.plugin_manager.run(
+                plugin_id, version, request, config, invocation_context
+            )
+            invocation_context.finish()
+            result_paths = _result_paths(result)
+            self._unpublished.update(result_paths)
+            self.check_cancelled()
+            result_names = tuple(path.name for path in result_paths)
+            # Preserve request order for stable metadata.
+            if output_names:
+                result_names = output_names
+            metadata = AssetResolver.plugin_metadata(
+                task_id=self.task_id,
+                stage=stage,
+                operation=operation,
+                purpose=purpose,
+                plugin_id=plugin_id,
+                implementation_version=version,
+                config=config,
+                inputs=inputs,
+                output_names=result_names,
+                upstream_purposes=upstream_purposes,
+            )
+            AssetResolver.write_plugin_cache_metadata(self.task_id, metadata)
+            # Metadata is the publication record. Recheck cancellation after it
+            # is written but before the invocation is considered published.
+            self.check_cancelled()
+            self._unpublished.difference_update(result_paths)
+            self._unpublished.difference_update(output_paths)
+            self._pending_purposes.discard(purpose)
+            return result
+        except PluginCancelled as exc:
+            invocation_context.finish()
+            if purpose == "download":
+                self._collect_new_download_files(preexisting_download_files)
+            self.cleanup_unpublished()
+            raise PipelineCancelledError("任务已被用户取消") from exc
+        except Exception:
+            invocation_context.finish()
+            if purpose == "download":
+                self._collect_new_download_files(preexisting_download_files)
+            # A failed call must not leave artifacts that a later run can mistake
+            # for published output. Preserve already completed purposes.
+            AssetResolver.cleanup_unpublished_invocation(
+                self.task_id, output_paths, {purpose}
+            )
+            self._unpublished.difference_update(output_paths)
+            self._pending_purposes.discard(purpose)
+            raise
+
+    def _collect_new_download_files(self, preexisting: set[Path]) -> None:
+        for pattern in ("source.*", "*.part", "*.ytdl", "*.tmp"):
+            for path in self.directory.glob(pattern):
+                resolved = path.resolve()
+                if resolved not in preexisting:
+                    self._unpublished.add(path)
+
+    def cleanup_unpublished(self) -> None:
+        AssetResolver.cleanup_unpublished_invocation(
+            self.task_id, self._unpublished, self._pending_purposes
+        )
+        self._unpublished.clear()
+        self._pending_purposes.clear()
+
+    def _emit_stage_complete(self, purpose: str) -> None:
+        status, lo, hi = _purpose_band(purpose, self.params)
+        self.emit(status, hi)
+
+    def invoke_context(self, purpose: str) -> PluginContext:
+        return _PipelinePluginContext(self, purpose)
+
     def complete(self, *, outputs: dict, title: Optional[str] = None) -> PipelineEvent:
         """记录并发布包含输出路径的成功终态事件。"""
+        self.check_cancelled()
         event = PipelineEvent("SUCCESS", 100, None, title=title, outputs=outputs)
         self.terminal_event = event
         self.on_event(event)
@@ -277,29 +560,31 @@ class DownloadHandler(PipelineHandler):
     """准备源视频；上传、断点续跑和仅下载分支均在本节点处理。"""
 
     def process(self, context: PipelineContext) -> None:
-        """按上传、缓存或下载路径准备源视频，并处理仅下载分支。"""
+        """准备源视频；URL 下载只由 download 插件完成。"""
         params = context.params
         tid = context.task_id
         context.emit("DOWNLOADING", 0)
-        target_progress = 100 if not params.need_subtitle else 20
-
         if params.source_type == "upload":
             context.resources.video_path = _locate_uploaded_source(tid)
             context.title = params.title or context.resources.video_path.stem
-            context.emit_smooth("DOWNLOADING", target_progress)
-        elif context.artifact_available(AssetResolver.resolve_source):
-            context.resources.video_path = AssetResolver.require_source(tid)
-            context.title = params.title
-            context.emit_smooth("DOWNLOADING", target_progress)
+            context.emit_smooth("DOWNLOADING", 100 if not params.need_subtitle else 20)
         else:
-            download = download_video(
-                params.url,
-                tid,
-                on_progress=context.step_callback("DOWNLOADING"),
-                quality=params.quality,
+            slot = context._slot("download")
+            config = dict(slot["config"])
+            context.emit("DOWNLOADING", 0)
+            request = DownloadRequest(
+                stage="download", operation="download", purpose="download",
+                url=params.url, quality=config["quality"], target_dir=context.directory,
+            )
+            existing_state, existing, _ = AssetResolver.resolve_source(tid)
+            output_names = (existing.name,) if existing_state == ResourceState.AVAILABLE and existing else ()
+            download = context.invoke(
+                "download", request, stage="download", operation="download",
+                inputs={"url": params.url}, output_names=output_names,
+                legacy_compatible=existing is not None,
             )
             context.resources.video_path = AssetResolver.require_source(tid)
-            context.title = download.title
+            context.title = (download.title if download is not None else None) or params.title or context.resources.video_path.stem
             if not params.need_subtitle:
                 context.emit("DOWNLOADING", 100)
 
@@ -315,67 +600,34 @@ class AudioExtractionHandler(PipelineHandler):
     """获取可识别音频，优先复用已完成的音频产物。"""
 
     def process(self, context: PipelineContext) -> None:
-        """按音频格式配置复用或重新生成可识别音频产物。"""
+        """经 audio_extract 插件生成 ASR 音频并检查用途缓存。"""
         tid = context.task_id
         context.emit("EXTRACTING", 20)
-        context.resources.video_path = AssetResolver.require_source(tid)
-        # 人声分离要求 48 kHz 立体声。老任务留下的 16 kHz 单声道 audio.wav
-        # 虽然物理文件可用，但不能拿来跑 Demucs；提取阶段会通过 sidecar
-        # metadata 判断格式并重新生成，避免切换配置后误复用缓存。
-        audio_metadata = AssetResolver.artifact(tid, "audio.meta.json").address
-        requires_high_quality = (
-            context.vocal_separation_enabled
-            if context.vocal_separation_enabled is not None
-            else settings.vocal_separation_enabled
+        context.resources.video_path = AssetResolver.require_source(tid).resolve()
+        slot = context._slot("extract.asr")
+        config = dict(slot["config"])
+        output = context.directory / "audio.wav"
+        request = AudioExtractRequest(
+            stage="audio_extract", operation="audio_extract", purpose="extract.asr",
+            source_path=context.resources.video_path, output_path=output,
+            sample_rate=config["sample_rate"], channels=config["channels"],
         )
-        metadata_matches = _audio_metadata_matches(
-            audio_metadata,
-            sample_rate=48000 if requires_high_quality else settings.audio_sample_rate,
-            channels=2 if requires_high_quality else settings.audio_channels,
-            source_path=context.resources.video_path,
-        )
-        # Older tasks predate the sidecar metadata. Reuse their non-empty audio
-        # cache when vocal separation is disabled; requiring metadata here would
-        # make every resumed task invoke ffmpeg again.
-        legacy_audio_cache = (
-            not audio_metadata.exists()
-            and context.artifact_available(AssetResolver.resolve_audio)
-        )
-        if context.artifact_available(AssetResolver.resolve_audio) and (metadata_matches or legacy_audio_cache):
-            context.resources.audio_path = AssetResolver.require_audio(tid)
-            context.emit("EXTRACTING", 35)
-        else:
-            extract_options = {
-                "on_progress": context.step_callback("EXTRACTING"),
-            }
-            if requires_high_quality:
-                extract_options.update(sample_rate=48000, channels=2)
-            result = extract_audio(context.resources.video_path, tid, **extract_options)
-            # Custom extractors and test doubles may write the standard artifact
-            # but return no response object; resolve the artifact as the source
-            # of truth instead of dereferencing None.
-            context.resources.audio_path = getattr(result, "audio_path", None)
-            if context.resources.audio_path is None:
-                context.resources.audio_path = AssetResolver.require_audio(tid)
-            result_sample_rate = getattr(
-                result, "sample_rate", 48000 if requires_high_quality else settings.audio_sample_rate
+        legacy_audio = AssetResolver.check_file_state(output) == ResourceState.AVAILABLE
+        old_meta = context.directory / "audio.meta.json"
+        legacy_compatible = legacy_audio and (
+            not old_meta.is_file() or _audio_metadata_matches(
+                old_meta, sample_rate=config["sample_rate"], channels=config["channels"],
+                source_path=context.resources.video_path,
             )
-            result_channels = getattr(
-                result, "channels", 2 if requires_high_quality else settings.audio_channels
-            )
-            try:
-                audio_metadata.write_text(
-                    _audio_metadata_json(
-                        sample_rate=result_sample_rate,
-                        channels=result_channels,
-                        source_path=context.resources.video_path,
-                    ),
-                    encoding="utf-8",
-                )
-            except OSError:
-                # 测试替身或外部 extractor 可能把音频写到其它目录；sidecar
-                # 只是缓存校验辅助信息，不能让已成功的提取失败。
-                logger.debug("无法写入音频 sidecar: %s", audio_metadata, exc_info=True)
+        )
+        result = context.invoke(
+            "extract.asr", request, stage="audio_extract", operation="audio_extract",
+            inputs={"source_path": context.resources.video_path}, output_names=("audio.wav",),
+            upstream_purposes={"source_path": "download"} if context.params.source_type == "url" else None,
+            legacy_compatible=legacy_compatible,
+        )
+        context.resources.audio_path = result.audio_path if result else output
+        context.emit("EXTRACTING", 35)
 
 
 class VocalSeparationHandler(PipelineHandler):
@@ -392,30 +644,19 @@ class VocalSeparationHandler(PipelineHandler):
             return
         tid = context.task_id
         context.emit("EXTRACTING", 35)
-        output = task_dir(tid) / "vocal.wav"
-        if cached_vocals_are_current(context.resources.audio_path, tid):
-            context.resources.vocal_audio_path = output
-            return
-        try:
-            try:
-                context.resources.vocal_audio_path = separate_vocals(
-                    context.resources.audio_path,
-                    tid,
-                    cancel_check=lambda: _check_cancelled(tid),
-                )
-            except TypeError as exc:
-                # 兼容旧版自定义 backend / 测试替身的二参数签名；真实
-                # separator 的 TypeError 仍会继续向外抛出。
-                if "cancel_check" not in str(exc):
-                    raise
-                context.resources.vocal_audio_path = separate_vocals(
-                    context.resources.audio_path, tid
-                )
-        except VocalSeparationCancelledError as exc:
-            raise PipelineCancelledError("任务已被用户取消") from exc
-        except VocalSeparationError:
-            logger.exception("人声分离失败: task=%s", tid)
-            raise
+        slot = context._slot("separate.asr")
+        request = VocalSeparateRequest(
+            stage="vocal_separate", operation="vocal_separate", purpose="separate.asr",
+            audio_path=context.resources.audio_path,
+            vocal_path=context.directory / "vocal.wav", background_path=None,
+        )
+        result = context.invoke(
+            "separate.asr", request, stage="vocal_separate", operation="vocal_separate",
+            inputs={"audio_path": context.resources.audio_path}, output_names=("vocal.wav",),
+            upstream_purposes={"audio_path": "extract.asr"},
+            legacy_compatible=(context.legacy_cache and (context.directory / "vocal.meta.json").is_file()),
+        )
+        context.resources.vocal_audio_path = result.vocal_path if result else request.vocal_path
 
 
 class TranscriptionHandler(PipelineHandler):
@@ -426,32 +667,24 @@ class TranscriptionHandler(PipelineHandler):
         params = context.params
         tid = context.task_id
         context.emit("TRANSCRIBING", 35)
-        if context.artifact_available(AssetResolver.resolve_original_srt):
-            context.resources.original_srt_path = AssetResolver.require_original_srt(tid)
-            context.emit("TRANSCRIBING", 65)
-            return
         try:
-            backend = None
-            model_name = params.model
-            if ":" in model_name:
-                candidate, selected_model = model_name.split(":", 1)
-                if candidate.strip().lower() == "replicate":
-                    raise TranscribeError("当前版本不支持 Replicate Whisper", code="unsupported_backend")
-                if candidate.strip().lower() in {"local", "local_whisper", "whisper", "faster_whisper"}:
-                    backend = "local_whisper"
-                    model_name = selected_model.strip()
-            transcribe(
-                context.resources.vocal_audio_path or context.resources.audio_path,
-                tid,
-                language=params.source_lang,
-                model_name=model_name,
-                backend=backend,
-                on_progress=context.step_callback("TRANSCRIBING"),
-                cancel_check=lambda: _check_cancelled(tid),
+            slot = context._slot("transcribe")
+            config = dict(slot["config"])
+            audio_path = context.resources.vocal_audio_path or context.resources.audio_path
+            request = TranscribeRequest(
+                stage="transcribe", operation="transcribe", purpose="transcribe",
+                audio_path=audio_path, output_srt=context.directory / "original.srt",
+                source_lang=params.source_lang, backend=config["backend"], model=config["model"],
             )
-        except TranscribeCancelledError as exc:
+            result = context.invoke(
+                "transcribe", request, stage="transcribe", operation="transcribe",
+                inputs={"audio_path": audio_path}, output_names=("original.srt",),
+                upstream_purposes={"audio_path": "separate.asr" if context.resources.vocal_audio_path else "extract.asr"},
+                legacy_compatible=context.legacy_cache and (context.directory / "original.srt").is_file(),
+            )
+            context.resources.original_srt_path = result.original_srt if result else request.output_srt
+        except PluginCancelled as exc:
             raise PipelineCancelledError("任务已被用户取消") from exc
-        context.resources.original_srt_path = AssetResolver.require_original_srt(tid)
 
 
 class TranslationHandler(PipelineHandler):
@@ -462,22 +695,20 @@ class TranslationHandler(PipelineHandler):
         params = context.params
         tid = context.task_id
         context.emit("TRANSLATING", 65)
-        if context.artifact_available(AssetResolver.resolve_translated_srt):
-            context.resources.translated_srt_path = AssetResolver.require_translated_srt(tid)
-            context.emit("TRANSLATING", 85)
-            return
-        translate_srt(
-            context.resources.original_srt_path,
-            tid,
-            params.source_lang,
-            params.target_lang,
-            mode=params.mode,
-            on_progress=context.step_callback("TRANSLATING"),
-            api_key=context.api_key,
-            engine_config=context.engine_config,
-            cancel_check=lambda: _check_cancelled(tid),
+        slot = context._slot("translate")
+        request = TranslateRequest(
+            stage="translate", operation="translate", purpose="translate",
+            original_srt=context.resources.original_srt_path,
+            output_srt=context.directory / "translated.srt",
+            source_lang=params.source_lang, target_lang=params.target_lang, mode=params.mode,
         )
-        context.resources.translated_srt_path = AssetResolver.require_translated_srt(tid)
+        result = context.invoke(
+            "translate", request, stage="translate", operation="translate",
+            inputs={"original_srt": context.resources.original_srt_path}, output_names=("translated.srt",),
+            upstream_purposes={"original_srt": "transcribe"},
+            legacy_compatible=context.legacy_cache and (context.directory / "translated.srt").is_file(),
+        )
+        context.resources.translated_srt_path = result.translated_srt if result else request.output_srt
 
 
 class SubtitleBurningHandler(PipelineHandler):
@@ -488,22 +719,32 @@ class SubtitleBurningHandler(PipelineHandler):
         params = context.params
         tid = context.task_id
         context.emit("BURNING", 85)
-        context.resources.video_path = AssetResolver.require_source(tid)
-        resolver = lambda task_id: AssetResolver.resolve_output_video(task_id, params.burn)
-        if context.artifact_available(resolver):
-            # Keep the legacy one-argument call contract for injected resolvers
-            # and test doubles; mode-aware selection already happened above.
-            context.resources.output_video_path = AssetResolver.require_output_video(tid)
-            context.emit("BURNING", 94 if params.tts_enabled else 100)
-        else:
-            burn_subtitles(
-                context.resources.video_path,
-                context.resources.translated_srt_path,
-                tid,
-                mode=params.burn,
-                on_progress=(lambda p: context.emit("BURNING", _scale(85, 94 if params.tts_enabled else 100, getattr(p, "percent", None)))),
-            )
-            context.resources.output_video_path = AssetResolver.require_output_video(tid)
+        context.resources.video_path = AssetResolver.require_source(tid).resolve()
+        output = context.directory / f"output_{params.burn}.mp4"
+        legacy_output = context.directory / "output.mp4"
+        if context.legacy_cache and legacy_output.is_file() and not output.exists():
+            legacy = AssetResolver.check_file_state(legacy_output) == ResourceState.AVAILABLE
+            if legacy:
+                legacy_output.replace(output)
+        slot = context._slot("render.subtitle")
+        request = SubtitleRenderRequest(
+            stage="render", operation="subtitle", purpose="render.subtitle",
+            source_video=context.resources.video_path,
+            translated_srt=context.resources.translated_srt_path,
+            output_video=output, mode=params.burn,
+        )
+        result = context.invoke(
+            "render.subtitle", request, stage="render", operation="subtitle",
+            inputs={"source_video": context.resources.video_path, "translated_srt": context.resources.translated_srt_path},
+            output_names=(output.name,),
+            upstream_purposes={
+                "source_video": "download" if params.source_type == "url" else "",
+                "translated_srt": "translate",
+            },
+            legacy_compatible=context.legacy_cache and output.is_file(),
+        )
+        context.resources.output_video_path = result.video_path if result else output
+        context.emit("BURNING", 94 if params.tts_enabled else 100)
 
         outputs = {
             "video": str(context.resources.output_video_path),
@@ -516,81 +757,109 @@ class SubtitleBurningHandler(PipelineHandler):
 
     def _add_dubbed_video(self, context: PipelineContext, outputs: dict) -> None:
         """独立生成配音视频；失败时保留普通成品并只记录 TTS 错误。"""
-        from src.config import settings, task_dir
-        from src.core.vocal_separator import separate_background, separate_vocals
         tid = context.task_id
         params = context.params
         context.emit("SYNTHESIZING", 95, tts_status="RUNNING")
         try:
-            if str(getattr(params, "tts_provider", "kokoro") or "kokoro").lower() not in {"kokoro", "local"}:
-                raise TTSError(f"不支持的 TTS 提供商: {params.tts_provider}")
-            task_path = task_dir(tid)
-            high_quality_audio = task_path / "tts_source.wav"
-            run_ffmpeg([
-                settings.ffmpeg_bin, "-y", "-i", str(context.resources.video_path),
-                "-vn", "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le",
-                "-progress", "pipe:1", "-nostats", "-loglevel", "error", str(high_quality_audio),
-            ], task_id=tid)
-            voice = params.tts_voice
-            if voice == "auto":
-                voice = "zf_001" if params.target_lang.lower().startswith("zh") else "af_maple"
-            speech = generate_timeline_audio(
-                context.resources.translated_srt_path,
-                context.resources.original_srt_path,
-                task_path / "dubbed.wav",
-                target_lang=params.target_lang,
-                voice=voice,
-                speed=float(getattr(params, "tts_speed", 1.0) or 1.0),
-                model_id=getattr(params, "tts_model", None),
-                output_format=getattr(params, "tts_format", "wav"),
-                bilingual=params.mode == "bilingual",
-                duration=probe_duration(context.resources.video_path, settings.ffprobe_bin),
-                cancel_check=lambda: _check_cancelled(tid),
-                on_progress=lambda pct: context.emit("SYNTHESIZING", _scale(95, 97, pct)),
-                task_id=tid,
+            extract_slot = context._slot("extract.dubbing")
+            extract_config = dict(extract_slot["config"])
+            high_quality_audio = context.directory / "tts_source.wav"
+            extract_request = AudioExtractRequest(
+                stage="audio_extract", operation="audio_extract", purpose="extract.dubbing",
+                source_path=context.resources.video_path, output_path=high_quality_audio,
+                sample_rate=extract_config["sample_rate"], channels=extract_config["channels"],
             )
+            extract_result = context.invoke(
+                "extract.dubbing", extract_request, stage="audio_extract", operation="audio_extract",
+                inputs={"source_video": context.resources.video_path}, output_names=("tts_source.wav",),
+                upstream_purposes={"source_video": "download" if params.source_type == "url" else ""},
+                legacy_compatible=context.legacy_cache and high_quality_audio.is_file(),
+            )
+            if extract_result:
+                high_quality_audio = extract_result.audio_path
+
+            tts_slot = context._slot("tts")
+            tts_config = dict(tts_slot["config"])
+            voice = tts_config["voice"]
+            speech_path = context.directory / "dubbed.wav"
+            tts_request = TTSRequest(
+                stage="tts", operation="tts", purpose="tts",
+                translated_srt=context.resources.translated_srt_path,
+                original_srt=context.resources.original_srt_path,
+                output_audio=speech_path, target_lang=params.target_lang,
+                voice=voice, bilingual=tts_config["bilingual"],
+                duration_seconds=(extract_result.duration_seconds if extract_result else _wav_duration(high_quality_audio)),
+            )
+            tts_result = context.invoke(
+                "tts", tts_request, stage="tts", operation="tts",
+                inputs={"translated_srt": context.resources.translated_srt_path,
+                        "original_srt": context.resources.original_srt_path},
+                output_names=("dubbed.wav",),
+                upstream_purposes={"translated_srt": "translate", "original_srt": "transcribe"},
+                legacy_compatible=context.legacy_cache and speech_path.is_file(),
+            )
+            speech_path = tts_result.speech_audio if tts_result else speech_path
             context.emit("DUBBING", 97, tts_status="RUNNING")
-            mixed = task_path / "dubbed_mix.wav"
-            inputs = []
-            filters = []
-            if params.original_voice_mode == "keep":
-                inputs += ["-i", str(high_quality_audio)]
-                filters.append("[0:a]volume=1.0[base]")
-                speech_index = 1
-            else:
-                bg = separate_background(
-                    high_quality_audio, tid,
-                    cancel_check=lambda: _check_cancelled(tid),
+            background = None
+            vocal = None
+            if params.original_voice_mode != "keep":
+                separate_slot = context._slot("separate.dubbing")
+                separate_request = VocalSeparateRequest(
+                    stage="vocal_separate", operation="vocal_separate", purpose="separate.dubbing",
+                    audio_path=high_quality_audio,
+                    vocal_path=(context.directory / "vocal_stem.wav") if params.original_voice_mode == "lower" else None,
+                    background_path=context.directory / "background.wav",
                 )
-                inputs += ["-i", str(bg)]
-                filters.append("[0:a]volume=1.0[base]")
-                speech_index = 1
-                if params.original_voice_mode == "lower":
-                    vocal = task_path / "vocal_stem.wav"
-                    if not vocal.is_file():
-                        raise TTSError("Demucs 未生成高质量人声 stem")
-                    inputs += ["-i", str(vocal)]
-                    filters.append("[1:a]volume=0.25[vocal]")
-                    speech_index = 2
-            inputs += ["-i", str(speech)]
-            filters.append(f"[{speech_index}:a]volume=1.0[tts]")
-            labels = "[base]" + ("[vocal]" if params.original_voice_mode == "lower" else "") + "[tts]"
-            filters.append(f"{labels}amix=inputs={2 if params.original_voice_mode != 'lower' else 3}:duration=longest:normalize=0[mix]")
-            run_ffmpeg([settings.ffmpeg_bin, "-y", *inputs, "-filter_complex", ";".join(filters), "-map", "[mix]", "-ar", "48000", "-progress", "pipe:1", "-nostats", "-loglevel", "error", str(mixed)], task_id=tid)
-            dubbed_video = task_path / "output_dubbed.mp4"
-            base_video = context.resources.output_video_path
-            run_ffmpeg([
-                settings.ffmpeg_bin, "-y", "-i", str(base_video), "-i", str(mixed),
-                "-map", "0:v:0", "-map", "1:a:0", "-map", "0:s?", "-c:v", "copy",
-                "-c:a", "aac", "-c:s", "copy", "-progress", "pipe:1", "-nostats", "-loglevel", "error", str(dubbed_video),
-            ], task_id=tid)
+                separate_result = context.invoke(
+                    "separate.dubbing", separate_request, stage="vocal_separate", operation="vocal_separate",
+                    inputs={"audio_path": high_quality_audio},
+                    output_names=("background.wav", "vocal_stem.wav") if separate_request.vocal_path else ("background.wav",),
+                    upstream_purposes={"audio_path": "extract.dubbing"},
+                    legacy_compatible=context.legacy_cache and separate_request.background_path.is_file(),
+                )
+                if separate_result:
+                    background = separate_result.background_path
+                    vocal = separate_result.vocal_path
+                else:
+                    background = separate_request.background_path
+                    vocal = separate_request.vocal_path
+            mux_slot = context._slot("render.dub_mux")
+            mux_request = DubMuxRequest(
+                stage="render", operation="dub_mux", purpose="render.dub_mux",
+                base_video=context.resources.output_video_path,
+                source_audio=high_quality_audio, speech_audio=speech_path,
+                background_audio=background, vocal_audio=vocal,
+                mixed_audio=context.directory / "dubbed_mix.wav",
+                output_video=context.directory / "output_dubbed.mp4",
+                original_voice_mode=params.original_voice_mode,
+            )
+            mux_result = context.invoke(
+                "render.dub_mux", mux_request, stage="render", operation="dub_mux",
+                inputs={"base_video": context.resources.output_video_path,
+                        "source_audio": high_quality_audio, "speech_audio": speech_path,
+                        **({"background_audio": background} if background else {}),
+                        **({"vocal_audio": vocal} if vocal else {})},
+                output_names=("dubbed_mix.wav", "output_dubbed.mp4"),
+                upstream_purposes={"base_video": "render.subtitle", "source_audio": "extract.dubbing",
+                                   "speech_audio": "tts", **({"background_audio": "separate.dubbing"} if background else {}),
+                                   **({"vocal_audio": "separate.dubbing"} if vocal else {})},
+                legacy_compatible=context.legacy_cache and mux_request.output_video.is_file(),
+            )
+            dubbed_video = mux_result.video_path if mux_result else mux_request.output_video
             outputs["dubbedVideo"] = str(dubbed_video)
             context.emit("DUBBING", 99, tts_status="SUCCESS")
         except PipelineCancelledError:
             raise
+        except PluginCancelled as exc:
+            raise PipelineCancelledError("任务已被用户取消") from exc
+        except PluginError as exc:
+            logger.warning("TTS plugin failed: task=%s code=%s", tid, exc.code)
+            context.emit("DUBBING", 99, tts_status="FAILED", tts_error=exc.message)
         except Exception as exc:
-            logger.exception("TTS 生成失败，保留原译制视频: task=%s", tid)
-            context.emit("DUBBING", 99, tts_status="FAILED", tts_error=str(exc))
+            if is_cancelled_signal(tid):
+                raise PipelineCancelledError("任务已被用户取消") from exc
+            logger.error("TTS plugin failed: task=%s code=%s", tid, _error_code_for_exception(exc))
+            context.emit("DUBBING", 99, tts_status="FAILED", tts_error="配音生成失败")
 
 
 def build_pipeline_chain(*handlers: PipelineHandler) -> PipelineHandler:
@@ -619,71 +888,72 @@ def run_pipeline(
     params: PipelineParams,
     on_event: EventHook,
     *,
-    api_key: Optional[str] = None,
-    engine_config=None,
+    plugin_manager,
+    plugin_plan: Mapping,
+    credential_resolver: Callable[[str], str],
+    legacy_cache: bool = False,
     handler_chain: Optional[PipelineHandler] = None,
 ) -> PipelineEvent:
-    """执行任务责任链，并按已有产物从最近完成的阶段继续。"""
+    """执行通过版本化插件计划固定的责任链。"""
+    _check_cancelled(params.task_id)
+    slots = {
+        purpose: MappingProxyType({
+            "plugin_id": slot["plugin_id"],
+            "implementation_version": slot["implementation_version"],
+            "config": MappingProxyType(dict(slot["config"])),
+        })
+        for purpose, slot in plugin_plan["slots"].items()
+    }
     context = PipelineContext(
         params=params,
         on_event=on_event,
-        api_key=api_key,
-        engine_config=engine_config,
-        vocal_separation_enabled=settings.vocal_separation_enabled,
+        plugin_manager=plugin_manager,
+        plugin_plan=MappingProxyType({"schema_version": plugin_plan["schema_version"], "slots": MappingProxyType(slots)}),
+        credential_resolver=credential_resolver,
+        legacy_cache=legacy_cache,
+        vocal_separation_enabled="separate.asr" in slots,
     )
-    _check_cancelled(params.task_id)
-
     try:
         chain = handler_chain if handler_chain is not None else build_default_pipeline_chain()
         return chain.handle(context)
 
     except PipelineCancelledError:
         logger.info("责任链已被用户取消: task=%s", params.task_id)
-        AssetResolver.cleanup_cancelled_artifacts(
-            params.task_id,
-            current_step=context.current_step,
-            source_type=params.source_type,
-        )
+        context.cleanup_unpublished()
         raise
     except ResourceError as exc:
         if is_cancelled_signal(params.task_id):
             logger.info("责任链已被用户取消: task=%s", params.task_id)
-            AssetResolver.cleanup_cancelled_artifacts(
-                params.task_id,
-                current_step=context.current_step,
-                source_type=params.source_type,
-            )
+            context.cleanup_unpublished()
             raise PipelineCancelledError("任务已被用户取消") from exc
-        logger.error(
-            "责任链因资源异常中断: task=%s step=%s, msg=%s",
-            params.task_id,
-            context.current_step,
-            str(exc),
-        )
+        logger.error("责任链资源异常: task=%s step=%s", params.task_id, context.current_step)
         on_event(PipelineEvent(
             status="FAILED",
             progress=context.progress,
             current_step=context.current_step,
-            error=str(exc),
+            error="任务资源不可用",
             error_code=getattr(exc, "code", "resource_error"),
         ))
         raise
     except Exception as exc:
         if is_cancelled_signal(params.task_id):
             logger.info("责任链已被用户取消: task=%s", params.task_id)
-            AssetResolver.cleanup_cancelled_artifacts(
-                params.task_id,
-                current_step=context.current_step,
-                source_type=params.source_type,
-            )
+            context.cleanup_unpublished()
             raise PipelineCancelledError("任务已被用户取消") from exc
-        logger.exception("责任链失败: task=%s step=%s", params.task_id, context.current_step)
+        if isinstance(exc, PluginError):
+            logger.warning("责任链插件失败: task=%s stage=%s code=%s", params.task_id, exc.stage, exc.code)
+            public_error = exc.message
+            error_code = exc.code
+        else:
+            logger.error("责任链失败: task=%s step=%s code=%s", params.task_id, context.current_step, _error_code_for_exception(exc))
+            public_error = "任务执行失败"
+            error_code = _error_code_for_exception(exc)
         on_event(PipelineEvent(
             status="FAILED",
             progress=context.progress,
             current_step=context.current_step,
-            error=str(exc),
-            error_code=_error_code_for_exception(exc),
+            error=public_error,
+            error_code=error_code,
         ))
         raise
 
@@ -691,7 +961,7 @@ def run_pipeline(
 def _locate_uploaded_source(task_id: str) -> Path:
     """定位上传模式下预先落盘的源视频 data/{task_id}/source.*。"""
     try:
-        return AssetResolver.require_source(task_id)
+        return AssetResolver.require_source(task_id).resolve()
     except ResourceError as e:
         raise PipelineError(str(e)) from e
 

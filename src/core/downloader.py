@@ -39,11 +39,14 @@ QUALITY_PRESETS: dict[str, str] = {
     "audio_only": "ba/b",
 }
 DEFAULT_DOWNLOAD_QUALITY = "480p"
+_USE_SETTINGS = object()
 
 
 def resolve_download_format(
     quality: Optional[str] = None,
     format_selector: Optional[str] = None,
+    *,
+    default_format: Optional[str] | object = _USE_SETTINGS,
 ) -> str:
     """解析并生成用于 yt-dlp 的 format 选择表达式。
 
@@ -65,7 +68,10 @@ def resolve_download_format(
             h = int(clean_q)
             return f"bv*[height<={h}]+ba/b[height<={h}]"
 
-    return settings.download_format
+    return (
+        settings.download_format
+        if default_format is _USE_SETTINGS else default_format
+    )
 
 
 class DownloadError(RuntimeError):
@@ -129,7 +135,7 @@ BROWSER_COOKIE_SOURCES = frozenset({
     "safari",
 })
 _probe_cache_lock = threading.Lock()
-_probe_cache: OrderedDict[tuple[str, str, str], tuple[float, ProbeResult]] = OrderedDict()
+_probe_cache: OrderedDict[tuple[str, str, str, str], tuple[float, ProbeResult]] = OrderedDict()
 
 
 def clear_probe_cache() -> None:
@@ -202,10 +208,15 @@ def _configured_fragment_workers() -> int:
 _download_limiter = _DownloadConcurrencyLimiter(_configured_download_workers)
 
 # 对钩子函数进行封装
-def _make_progress_adapter(on_progress: ProgressHook):
+def _make_progress_adapter(
+    on_progress: ProgressHook,
+    cancel_check: Optional[Callable[[], None]] = None,
+):
     """把 yt-dlp 的 hook 字典转换成统一的 DownloadProgress 回调。"""
 
     def hook(d: dict) -> None:
+        if cancel_check is not None:
+            cancel_check()
         status = d.get("status")
         if status not in ("downloading", "finished"):
             return
@@ -232,6 +243,10 @@ def _make_progress_adapter(on_progress: ProgressHook):
                 )
             )
         except Exception:  # 回调里的异常不应中断下载
+            # If the callback failure raced with cancellation, preserve the
+            # cancellation signal instead of swallowing it as a UI callback error.
+            if cancel_check is not None:
+                cancel_check()
             logger.exception("下载进度回调异常，已忽略")
 
     return hook
@@ -242,11 +257,15 @@ def download_video(
     task_id: str,
     on_progress: Optional[ProgressHook] = None,
     *,
-    cookies_file: Optional[Path] = None,
+    cookies_file: Optional[Path] | object = _USE_SETTINGS,
     format_selector: Optional[str] = None,
     quality: Optional[str] = None,
-    proxy: Optional[str] = None,
-    socket_timeout: Optional[int] = None,
+    proxy: Optional[str] | object = _USE_SETTINGS,
+    socket_timeout: Optional[int] | object = _USE_SETTINGS,
+    merge_output_format: Optional[str] | object = _USE_SETTINGS,
+    retries: Optional[int] | object = _USE_SETTINGS,
+    concurrent_fragments: Optional[int] | object = _USE_SETTINGS,
+    cancel_check: Optional[Callable[[], None]] = None,
 ) -> DownloadResult:
     """下载单个视频到 data/{task_id}/source.mp4。
 
@@ -270,21 +289,40 @@ def download_video(
     # 固定基名，扩展名交给 yt-dlp / 合并器决定，最终合并为 mp4
     outtmpl = str(out_dir / f"{SOURCE_VIDEO_STEM}.%(ext)s")
 
-    effective_format = resolve_download_format(quality=quality, format_selector=format_selector)
-    effective_timeout = socket_timeout or getattr(settings, "download_socket_timeout", 30)
-    effective_proxy = proxy or getattr(settings, "download_proxy", None)
+    effective_format = resolve_download_format(
+        quality=quality, format_selector=format_selector
+    )
+    effective_timeout = (
+        getattr(settings, "download_socket_timeout", 30)
+        if socket_timeout is _USE_SETTINGS else socket_timeout
+    )
+    effective_proxy = (
+        getattr(settings, "download_proxy", None)
+        if proxy is _USE_SETTINGS else proxy
+    )
+    effective_merge_format = (
+        settings.merge_output_format
+        if merge_output_format is _USE_SETTINGS else merge_output_format
+    )
+    effective_retries = (
+        settings.download_retries if retries is _USE_SETTINGS else retries
+    )
+    effective_concurrent_fragments = (
+        _configured_fragment_workers()
+        if concurrent_fragments is _USE_SETTINGS else concurrent_fragments
+    )
 
     ydl_opts: dict = {
         "format": effective_format,
-        "merge_output_format": settings.merge_output_format,
+        "merge_output_format": effective_merge_format,
         "outtmpl": outtmpl,
         "noplaylist": True,          # 只下单个视频，忽略播放列表
-        "retries": settings.download_retries,
+        "retries": effective_retries,
         "fragment_retries": 10,      # HLS/DASH 分片专属重试
         "skip_unavailable_fragments": True,  # 允许容忍丢包切片，避免直接中断
         "socket_timeout": effective_timeout,
         # yt-dlp 的 HLS/DASH 分片默认串行；适度并发可避免单个视频被单连接吞吐限制。
-        "concurrent_fragment_downloads": _configured_fragment_workers(),
+        "concurrent_fragment_downloads": effective_concurrent_fragments,
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,          # 关闭 yt-dlp 自带进度条，进度走我们的 hook
@@ -294,16 +332,22 @@ def download_video(
     if effective_proxy:
         ydl_opts["proxy"] = effective_proxy
 
-    cookies = cookies_file or settings.cookies_file
+    cookies = (
+        settings.cookies_file if cookies_file is _USE_SETTINGS else cookies_file
+    )
     if cookies:
         ydl_opts["cookiefile"] = str(cookies)
 
     if on_progress is not None:
-        ydl_opts["progress_hooks"] = [_make_progress_adapter(on_progress)]
+        ydl_opts["progress_hooks"] = [
+            _make_progress_adapter(on_progress, cancel_check)
+        ]
 
     logger.info("开始下载: task=%s url=%s format=%s", task_id, url, effective_format)
 
     try:
+        if cancel_check is not None:
+            cancel_check()
         with _download_limiter.slot() as wait_seconds:
             started = time.monotonic()
             logger.info(
@@ -322,9 +366,15 @@ def download_video(
                     task_id,
                     time.monotonic() - started,
                 )
+        if cancel_check is not None:
+            cancel_check()
     except YtDlpDownloadError as e:
+        if cancel_check is not None:
+            cancel_check()
         raise DownloadError(f"视频下载失败: {e}") from e
     except Exception as e:  # 解析 / 网络等其它错误
+        if cancel_check is not None:
+            cancel_check()
         raise DownloadError(f"下载过程中出错: {e}") from e
 
     video_path = _resolve_output_path(info, out_dir)
@@ -489,12 +539,13 @@ def extract_supported_contents(info: dict) -> tuple[list[str], list[dict]]:
 def probe_video(
     url: str,
     *,
-    cookies_file: Optional[Path] = None,
+    cookies_file: Optional[Path] | object = _USE_SETTINGS,
     cookies_from_browser: Optional[str] = None,
-    format_selector: Optional[str] = None,
+    format_selector: Optional[str] | object = _USE_SETTINGS,
     ttl_sec: Optional[float] = None,
     force_refresh: bool = False,
-    proxy: Optional[str] = None,
+    proxy: Optional[str] | object = _USE_SETTINGS,
+    socket_timeout: Optional[int] | object = _USE_SETTINGS,
 ) -> ProbeResult:
     """探测 URL 是否能被 yt-dlp 解析并找到可下载格式，不落盘下载。
 
@@ -514,13 +565,29 @@ def probe_video(
             return ProbeResult(ok=False, reason="浏览器 Cookie 探测未启用", cached=False)
 
     effective_ttl = ttl_sec if ttl_sec is not None else float(settings.probe_cache_ttl_sec)
-    effective_cookies = None if browser else (cookies_file or settings.cookies_file)
-    effective_format = format_selector or settings.download_format
-    effective_timeout = getattr(settings, "download_socket_timeout", 30)
-    effective_proxy = proxy or getattr(settings, "download_proxy", None)
+    effective_cookies = None if browser else (
+        settings.cookies_file if cookies_file is _USE_SETTINGS else cookies_file
+    )
+    effective_format = (
+        settings.download_format
+        if format_selector is _USE_SETTINGS else format_selector
+    )
+    effective_timeout = (
+        getattr(settings, "download_socket_timeout", 30)
+        if socket_timeout is _USE_SETTINGS else socket_timeout
+    )
+    effective_proxy = (
+        getattr(settings, "download_proxy", None)
+        if proxy is _USE_SETTINGS else proxy
+    )
     use_cache = browser is None
 
-    cache_key = (clean_url, str(effective_cookies or ""), str(effective_format))
+    cache_key = (
+        clean_url,
+        str(effective_cookies or ""),
+        str(effective_format),
+        str(effective_proxy or ""),
+    )
     now = time.time()
 
     if use_cache and not force_refresh and effective_ttl > 0:

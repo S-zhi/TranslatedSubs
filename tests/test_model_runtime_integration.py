@@ -14,6 +14,7 @@ from src.handler import model_settings as model_settings_routes
 from src.service import runner
 from src.service import model_runtime
 from src.service.model_runtime import resolve_runtime
+from src.service.plugin_plan import parse_plugin_plan
 from src.service.orchestrator import PipelineEvent
 from src.handler import tasks as tasks_routes
 from src.store import ModelSettingsStore, TaskStore, TranslationEngineStore
@@ -150,12 +151,14 @@ def test_saved_settings_are_snapshotted_and_used_by_runner(tmp_path, monkeypatch
 
     seen = {}
 
-    def fake_pipeline(params, on_event, *, api_key=None, engine_config=None):
+    def fake_pipeline(params, on_event, *, plugin_manager, plugin_plan, credential_resolver, legacy_cache):
         seen["model"] = params.model
         seen["tts_voice"] = params.tts_voice
-        seen["engine_model"] = engine_config.model
-        seen["engine_base_url"] = engine_config.base_url
-        seen["api_key"] = engine_config.api_key
+        translated = plugin_plan["slots"]["translate"]["config"]
+        seen["engine_model"] = translated["model"]
+        seen["engine_base_url"] = translated["base_url"]
+        seen["api_key"] = credential_resolver(translated["credential_ref"])
+        seen["tts_config"] = plugin_plan["slots"]["tts"]["config"]
         on_event(PipelineEvent("SUCCESS", 100, None, outputs={}))
 
     monkeypatch.setattr(runner, "_store", task_store)
@@ -168,7 +171,13 @@ def test_saved_settings_are_snapshotted_and_used_by_runner(tmp_path, monkeypatch
         "engine_model": "configured-v1",
         "engine_base_url": "https://llm.example/v1",
         "api_key": "sk-unified-secret",
+        "tts_config": {
+            "voice": "af_maple", "target_lang": "en", "bilingual": False,
+            "speed": 1.25, "model_id": "kokoro-v1", "output_format": "wav",
+        },
     }
+    assert "sk-unified-secret" not in rec.plugin_plan_json
+    assert parse_plugin_plan(rec.plugin_plan_json)["slots"]["transcribe"]["config"]["model"] == "small"
     assert task_store.get(rec.id).status == "SUCCESS"
 
 

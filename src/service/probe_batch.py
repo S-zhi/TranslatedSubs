@@ -8,10 +8,11 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 from urllib.parse import urlparse
 
-from src.core.downloader import ProbeResult, probe_video
+from src.core.downloader import ProbeResult
+from src.plugin_system import PluginError
 from src.store import ProbeStore
 
 logger = logging.getLogger(__name__)
@@ -169,7 +170,13 @@ class ProbeBatchManager:
         self._completed = 0
         self._sites = {site.id: _SiteState() for site in STARTUP_PROBE_SITES}
 
-    def start(self, probes: ProbeStore, *, debug: bool = False) -> None:
+    def start(
+        self,
+        probes: ProbeStore,
+        *,
+        probe_provider: Callable[[str], ProbeResult],
+        debug: bool = False,
+    ) -> None:
         with self._lock:
             if debug:
                 self._stop_event.set()
@@ -194,7 +201,7 @@ class ProbeBatchManager:
             started_at = self._run_started_at
             self._thread = threading.Thread(
                 target=self._run,
-                args=(run_id, started_at, probes),
+                args=(run_id, started_at, probes, probe_provider),
                 name="startup-probe-batch",
                 daemon=True,
             )
@@ -209,17 +216,24 @@ class ProbeBatchManager:
     def stop(self) -> None:
         self._stop_event.set()
 
-    def _run(self, run_id: str, started_at: int, probes: ProbeStore) -> None:
+    def _run(
+        self,
+        run_id: str,
+        started_at: int,
+        probes: ProbeStore,
+        probe_provider: Callable[[str], ProbeResult],
+    ) -> None:
         with ThreadPoolExecutor(max_workers=2, thread_name_prefix="startup-probe") as executor:
             futures = {
-                executor.submit(self._probe_one, site, run_id, started_at, probes): site
+                executor.submit(self._probe_one, site, run_id, started_at, probes, probe_provider): site
                 for site in STARTUP_PROBE_SITES
             }
             for future in as_completed(futures):
                 try:
                     future.result()
-                except Exception:
-                    logger.exception("启动站点探测线程异常: site=%s", futures[future].id)
+                except Exception as exc:
+                    code = exc.code if isinstance(exc, PluginError) else "internal_error"
+                    logger.error("启动站点探测线程异常: site=%s code=%s", futures[future].id, code)
                 with self._lock:
                     if self._run_id == run_id:
                         self._completed += 1
@@ -236,6 +250,7 @@ class ProbeBatchManager:
         run_id: str,
         started_at: int,
         probes: ProbeStore,
+        probe_provider: Callable[[str], ProbeResult],
     ) -> None:
         with self._lock:
             current = self._sites[site.id]
@@ -248,9 +263,10 @@ class ProbeBatchManager:
                 current.updated_at = _now_ms()
 
         try:
-            result = probe_video(site.url)
-        except Exception:
-            logger.exception("启动站点探测失败: site=%s", site.id)
+            result = probe_provider(site.url)
+        except Exception as exc:
+            code = exc.code if isinstance(exc, PluginError) else "internal_error"
+            logger.error("启动站点探测失败: site=%s code=%s", site.id, code)
             result = ProbeResult(ok=False, reason="启动探测失败")
 
         try:
@@ -271,8 +287,9 @@ class ProbeBatchManager:
                 uploader=result.uploader,
             )
             created_at = record.created_at
-        except Exception:
-            logger.exception("启动站点探测结果写入失败: site=%s", site.id)
+        except Exception as exc:
+            code = exc.code if isinstance(exc, PluginError) else "internal_error"
+            logger.error("启动站点探测结果写入失败: site=%s code=%s", site.id, code)
             created_at = _now_ms()
 
         with self._lock:
@@ -344,8 +361,9 @@ def start_startup_probe(
     *,
     debug: bool = False,
 ) -> None:
+    from src.handler.tasks import probe_video as probe_provider
     if enabled:
-        probe_batch_manager.start(probes, debug=debug)
+        probe_batch_manager.start(probes, probe_provider=probe_provider, debug=debug)
     else:
         probe_batch_manager.disable()
 

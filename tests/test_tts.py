@@ -1,3 +1,5 @@
+import dataclasses
+import wave
 from pathlib import Path
 import shutil
 import subprocess
@@ -9,11 +11,17 @@ import pytest
 from src.core import tts
 from src.service.orchestrator import (
     PipelineCancelledError,
-    PipelineContext,
+    PipelineHandler,
     PipelineParams,
     SubtitleBurningHandler,
 )
-from src.config import settings
+from src.config import settings, storage
+from src.core import audio_extractor, subtitle_burner, vocal_separator
+from src.plugin_system.manager import PluginManager
+from src.plugin_system.registry import PluginRegistry
+from src.plugins.builtin import audio_ffmpeg, subtitle_ffmpeg, tts_kokoro, vocal_demucs
+from src.service import orchestrator
+from src.service.plugin_plan import parse_plugin_plan, resolve_plugin_plan
 from src.core.ffmpeg_utils import run_ffmpeg
 
 
@@ -85,76 +93,173 @@ def test_tts_cancellation_is_not_wrapped_as_generation_failure(tmp_path, monkeyp
         )
 
 
-def test_tts_generation_failure_keeps_regular_video_success_path(tmp_path, monkeypatch):
-    import src.config as config_module
-    events = []
+class _SeedSubtitleInputs(PipelineHandler):
+    """Seed completed upstream artifacts before exercising the render handler."""
+
+    def __init__(self, task_dir: Path):
+        super().__init__()
+        self._task_dir = task_dir
+
+    def process(self, context):
+        context.resources.video_path = self._task_dir / "source.mp4"
+        context.resources.original_srt_path = self._task_dir / "original.srt"
+        context.resources.translated_srt_path = self._task_dir / "translated.srt"
+
+
+def _run_formal_dub_pipeline(tmp_path, monkeypatch, mode, *, fail_tts=False):
+    from src.plugins.builtin import factories as builtin_factories
+
+    task_id = f"plugin-dub-{mode}-{'error' if fail_tts else 'ok'}"
+    data_root = tmp_path / "data"
+    task_dir = data_root / task_id
+    task_dir.mkdir(parents=True)
+    runtime_settings = dataclasses.replace(settings, _data_dir=data_root)
+    monkeypatch.setattr(storage, "settings", runtime_settings)
+
+    (task_dir / "source.mp4").write_bytes(b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2")
+    _srt(task_dir / "original.srt", "original text")
+    _srt(task_dir / "translated.srt", "translated text")
+    # The custom handler seeds completed upstream outputs; provide provenance
+    # records so the normal plugin input fingerprint path remains enforced.
+    (task_dir / "transcribe.plugin-meta.json").write_text("{}", encoding="utf-8")
+    (task_dir / "translate.plugin-meta.json").write_text("{}", encoding="utf-8")
+
+    def fake_extract(video_path, output_task_id, *, sample_rate, channels, output_path, **kwargs):
+        with wave.open(str(output_path), "wb") as output:
+            output.setnchannels(channels)
+            output.setsampwidth(2)
+            output.setframerate(sample_rate)
+            output.writeframes(b"\x01\x00" * channels * sample_rate)
+        return audio_extractor.AudioResult(
+            audio_path=output_path, sample_rate=sample_rate, channels=channels,
+            duration=1.0, filesize=output_path.stat().st_size,
+        )
+
+    monkeypatch.setattr(audio_ffmpeg.audio_extractor, "extract_audio", fake_extract)
+
+    def fake_burn(video_path, srt_path, burn_task_id, *, mode, **kwargs):
+        output_path = task_dir / f"output_{mode}.mp4"
+        output_path.write_bytes(b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2")
+        return subtitle_burner.BurnResult(
+            output_path=output_path, mode=mode, filesize=output_path.stat().st_size,
+        )
+
+    monkeypatch.setattr(subtitle_ffmpeg.subtitle_burner, "burn_subtitles", fake_burn)
+
+    def fake_tts(translated, original, output_path, **kwargs):
+        if fail_tts:
+            raise tts.TTSError("weights unavailable")
+        with wave.open(str(output_path), "wb") as output:
+            output.setnchannels(1)
+            output.setsampwidth(2)
+            output.setframerate(24000)
+            output.writeframes(b"\x02\x00" * 24000)
+        return output_path
+
+    monkeypatch.setattr(tts_kokoro.tts_core, "generate_timeline_audio", fake_tts)
+
+    def fake_separate(audio_path, separation_task_id, *, purpose, vocal_path,
+                      background_path, **kwargs):
+        for path in (vocal_path, background_path):
+            if path is None:
+                continue
+            with wave.open(str(path), "wb") as output:
+                output.setnchannels(2)
+                output.setsampwidth(2)
+                output.setframerate(48000)
+                output.writeframes(b"\x03\x00" * 2 * 48000)
+        return vocal_separator.SeparationOutputs(
+            vocal_path=vocal_path, background_path=background_path,
+        )
+
+    monkeypatch.setattr(vocal_demucs.vocal_separator, "separate_stems", fake_separate)
+
+    commands = []
+
+    def fake_ffmpeg(command, on_progress=None, *, task_id=None, **kwargs):
+        commands.append(command)
+        output_path = Path(command[-1])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if output_path.suffix == ".wav":
+            with wave.open(str(output_path), "wb") as output:
+                output.setnchannels(1)
+                output.setsampwidth(2)
+                output.setframerate(48000)
+                output.writeframes(b"\x01\x00" * 48000)
+        else:
+            output_path.write_bytes(b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2")
+
+    monkeypatch.setattr(subtitle_ffmpeg.ffmpeg_utils, "run_ffmpeg", fake_ffmpeg)
+
+    plan_settings = SimpleNamespace(
+        vocal_separation_enabled=True,
+        vocal_separation_backend="demucs", vocal_separation_model="htdemucs",
+        vocal_separation_threads=1, vocal_separation_command="python -m demucs.separate",
+        vocal_separation_timeout=30,
+    )
+    engine = SimpleNamespace(
+        id="fixture-engine", api_type="openai_compatible",
+        base_url="https://translate.example.test/v1", model="fixture-model", api_key=None,
+    )
     params = PipelineParams(
-        task_id="task_tts_error", url="u", source_lang="en", target_lang="zh-CN",
-        tts_enabled=True,
+        task_id=task_id, url="", source_lang="en", target_lang="zh-CN",
+        mode="mono", burn="soft", model="local:tiny", engine="fixture-engine",
+        source_type="upload", need_subtitle=True, tts_enabled=True,
+        tts_voice="auto", original_voice_mode=mode,
     )
-    context = PipelineContext(params=params, on_event=events.append)
-    context.resources.video_path = tmp_path / "source.mp4"
-    context.resources.translated_srt_path = tmp_path / "translated.srt"
-    context.resources.original_srt_path = tmp_path / "original.srt"
-    context.resources.output_video_path = tmp_path / "output_hard.mp4"
-    monkeypatch.setattr(config_module, "task_dir", lambda _: tmp_path)
-    monkeypatch.setattr("src.service.orchestrator.run_ffmpeg", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        "src.service.orchestrator.generate_timeline_audio",
-        lambda *args, **kwargs: (_ for _ in ()).throw(tts.TTSError("weights unavailable")),
+    plan = parse_plugin_plan(resolve_plugin_plan(
+        source_type="upload", source_lang="en", target_lang="zh-CN", mode="mono",
+        burn="soft", model="local:tiny", engine="fixture-engine", need_subtitle=True,
+        quality=None, tts_enabled=True, tts_voice="auto", original_voice_mode=mode,
+        settings=plan_settings, engines=SimpleNamespace(get=lambda _engine_id: engine),
+        plugin_defaults={},
+    ))
+    registry = PluginRegistry()
+    for factory in builtin_factories():
+        registry.register(factory.manifest, factory)
+    manager = PluginManager(registry)
+    events = []
+    handler_chain = _SeedSubtitleInputs(task_dir)
+    handler_chain.set_next(SubtitleBurningHandler())
+    result = orchestrator.run_pipeline(
+        params, events.append, plugin_manager=manager, plugin_plan=plan,
+        credential_resolver=lambda _ref: "fixture-secret", legacy_cache=False,
+        handler_chain=handler_chain,
     )
-    outputs = {"video": str(context.resources.output_video_path)}
+    if result.status != "SUCCESS":
+        raise AssertionError([(event.current_step, event.error) for event in events])
+    return result, events, commands, task_dir
 
-    SubtitleBurningHandler()._add_dubbed_video(context, outputs)
 
-    assert outputs == {"video": str(context.resources.output_video_path)}
-    assert events[-1].tts_status == "FAILED"
-    assert "weights unavailable" in events[-1].tts_error
+def test_tts_generation_failure_keeps_regular_video_success_path(tmp_path, monkeypatch):
+    result, events, _, task_dir = _run_formal_dub_pipeline(
+        tmp_path, monkeypatch, "keep", fail_tts=True,
+    )
+
+    assert result.status == "SUCCESS"
+    assert result.outputs["video"] == str(task_dir / "output_soft.mp4")
+    assert result.outputs["subtitle"] == str(task_dir / "translated.srt")
+    assert "dubbedVideo" not in result.outputs
+    failure = next(event for event in events if event.tts_status == "FAILED")
+    assert failure.tts_error
+    assert "weights unavailable" not in failure.tts_error
 
 
 @pytest.mark.parametrize(
     ("mode", "expected_input_names", "expected_filters", "expected_amix"),
     [
-        ("keep", ["tts_source.wav", "speech.wav"], [], "amix=inputs=2"),
-        ("lower", ["background.wav", "vocal_stem.wav", "speech.wav"],
+        ("keep", ["tts_source.wav", "dubbed.wav"], [], "amix=inputs=2"),
+        ("lower", ["background.wav", "vocal_stem.wav", "dubbed.wav"],
          ["[1:a]volume=0.25[vocal]"], "amix=inputs=3"),
-        ("replace", ["background.wav", "speech.wav"], [], "amix=inputs=2"),
+        ("replace", ["background.wav", "dubbed.wav"], [], "amix=inputs=2"),
     ],
 )
 def test_dubbed_mix_uses_expected_original_voice_stems(
     tmp_path, monkeypatch, mode, expected_input_names, expected_filters, expected_amix,
 ):
-    import src.config as config_module
-    import src.core.vocal_separator as separator
-    from src.service import orchestrator
-
-    events = []
-    context = PipelineContext(
-        params=PipelineParams(
-            task_id=f"task_tts_{mode}", url="u", source_lang="en", target_lang="zh-CN",
-            tts_enabled=True, original_voice_mode=mode,
-        ),
-        on_event=events.append,
+    result, events, commands, task_dir = _run_formal_dub_pipeline(
+        tmp_path, monkeypatch, mode,
     )
-    context.resources.video_path = tmp_path / "source.mp4"
-    context.resources.audio_path = tmp_path / "audio.wav"
-    context.resources.original_srt_path = tmp_path / "original.srt"
-    context.resources.translated_srt_path = tmp_path / "translated.srt"
-    context.resources.output_video_path = tmp_path / "output_hard.mp4"
-    (tmp_path / "vocal_stem.wav").write_bytes(b"stem")
-    background = tmp_path / "background.wav"
-    background.write_bytes(b"background")
-    speech = tmp_path / "speech.wav"
-    speech.write_bytes(b"speech")
-    commands = []
-    monkeypatch.setattr(config_module, "task_dir", lambda _: tmp_path)
-    monkeypatch.setattr(orchestrator, "run_ffmpeg", lambda command, **kwargs: commands.append(command))
-    monkeypatch.setattr(orchestrator, "probe_duration", lambda *args: 2.0)
-    monkeypatch.setattr(orchestrator, "generate_timeline_audio", lambda *args, **kwargs: speech)
-    monkeypatch.setattr(separator, "separate_background", lambda *args, **kwargs: background)
-
-    SubtitleBurningHandler()._add_dubbed_video(context, {"video": str(context.resources.output_video_path)})
-
     mix_command = next(command for command in commands if "-filter_complex" in command)
     input_names = [Path(mix_command[index + 1]).name for index, token in enumerate(mix_command[:-1]) if token == "-i"]
     filter_graph = mix_command[mix_command.index("-filter_complex") + 1]
@@ -164,6 +269,9 @@ def test_dubbed_mix_uses_expected_original_voice_stems(
         assert expected in filter_graph
     if mode == "replace":
         assert "[1:a]volume=0.25[vocal]" not in filter_graph
+    assert result.status == "SUCCESS"
+    assert result.outputs["dubbedVideo"] == str(task_dir / "output_dubbed.mp4")
+    assert not any(event.tts_status == "FAILED" for event in events)
 
 
 def test_overlong_fake_kokoro_audio_is_compressed_without_losing_tail(tmp_path, monkeypatch):

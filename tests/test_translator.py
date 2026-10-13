@@ -237,6 +237,78 @@ def test_translate_srt_empty(tmp_path, out_dir):
     assert res.srt_path.exists()
 
 
+def test_translate_texts_uses_explicit_remote_batch_size(monkeypatch):
+    calls = []
+
+    def fake_fallback(batch, source_lang, target_lang, api_key, **kwargs):
+        calls.append(list(batch))
+        return [f"译:{text}" for text in batch]
+
+    monkeypatch.setattr(translator, "_translate_with_fallback", fake_fallback)
+    monkeypatch.setattr(
+        translator,
+        "settings",
+        SimpleNamespace(translate_batch_size=99, deepseek_api_key="legacy"),
+    )
+
+    translated = translator.translate_texts(
+        ["a", "b", "c", "d", "e"], "en", "zh-CN",
+        api_key="snapshot-key",
+        engine_config=SimpleNamespace(
+            api_type="openai_compatible", api_key="snapshot-key"
+        ),
+        batch_size=2,
+    )
+
+    assert translated == ["译:a", "译:b", "译:c", "译:d", "译:e"]
+    assert calls == [["a", "b"], ["c", "d"], ["e"]]
+
+
+def test_translate_texts_uses_explicit_local_batch_size(monkeypatch):
+    calls = []
+
+    class FakeManager:
+        def translate_texts(self, texts, *, cancel_check=None):
+            calls.append(list(texts))
+            return [f"译:{text}" for text in texts]
+
+    monkeypatch.setattr(translator, "get_translation_model_manager", FakeManager)
+    monkeypatch.setattr(
+        translator,
+        "settings",
+        SimpleNamespace(local_translate_batch_size=99),
+    )
+
+    translated = translator.translate_texts(
+        ["a", "b", "c", "d", "e"], "en", "zh-CN",
+        engine_config=SimpleNamespace(api_type="local_ct2"),
+        local_batch_size=2,
+    )
+
+    assert translated == ["译:a", "译:b", "译:c", "译:d", "译:e"]
+    assert calls == [["a", "b"], ["c", "d"], ["e"]]
+
+
+def test_translation_fallback_prioritizes_cancellation(monkeypatch):
+    from src.plugin_system import PluginCancelled
+
+    monkeypatch.setattr(
+        translator,
+        "_translate_batch_with_retry",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            TranslateError("bad response", code="invalid_response")
+        ),
+    )
+
+    def cancel_check():
+        raise PluginCancelled("cancelled")
+
+    with pytest.raises(PluginCancelled, match="cancelled"):
+        translator._translate_with_fallback(
+            ["hello"], "en", "zh-CN", "key", cancel_check=cancel_check,
+        )
+
+
 def test_lang_name_lookup_and_config_override(monkeypatch):
     """测试 ISO 语言名称的转换以及 SUBTRANS_LANG_NAMES 覆盖/扩展能力。"""
     from src.config.config import Settings, DEFAULT_LANG_NAMES
