@@ -11,7 +11,7 @@ SSE 端点轮询库表即可拿到实时进度。
 from __future__ import annotations
 
 import logging
-import inspect
+import os
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -21,6 +21,7 @@ from src.config import OUTPUT_VIDEO_NAMES, artifact_name, settings, task_dir
 from src.service.orchestrator import (
     PipelineEvent,
     PipelineParams,
+    PipelineCancelledError,
     is_cancelled_signal,
     register_cancellation_signal,
     run_pipeline,
@@ -28,6 +29,8 @@ from src.service.orchestrator import (
     unregister_cancellation_signal,
 )
 from src.service.asset_resolver import AssetResolver, ResourceError, ResourceState
+from src.service.plugin_plan import ensure_plan, parse_plugin_plan
+from src.plugin_system import PluginError
 from src.store import STATUSES, TaskStore, TranslationEngineStore
 
 logger = logging.getLogger(__name__)
@@ -85,6 +88,13 @@ _engine_store = TranslationEngineStore(settings.db_path)
 
 _procs: dict[str, list[subprocess.Popen]] = {}
 _procs_lock = threading.Lock()
+_task_state_locks: dict[str, threading.RLock] = {}
+_task_state_locks_lock = threading.Lock()
+
+
+def _task_state_lock(task_id: str) -> threading.RLock:
+    with _task_state_locks_lock:
+        return _task_state_locks.setdefault(task_id, threading.RLock())
 
 
 def register_process(task_id: str, proc: subprocess.Popen) -> None:
@@ -124,19 +134,10 @@ def _terminate_process(proc: subprocess.Popen, task_id: Optional[str] = None) ->
 
 
 def _cleanup_partial_artifacts(task_id: str) -> None:
-    """清理任务取消后留下的半截/临时产物（如半截 output.mp4、.part/.ytdl 临时文件等）。"""
+    """清理 yt-dlp 和本次插件调用留下的临时文件，不删已发布产物。"""
     d = task_dir(task_id)
     if not d.exists():
         return
-
-    for output_name in (*OUTPUT_VIDEO_NAMES, "output_dubbed.mp4"):
-        out_video = d / output_name
-        if out_video.exists():
-            try:
-                out_video.unlink()
-                logger.info("已清理取消任务的半截成品视频: task=%s, path=%s", task_id, out_video)
-            except Exception as e:
-                logger.warning("清理半截成品视频失败: task=%s, err=%s", task_id, e)
 
     try:
         for p in d.iterdir():
@@ -159,16 +160,15 @@ def _cleanup_partial_artifacts(task_id: str) -> None:
 
 def cancel_pipeline(task_id: str) -> bool:
     """取消运行中的任务，终止其关联子进程，清理半截产物并更新状态为 CANCELLED。"""
-    set_cancelled_signal(task_id)
-
-    rec = _store.get(task_id)
-    if rec is None:
-        return False
-
-    _store.update(task_id, is_cancelling=1)
+    lock = _task_state_lock(task_id)
+    with lock:
+        set_cancelled_signal(task_id)
+        rec = _store.get(task_id)
+        if rec is None or rec.status in {"SUCCESS", "FAILED", "CANCELLED"}:
+            return False
+        _store.update(task_id, is_cancelling=1)
+        _store.update(task_id, status="CANCELLED", error="用户取消", error_code="cancelled")
     try:
-        _store.update(task_id, status="CANCELLED", error="用户取消")
-
         with _procs_lock:
             procs = _procs.pop(task_id, [])
 
@@ -186,12 +186,6 @@ def cancel_pipeline(task_id: str) -> bool:
                     proc.wait(timeout=1.0)
                 except Exception as e:
                     logger.warning("强制杀死子进程失败: task=%s, err=%s", task_id, e)
-
-        AssetResolver.cleanup_cancelled_artifacts(
-            task_id,
-            current_step=rec.current_step,
-            source_type=rec.source_type,
-        )
 
         logger.info("任务已取消并清理产物: %s", task_id)
         return True
@@ -242,14 +236,33 @@ def recover_interrupted_tasks() -> list[str]:
 
 def _run(task_id: str) -> None:
     """线程内执行：读记录 → 跑五步 → 进度写库。"""
-    rec = _store.get(task_id)
-    if rec is None:
-        logger.warning("任务不存在，跳过执行: %s", task_id)
-        return
+    with _task_state_lock(task_id):
+        rec = _store.get(task_id)
+        if rec is None:
+            logger.warning("任务不存在，跳过执行: %s", task_id)
+            return
+        # Serialize registration with cancel_pipeline so a cancellation cannot
+        # be erased between the initial row read and Event registration.
+        if rec.status == "CANCELLED":
+            logger.info("任务已被取消，跳过执行: %s", task_id)
+            unregister_cancellation_signal(task_id)
+            return
+        register_cancellation_signal(task_id)
 
-    register_cancellation_signal(task_id, is_cancelled=(rec.status == "CANCELLED"))
-    if rec.status == "CANCELLED":
-        logger.info("任务已被取消，跳过执行: %s", task_id)
+    legacy_cache = rec.plugin_plan_json is None
+    try:
+        rec = ensure_plan(rec, _store, _engine_store, settings)
+        plugin_plan = parse_plugin_plan(rec.plugin_plan_json)
+    except Exception as exc:
+        code = "plugin_plan_migration_failed" if legacy_cache else "plugin_plan_invalid"
+        logger.warning("任务插件计划不可用: task=%s code=%s", task_id, code)
+        with _task_state_lock(task_id):
+            current = _store.get(task_id)
+            if (not is_cancelled_signal(task_id) and current is not None
+                    and current.status not in {"CANCELLED", "SUCCESS", "FAILED"}):
+                _store.update(
+                    task_id, status="FAILED", error="任务插件计划不可用", error_code=code
+                )
         unregister_cancellation_signal(task_id)
         return
 
@@ -278,94 +291,117 @@ def _run(task_id: str) -> None:
     }
 
     def on_event(ev: PipelineEvent) -> None:
-        if is_cancelled_signal(task_id):
-            return
+        lock = _task_state_lock(task_id)
+        with lock:
+            current = _store.get(task_id)
+            if is_cancelled_signal(task_id) or current is None or current.status in {"CANCELLED", "SUCCESS", "FAILED"}:
+                return
+            status_changed = ev.status != last_state["status"]
+            progress_decade_changed = (ev.progress // 10) != (last_state["progress"] // 10)
+            progress_reached_100 = ev.progress == 100
+            is_terminal = ev.status in {"SUCCESS", "FAILED", "CANCELLED"}
+            has_extra = (
+                ev.title is not None and ev.title != last_state["title"]
+            ) or ev.error is not None or ev.error_code is not None or bool(ev.outputs) or ev.tts_status is not None or ev.tts_error is not None
 
-        status_changed = ev.status != last_state["status"]
-        progress_decade_changed = (ev.progress // 10) != (last_state["progress"] // 10)
-        progress_reached_100 = ev.progress == 100
-        is_terminal = ev.status in {"SUCCESS", "FAILED", "CANCELLED"}
-        has_extra = (
-            ev.title is not None and ev.title != last_state["title"]
-        ) or ev.error is not None or ev.error_code is not None or bool(ev.outputs) or ev.tts_status is not None or ev.tts_error is not None
+            if not (status_changed or progress_decade_changed or progress_reached_100 or is_terminal or has_extra):
+                return
 
-        if not (status_changed or progress_decade_changed or progress_reached_100 or is_terminal or has_extra):
-            return
+            fields: dict = {
+                "status": ev.status,
+                "progress": ev.progress,
+                "current_step": ev.current_step,
+            }
+            if ev.title is not None:
+                fields["title"] = ev.title
+                last_state["title"] = ev.title
+            if ev.error is not None:
+                fields["error"] = ev.error
+            if ev.error_code is not None:
+                fields["error_code"] = ev.error_code
+            if ev.outputs:
+                video = ev.outputs.get("video")
+                subtitle = ev.outputs.get("subtitle")
+                fields["output_video"] = artifact_name(video) if video else None
+                fields["output_subtitle"] = artifact_name(subtitle) if subtitle else None
+                dubbed = ev.outputs.get("dubbedVideo")
+                fields["output_dubbed_video"] = artifact_name(dubbed) if dubbed else None
+            if ev.tts_status is not None:
+                fields["tts_status"] = ev.tts_status
+            if ev.tts_error is not None:
+                fields["tts_error"] = ev.tts_error
 
-        fields: dict = {
-            "status": ev.status,
-            "progress": ev.progress,
-            "current_step": ev.current_step,
-        }
-        if ev.title is not None:
-            fields["title"] = ev.title
-            last_state["title"] = ev.title
-        if ev.error is not None:
-            fields["error"] = ev.error
-        if ev.error_code is not None:
-            fields["error_code"] = ev.error_code
-        if ev.outputs:
-            video = ev.outputs.get("video")
-            subtitle = ev.outputs.get("subtitle")
-            fields["output_video"] = artifact_name(video) if video else None
-            fields["output_subtitle"] = artifact_name(subtitle) if subtitle else None
-            dubbed = ev.outputs.get("dubbedVideo")
-            fields["output_dubbed_video"] = artifact_name(dubbed) if dubbed else None
-        if ev.tts_status is not None:
-            fields["tts_status"] = ev.tts_status
-        if ev.tts_error is not None:
-            fields["tts_error"] = ev.tts_error
+            _store.update(task_id, **fields)
+            last_state["status"] = ev.status
+            last_state["progress"] = ev.progress
 
-        _store.update(task_id, **fields)
-        last_state["status"] = ev.status
-        last_state["progress"] = ev.progress
+    def resolve_credential(ref: str) -> str:
+        if ref == "settings:transcriber_api_key":
+            value = getattr(settings, "transcriber_api_key", None)
+            if isinstance(value, str) and value:
+                return value
+            raise PluginError("credential_missing", "transcribe", "builtin.whisper", "credential is unavailable")
+        if ref == "settings:cookies_file":
+            value = getattr(settings, "cookies_file", None)
+            if isinstance(value, (str, os.PathLike)):
+                path = os.fspath(value)
+                if path:
+                    return path
+            raise PluginError("credential_missing", "download", "builtin.ytdlp", "credential is unavailable")
+        prefix = "translation_engine:"
+        suffix = ":api_key"
+        if isinstance(ref, str) and ref.startswith(prefix) and ref.endswith(suffix):
+            engine_id = ref[len(prefix):-len(suffix)]
+            if engine_id:
+                engine_record = _engine_store.get(engine_id)
+                value = getattr(engine_record, "api_key", None) if engine_record is not None else None
+                if isinstance(value, str) and value:
+                    return value
+            raise PluginError("credential_missing", "translate", "builtin.translation_engine", "credential is unavailable")
+        raise PluginError("invalid_input", "download", "host", "credential reference is not allowed")
 
-    # 所有任务都从持久化配置读取引擎。DeepSeek 只是旧版默认配置 ID，
-    # 由启动时的 seed 记录兼容环境变量，不再绕过数据库配置。
-    engine_config = _engine_store.get(rec.engine)
-    if engine_config is None:
-        _store.update(task_id, status="FAILED", error="翻译引擎配置不存在", error_code="engine_not_found")
-        unregister_cancellation_signal(task_id)
-        return
     try:
-        pipeline_kwargs = {
-            "api_key": None,
-        }
-        pipeline_kwargs["engine_config"] = engine_config
-        # 保持第三方/旧测试注入的简化 runner 可用；正式编排器支持 engine_config。
-        if "engine_config" in inspect.signature(run_pipeline).parameters:
-            run_pipeline(params, on_event, **pipeline_kwargs)
-        else:
-            run_pipeline(params, on_event, api_key=None)
+        from src.plugins import get_plugin_manager
+        run_pipeline(
+            params, on_event, plugin_manager=get_plugin_manager(),
+            plugin_plan=plugin_plan, credential_resolver=resolve_credential,
+            legacy_cache=legacy_cache,
+        )
     except ResourceError as e:
         if is_cancelled_signal(task_id):
             logger.info("任务已被取消: %s", task_id)
-            AssetResolver.cleanup_cancelled_artifacts(
-                task_id,
-                current_step=rec.current_step if rec else None,
-                source_type=rec.source_type if rec else "url",
-            )
-            _store.update(task_id, resource_status="MISSING")
             return
-        logger.error("任务由于资源异常执行失败: %s - %s", task_id, str(e))
-        if last_state["status"] != "FAILED":
-            _store.update(task_id, status="FAILED", error=str(e), error_code=getattr(e, "code", "resource_error"))
-            last_state["status"] = "FAILED"
+        logger.error("任务由于资源异常执行失败: %s", task_id)
+        with _task_state_lock(task_id):
+            current = _store.get(task_id)
+            if current is not None and current.status not in {"CANCELLED", "SUCCESS", "FAILED"}:
+                _store.update(task_id, status="FAILED", error="任务资源不可用", error_code=getattr(e, "code", "resource_error"))
+                last_state["status"] = "FAILED"
+    except PipelineCancelledError:
+        set_cancelled_signal(task_id)
+        with _task_state_lock(task_id):
+            current = _store.get(task_id)
+            if current is not None and current.status not in {"SUCCESS", "FAILED", "CANCELLED"}:
+                _store.update(
+                    task_id, status="CANCELLED", error="任务已取消", error_code="cancelled"
+                )
+                last_state["status"] = "CANCELLED"
+        logger.info("流水线协作式取消: task=%s", task_id)
     except Exception as exc:
         if is_cancelled_signal(task_id):
             logger.info("任务已被取消: %s", task_id)
-            AssetResolver.cleanup_cancelled_artifacts(
-                task_id,
-                current_step=rec.current_step if rec else None,
-                source_type=rec.source_type if rec else "url",
-            )
-            _store.update(task_id, resource_status="MISSING")
             return
-        logger.exception("流水线执行失败: %s", task_id)
-        if last_state["status"] != "FAILED":
-            err_code = getattr(exc, "code", "execution_error")
-            _store.update(task_id, status="FAILED", error=str(exc) or "执行异常", error_code=err_code)
-            last_state["status"] = "FAILED"
+        if isinstance(exc, PluginError):
+            err_code, public_error = exc.code, exc.message
+            logger.warning("流水线插件失败: task=%s stage=%s code=%s", task_id, exc.stage, exc.code)
+        else:
+            err_code, public_error = getattr(exc, "code", "execution_error"), "任务执行失败"
+            logger.error("流水线执行失败: task=%s code=%s", task_id, err_code)
+        with _task_state_lock(task_id):
+            current = _store.get(task_id)
+            if current is not None and current.status not in {"CANCELLED", "SUCCESS", "FAILED"}:
+                _store.update(task_id, status="FAILED", error=public_error, error_code=err_code)
+                last_state["status"] = "FAILED"
     finally:
         with _procs_lock:
             remaining_procs = _procs.pop(task_id, [])

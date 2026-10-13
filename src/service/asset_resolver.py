@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import logging
 import os
+import hashlib
+import json
+import tempfile
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -103,6 +106,169 @@ class ResourceError(RuntimeError):
 
 
 class AssetResolver:
+    _PLUGIN_META_SCHEMA = 1
+
+    @staticmethod
+    def _sha256_file(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    @staticmethod
+    def plugin_meta_path(task_id: str, purpose: str) -> Path:
+        return task_dir(task_id) / f"{purpose}.plugin-meta.json"
+
+    @classmethod
+    def plugin_input_sha256(
+        cls,
+        inputs: dict[str, object],
+        *,
+        upstream_purposes: Optional[dict[str, str]] = None,
+    ) -> str:
+        """Hash input content and producer provenance without storing input values."""
+        upstream_purposes = upstream_purposes or {}
+        entries: dict[str, object] = {}
+        for name, value in sorted(inputs.items()):
+            if isinstance(value, Path):
+                if not value.is_file() or value.stat().st_size <= 0:
+                    raise ResourceError("插件输入文件缺失或为空", ResourceState.DELETED)
+                item: dict[str, object] = {"sha256": cls._sha256_file(value)}
+                producer = upstream_purposes.get(name)
+                if producer:
+                    # task_dir may be customized, so derive the metadata beside the input.
+                    metadata = value.parent / f"{producer}.plugin-meta.json"
+                    if not metadata.is_file():
+                        raise ResourceError("插件输入来源记录缺失", ResourceState.DELETED)
+                    item["producer_sha256"] = cls._sha256_file(metadata)
+                entries[name] = item
+            else:
+                entries[name] = {"value_sha256": hashlib.sha256(
+                    json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+                ).hexdigest()}
+        payload = json.dumps(entries, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def plugin_cache_matches(
+        cls,
+        task_id: str,
+        *,
+        stage: str,
+        operation: str,
+        purpose: str,
+        plugin_id: str,
+        implementation_version: str,
+        config: dict,
+        inputs: dict[str, object],
+        output_names: tuple[str, ...],
+        upstream_purposes: Optional[dict[str, str]] = None,
+        legacy_cache: bool = False,
+        legacy_compatible: bool = False,
+    ) -> bool:
+        """Return whether a purpose cache matches the frozen invocation identity."""
+        directory = task_dir(task_id)
+        outputs = tuple(directory / name for name in output_names)
+        if not all(cls.check_file_state(path) == ResourceState.AVAILABLE for path in outputs):
+            cls.invalidate_plugin_cache(task_id, purpose, output_names)
+            return False
+        expected = cls.plugin_metadata(
+            task_id=task_id, stage=stage, operation=operation, purpose=purpose,
+            plugin_id=plugin_id, implementation_version=implementation_version,
+            config=config, inputs=inputs, output_names=output_names,
+            upstream_purposes=upstream_purposes,
+        )
+        metadata_path = cls.plugin_meta_path(task_id, purpose)
+        try:
+            actual = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            actual = None
+        if actual == expected:
+            return True
+        if actual is None and legacy_cache and legacy_compatible:
+            cls.write_plugin_cache_metadata(task_id, expected)
+            return True
+        cls.invalidate_plugin_cache(task_id, purpose, output_names)
+        return False
+
+    @classmethod
+    def plugin_metadata(
+        cls,
+        *,
+        task_id: str,
+        stage: str,
+        operation: str,
+        purpose: str,
+        plugin_id: str,
+        implementation_version: str,
+        config: dict,
+        inputs: dict[str, object],
+        output_names: tuple[str, ...],
+        upstream_purposes: Optional[dict[str, str]] = None,
+    ) -> dict:
+        config_json = json.dumps(dict(config), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return {
+            "schema_version": cls._PLUGIN_META_SCHEMA,
+            "stage": stage,
+            "operation": operation,
+            "purpose": purpose,
+            "plugin_id": plugin_id,
+            "implementation_version": implementation_version,
+            "config_sha256": hashlib.sha256(config_json.encode("utf-8")).hexdigest(),
+            "input_sha256": cls.plugin_input_sha256(inputs, upstream_purposes=upstream_purposes),
+            "output_names": list(output_names),
+        }
+
+    @classmethod
+    def write_plugin_cache_metadata(cls, task_id: str, metadata: dict) -> None:
+        directory = task_dir(task_id)
+        directory.mkdir(parents=True, exist_ok=True)
+        path = cls.plugin_meta_path(task_id, str(metadata["purpose"]))
+        encoded = json.dumps(metadata, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=directory)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        except BaseException:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+            raise
+
+    @classmethod
+    def invalidate_plugin_cache(
+        cls, task_id: str, purpose: str, output_names: tuple[str, ...] = ()
+    ) -> None:
+        directory = task_dir(task_id)
+        (directory / f"{purpose}.plugin-meta.json").unlink(missing_ok=True)
+        for name in output_names:
+            (directory / name).unlink(missing_ok=True)
+        if purpose in {"separate.asr", "separate.dubbing"}:
+            # The Demucs core sidecar is a second-level cache; remove it whenever
+            # the host invalidates separation provenance, even if audio bytes match.
+            suffix = "asr" if purpose == "separate.asr" else "dubbing"
+            (directory / f"separation.{suffix}.meta.json").unlink(missing_ok=True)
+
+    @classmethod
+    def cleanup_unpublished_invocation(
+        cls, task_id: str, paths: set[Path], purposes: set[str]
+    ) -> None:
+        """Remove only artifacts owned by a failed or cancelled invocation."""
+        for path in paths:
+            try:
+                if path.is_file() or path.is_symlink():
+                    path.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("清理未发布插件产物失败: task=%s, err=%s", task_id, type(exc).__name__)
+        directory = task_dir(task_id)
+        for purpose in purposes:
+            (directory / f"{purpose}.plugin-meta.json").unlink(missing_ok=True)
+
     @staticmethod
     def artifact(task_id: str, name: str, *, store: Optional[ArtifactStore] = None) -> ProcessingArtifact:
         """Build a processing artifact without touching the filesystem."""

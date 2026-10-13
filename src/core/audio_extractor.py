@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import wave
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -60,8 +61,9 @@ def extract_audio(
     *,
     sample_rate: Optional[int] = None,
     channels: Optional[int] = None,
+    output_path: Path | str | None = None,
 ) -> AudioResult:
-    """从视频提取音频到 data/{task_id}/audio.wav。
+    """从视频提取音频到任务目录，默认路径仍是 audio.wav。
     可以共用
     Args:
         video_path: 输入视频路径（通常是下载阶段的 source.mp4）。
@@ -69,6 +71,7 @@ def extract_audio(
         on_progress: 可选进度回调。
         sample_rate: 采样率，默认取配置（16000）。
         channels: 声道数，默认取配置（1）。
+        output_path: 可选任务目录内 WAV 目标路径。
 
     Returns:
         AudioResult
@@ -93,7 +96,23 @@ def extract_audio(
     ch = channels or settings.audio_channels
 
     out_dir = ensure_task_dir(task_id)
-    audio_path = out_dir / AUDIO_FILENAME
+    audio_path = out_dir / AUDIO_FILENAME if output_path is None else Path(output_path)
+    try:
+        task_root = out_dir.resolve(strict=True)
+        resolved_output = audio_path.resolve()
+        resolved_output.relative_to(task_root)
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise AudioExtractError("音频输出路径必须位于任务目录内") from exc
+    if audio_path.is_symlink() or resolved_output.parent != task_root:
+        raise AudioExtractError("音频输出路径必须是任务目录根目录中的普通文件")
+    if output_path is not None:
+        if (
+            not audio_path.is_absolute()
+            or audio_path.name not in {"audio.wav", "tts_source.wav"}
+        ):
+            raise AudioExtractError("音频输出路径必须是任务目录内的保留 WAV 目标")
+    if audio_path.resolve() == video_path.resolve():
+        raise AudioExtractError("音频输出路径不能覆盖输入视频")
 
     total = _probe_duration(video_path)
 
@@ -117,11 +136,20 @@ def extract_audio(
     if not audio_path.exists() or audio_path.stat().st_size == 0:
         raise AudioExtractError("ffmpeg 执行完成但未生成有效音频文件")
 
+    try:
+        with wave.open(str(audio_path), "rb") as audio_file:
+            actual_sample_rate = audio_file.getframerate()
+            actual_channels = audio_file.getnchannels()
+            frame_count = audio_file.getnframes()
+    except (OSError, EOFError, wave.Error) as exc:
+        raise AudioExtractError("ffmpeg 产物不是有效的 WAV 音频文件") from exc
+    if actual_sample_rate <= 0 or actual_channels <= 0:
+        raise AudioExtractError("ffmpeg 产物的音频格式无效")
     result = AudioResult(
         audio_path=audio_path,
-        sample_rate=sr,
-        channels=ch,
-        duration=total,
+        sample_rate=actual_sample_rate,
+        channels=actual_channels,
+        duration=frame_count / actual_sample_rate,
         filesize=_safe_filesize(audio_path),
     )
     logger.info(

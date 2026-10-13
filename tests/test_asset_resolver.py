@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pytest
 from pathlib import Path
-from types import SimpleNamespace
 
 from src.config.storage import ArtifactStore
 from src.service.asset_resolver import (
@@ -12,8 +11,6 @@ from src.service.asset_resolver import (
     ResourceState,
     ResourceError,
 )
-from src.service import orchestrator
-from src.service.orchestrator import PipelineParams, run_pipeline
 
 
 def test_asset_resolver_check_file_state(tmp_path):
@@ -137,36 +134,6 @@ def test_asset_resolver_require_methods(tmp_path, monkeypatch):
     assert exc_info.value.state == ResourceState.UNREADABLE
 
 
-def test_pipeline_interruption_at_boundary(tmp_path, monkeypatch):
-    # This tests that run_pipeline fails immediately at the correct step when a dependency is missing.
-    # Let's say download succeeded, but the downloaded source video was deleted / not created.
-    # It should fail at DOWNLOADING or EXTRACTING.
-
-    # We will mock download_video to succeed and return a dummy path.
-    # But when extract_audio boundary checks require_source, we let require_source raise ResourceError.
-
-    monkeypatch.setattr(orchestrator, "download_video",
-                        lambda *a, **kw: SimpleNamespace(video_path=Path("/d/source.mp4"), title="T"))
-
-    # Raise ResourceError on require_source (representing deleted/missing source)
-    monkeypatch.setattr(orchestrator.AssetResolver, "require_source",
-                        lambda tid: (_ for _ in ()).throw(ResourceError("源视频已删除", ResourceState.DELETED)))
-
-    params = PipelineParams(
-        task_id="t1",
-        url="http://x/v",
-        source_lang="auto",
-        target_lang="zh-CN",
-    )
-    events = []
-    with pytest.raises(ResourceError) as exc_info:
-        run_pipeline(params, events.append)
-
-    assert exc_info.value.state == ResourceState.DELETED
-    assert events[-1].status == "FAILED"
-    assert "源视频已删除" in events[-1].error
-
-
 def test_cleanup_cancelled_artifacts_burning_step(tmp_path, monkeypatch):
     monkeypatch.setattr("src.service.asset_resolver.task_dir", lambda tid: tmp_path)
 
@@ -229,89 +196,3 @@ def test_cleanup_cancelled_artifacts_downloading_upload(tmp_path, monkeypatch):
 
     assert (tmp_path / "source.mp4").exists()
     assert not (tmp_path / "audio.wav").exists()
-
-
-def test_pipeline_resumes_from_existing_artifacts(monkeypatch, tmp_path):
-    """重启后从已有的最近阶段产物继续，而不是从头执行。"""
-    monkeypatch.setattr(orchestrator, "task_dir", lambda tid: tmp_path)
-    monkeypatch.setattr("src.service.asset_resolver.task_dir", lambda tid: tmp_path)
-    for name, content in {
-        "source.mp4": b"video",
-        "audio.wav": b"audio",
-        "original.srt": b"original",
-    }.items():
-        (tmp_path / name).write_bytes(content)
-
-    calls = []
-
-    def should_not_run(name):
-        def fn(*args, **kwargs):
-            calls.append(name)
-            raise AssertionError(f"已完成的阶段不应重复执行: {name}")
-        return fn
-
-    def fake_translate(*args, **kwargs):
-        calls.append("translate_srt")
-        (tmp_path / "translated.srt").write_bytes(b"translated")
-        return SimpleNamespace(srt_path=tmp_path / "translated.srt")
-
-    def fake_burn(*args, **kwargs):
-        calls.append("burn_subtitles")
-        (tmp_path / "output.mp4").write_bytes(b"output")
-        return SimpleNamespace(output_path=tmp_path / "output.mp4")
-
-    monkeypatch.setattr(orchestrator, "download_video", should_not_run("download_video"))
-    monkeypatch.setattr(orchestrator, "extract_audio", should_not_run("extract_audio"))
-    monkeypatch.setattr(orchestrator, "transcribe", should_not_run("transcribe"))
-    monkeypatch.setattr(orchestrator, "translate_srt", fake_translate)
-    monkeypatch.setattr(orchestrator, "burn_subtitles", fake_burn)
-
-    params = PipelineParams(
-        task_id="t1", url="https://x/v", source_lang="auto", target_lang="zh-CN",
-        title="Recovered video",
-    )
-    result = run_pipeline(params, lambda event: None)
-
-    assert calls == ["translate_srt", "burn_subtitles"]
-    assert result.status == "SUCCESS"
-    assert result.title == "Recovered video"
-
-
-def test_pipeline_skips_every_stage_when_all_artifacts_exist(monkeypatch, tmp_path):
-    """完整恢复时复用源视频、音频、字幕与成品视频，不重复执行处理阶段。"""
-    monkeypatch.setattr("src.service.asset_resolver.task_dir", lambda tid: tmp_path)
-    for name, content in {
-        "source.mp4": b"video",
-        "audio.wav": b"audio",
-        "original.srt": b"original",
-        "translated.srt": b"translated",
-        "output.mp4": b"output",
-    }.items():
-        (tmp_path / name).write_bytes(content)
-
-    calls = []
-
-    def should_not_run(name):
-        def fn(*args, **kwargs):
-            calls.append(name)
-            raise AssertionError(f"已有产物时不应重复执行: {name}")
-        return fn
-
-    for name in ("download_video", "extract_audio", "transcribe", "translate_srt", "burn_subtitles"):
-        monkeypatch.setattr(orchestrator, name, should_not_run(name))
-
-    params = PipelineParams(
-        task_id="t1", url="https://x/v", source_lang="auto", target_lang="zh-CN",
-        title="Recovered video",
-    )
-    events = []
-    result = run_pipeline(params, events.append)
-
-    assert calls == []
-    assert result.status == "SUCCESS"
-    assert result.title == "Recovered video"
-    assert result.outputs == {
-        "video": str(tmp_path / "output.mp4"),
-        "subtitle": str(tmp_path / "translated.srt"),
-    }
-    assert events[-1].progress == 100

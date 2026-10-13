@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import sqlite3
 
 import pytest
 
@@ -319,3 +320,37 @@ def test_create_if_no_recent_active_allows_terminal_task(store):
     )
     assert created is True
     assert second.id != first.id
+
+
+def test_plugin_plan_roundtrips_internally_but_is_hidden_from_public_dict(store):
+    plan = '{"schema_version":1,"slots":{}}'
+    record = _create(store, plugin_plan_json=plan)
+    loaded = store.get(record.id)
+    assert loaded.plugin_plan_json == plan
+    assert "plugin_plan_json" not in loaded.to_dict()
+
+
+def test_old_database_without_plugin_plan_column_migrates_to_null(tmp_path):
+    db_path = tmp_path / "old.db"
+    store = TaskStore(db_path)
+    record = _create(store)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("ALTER TABLE tasks DROP COLUMN plugin_plan_json")
+
+    migrated = TaskStore(db_path).get(record.id)
+    assert migrated is not None
+    assert migrated.id == record.id
+    assert migrated.plugin_plan_json is None
+    columns = {row[1] for row in sqlite3.connect(db_path).execute("PRAGMA table_info(tasks)")}
+    assert "plugin_plan_json" in columns
+
+
+def test_ensure_plugin_plan_compare_and_set_preserves_existing_winner(store):
+    record = _create(store)
+    winner = '{"schema_version":1,"slots":{}}'
+    loser = '{"schema_version":1,"slots":{"download":{}}}'
+    persisted = store.ensure_plugin_plan(record.id, winner)
+    assert persisted.plugin_plan_json == winner
+    again = store.ensure_plugin_plan(record.id, loser)
+    assert again.plugin_plan_json == winner
+    assert store.ensure_plugin_plan("missing", winner) is None

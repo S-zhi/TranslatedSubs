@@ -7,6 +7,8 @@ tests, and integrations while exposing the single aggregate router.
 
 from __future__ import annotations
 
+import os
+
 import subprocess
 import sys
 from pathlib import Path
@@ -23,7 +25,7 @@ from src.config import (
     settings,
     task_dir,
 )
-from src.core.downloader import probe_video
+from src.core.downloader import ProbeResult as CoreProbeResult
 from src.core.ffmpeg_utils import probe_duration
 from src.handler.subtitle_editor import release_lock
 from src.handler.deps import (
@@ -63,6 +65,10 @@ from src.store import (
     TaskStore,
     TranslationEngineStore,
 )
+from src.plugin_system import ProbeRequest, PluginCancelled, PluginError
+from src.service.plugin_plan import parse_plugin_plan, resolve_plugin_defaults, resolve_plugin_plan
+from src.plugins import get_plugin_manager
+import uuid
 
 router = _task.router
 
@@ -70,6 +76,97 @@ _BROWSER_PREVIEW_EXTENSIONS = _task._BROWSER_PREVIEW_EXTENSIONS
 _TERMINAL = _task._TERMINAL
 _DELETED_MESSAGE = _task._DELETED_MESSAGE
 _UPLOAD_VIDEO_EXTS = _task._UPLOAD_VIDEO_EXTS
+
+
+class _ProbeContext:
+    """Read-only invocation context for URL probes outside a task record."""
+
+    def __init__(self, credential_resolver):
+        self._task_id = "probe"
+        self._invocation_id = str(uuid.uuid4())
+        self._task_dir = Path("/tmp/subtrans-plugin-probe")
+        self._credential_resolver = credential_resolver
+
+    @property
+    def task_id(self):
+        return self._task_id
+
+    @property
+    def invocation_id(self):
+        return self._invocation_id
+
+    @property
+    def task_dir(self):
+        return self._task_dir
+
+    @property
+    def purpose(self):
+        return "download"
+
+    def check_cancelled(self):
+        return None
+
+    def report_progress(self, percent):
+        return None
+
+    def register_process(self, proc):
+        return None
+
+    def unregister_process(self, proc):
+        return None
+
+    def resolve_credential(self, ref):
+        return self._credential_resolver(ref)
+
+
+def probe_video(url, *, cookies_from_browser=None, force_refresh=False):
+    """Compatibility wrapper that runs the configured download plugin probe."""
+    defaults = resolve_plugin_defaults()
+    raw_plan = resolve_plugin_plan(
+        source_type="url", source_lang="auto", target_lang="zh-CN",
+        mode="mono", burn="hard", model="local:tiny",
+        engine=DEFAULT_TRANSLATION_ENGINE_ID, need_subtitle=False,
+        quality="480p", tts_enabled=False, tts_voice="auto",
+        original_voice_mode="keep", settings=settings,
+        plugin_defaults=defaults,
+    )
+    slot = parse_plugin_plan(raw_plan)["slots"]["download"]
+
+    def resolve_credential(ref):
+        if ref == "settings:cookies_file":
+            value = getattr(settings, "cookies_file", None)
+            if isinstance(value, (str, os.PathLike)):
+                path = os.fspath(value)
+                if path:
+                    return path
+        raise PluginError("credential_missing", "download", slot["plugin_id"], "credential is unavailable")
+
+    context = _ProbeContext(resolve_credential)
+    try:
+        result = get_plugin_manager().run_probe(
+            slot["plugin_id"], slot["implementation_version"],
+            ProbeRequest(url=url, force_refresh=bool(force_refresh), cookies_from_browser=cookies_from_browser),
+            slot["config"], context,
+        )
+    except PluginCancelled as exc:
+        raise RuntimeError("probe cancelled") from exc
+    formats = [
+        {
+            "formatId": item.formatId, "ext": item.ext, "resolution": item.resolution,
+            "height": item.height, "width": item.width, "fps": item.fps,
+            "vcodec": item.vcodec, "acodec": item.acodec, "filesize": item.filesize,
+            "tbr": item.tbr, "note": item.note, "type": item.type,
+        }
+        for item in result.formats
+    ]
+    return CoreProbeResult(
+        ok=result.ok, title=result.title, extractor=result.extractor,
+        duration=result.duration, formats_count=result.formats_count,
+        webpage_url=result.webpage_url, reason=result.reason, detail=result.detail,
+        cached=result.cached, language=result.language,
+        available_qualities=list(result.available_qualities), formats=formats,
+        thumbnail=result.thumbnail, uploader=result.uploader,
+    )
 
 # Legacy endpoint names remain available as direct callables for existing
 # tests and integrations.  Route registration itself happens only in service
