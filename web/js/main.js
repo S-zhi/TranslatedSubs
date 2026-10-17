@@ -19,6 +19,7 @@ import { initRouter } from "./router.js";
 import { loadTasks, stopAll, setView, setFilter } from "./store.js";
 import { initDeveloperEntry } from "./developer-entry.js";
 import { initSupportedSitesView } from "./supported-sites.js";
+import { initWorkbench } from "./workbench.js";
 
 initI18n();
 initTheme();
@@ -39,6 +40,7 @@ initTranslationSettings();
 initAudioSettings();
 initLocalModels();
 initSupportedSitesView();
+initWorkbench();
 
 loadTasks();
 
