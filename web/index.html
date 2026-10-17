@@ -18,6 +18,7 @@
     <link rel="stylesheet" href="styles/drive.css" />
     <link rel="stylesheet" href="styles/translation-settings.css" />
     <link rel="stylesheet" href="styles/developer.css" />
+    <link rel="stylesheet" href="styles/workbench.css" />
     <script src="https://unpkg.com/@phosphor-icons/web@2.1.1"></script>
   </head>
   <body>
@@ -84,8 +85,36 @@
       <main class="content">
         <!-- ============ 任务 ============ -->
         <section class="view is-active" data-view="tasks" id="view-tasks">
+          <header class="workspace-header">
+            <div class="workspace-header__path"><i class="ph ph-squares-four" aria-hidden="true"></i><span>创作工作台</span></div>
+            <span class="workspace-header__meta">TranslatedSubs Studio</span>
+          </header>
+
+          <section class="studio-hero" aria-labelledby="studioTitle">
+            <div class="studio-hero__copy">
+              <p class="studio-hero__eyebrow">VIDEO TO POSSIBILITIES</p>
+              <h1 class="studio-hero__title" id="studioTitle">让每一句话，<br /><span class="studio-hero__accent">跨越语言的边界。</span></h1>
+              <p class="studio-hero__description">从一段视频开始，让转写、翻译与字幕制作自然衔接。</p>
+              <div class="studio-hero__steps" aria-label="处理流程">
+                <span><i class="ph ph-download-simple" aria-hidden="true"></i><span>下载</span></span>
+                <i class="ph ph-arrow-right" aria-hidden="true"></i>
+                <span><i class="ph ph-waveform" aria-hidden="true"></i><span>转写</span></span>
+                <i class="ph ph-arrow-right" aria-hidden="true"></i>
+                <span><i class="ph ph-translate" aria-hidden="true"></i><span>翻译</span></span>
+              </div>
+            </div>
+            <div class="studio-hero__visual" id="studioVisual" aria-hidden="true">
+              <div class="studio-hero__fallback"></div>
+            </div>
+            <p class="studio-hero__caption"><i class="ph ph-waveform" aria-hidden="true"></i><span>声音流动，表达无界</span></p>
+            <button class="studio-hero__motion" id="motionToggle" type="button" aria-label="暂停动效" aria-pressed="true" title="暂停动效">
+              <i class="ph ph-pause" aria-hidden="true"></i><span class="studio-hero__motion-label">动效</span>
+            </button>
+          </section>
+
           <!-- 任务控制台 -->
           <form class="console" id="taskForm" novalidate>
+            <div class="console__heading"><h2>新建任务</h2><span class="console__shortcut"><i class="ph ph-link-simple" aria-hidden="true"></i><span>链接或本地文件</span></span></div>
             <div class="console__bar" id="consoleBar">
               <span class="console__icon" aria-hidden="true"><i class="ph ph-link-simple"></i></span>
               <input
