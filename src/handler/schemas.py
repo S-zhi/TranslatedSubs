@@ -57,13 +57,12 @@ class TaskCreate(BaseModel):
     ttsEnabled: bool = False
     ttsVoice: str = "auto"
     originalVoiceMode: Literal["keep", "lower", "replace"] = "keep"
+    pluginInstances: Optional[dict[str, str]] = None
 
     @model_validator(mode="after")
     def validate_tts_options(self):
         if self.ttsEnabled and not self.needSubtitle:
             raise ValueError("配音需要启用字幕翻译")
-        if self.ttsEnabled and not self.targetLang.lower().startswith(("zh", "en")):
-            raise ValueError("Kokoro 配音目前支持中文和英文目标语")
         return self
 
 
@@ -80,6 +79,8 @@ class TaskProbeIn(BaseModel):
     """POST /api/tasks/probe 的请求体。"""
 
     url: str = Field(min_length=1)
+    pluginInstances: Optional[dict[str, str]] = None
+    quality: Optional[str] = None
     cookiesFromBrowser: Optional[
         Literal[
             "chrome",

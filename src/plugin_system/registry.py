@@ -47,6 +47,11 @@ class PluginRegistry:
             registered = self._plugins.get(plugin_id)
             return registered.manifest if registered is not None else None
 
+    def entries(self) -> tuple[RegisteredPlugin, ...]:
+        """Return a stable metadata snapshot without constructing sessions."""
+        with self._lock:
+            return tuple(self._plugins.values())
+
     def __len__(self) -> int:
         with self._lock:
             return len(self._plugins)

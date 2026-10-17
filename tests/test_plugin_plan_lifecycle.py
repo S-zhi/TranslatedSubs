@@ -19,6 +19,9 @@ from src.handler.schemas import to_out
 from src.service.plugin_plan import ensure_plan, parse_plugin_plan
 from src.service.task.task_lifecycle import create_upload_task, create_url_task, retry_task
 from src.store import TaskStore, TranslationEngineStore
+from test_plugin_preflight import creation_plugins  # noqa: F401
+
+pytestmark = pytest.mark.usefixtures("creation_plugins")
 
 
 def _settings(**overrides):
@@ -61,11 +64,10 @@ def _noop(*_args, **_kwargs):
     return None
 
 
-def test_url_task_persists_plan_before_return_and_duplicate_keeps_winner(tmp_path, monkeypatch):
-    monkeypatch.setenv(
-        "SUBTRANS_PIPELINE_PLUGINS",
-        json.dumps({"download": {"plugin_id": "custom.downloader", "implementation_version": "5"}}),
-    )
+def test_url_task_persists_plan_before_return_and_duplicate_keeps_winner(tmp_path):
+    selected_plugins = {
+        "download": {"plugin_id": "custom.downloader", "implementation_version": "5"}
+    }
     store = TaskStore(tmp_path / "tasks.db")
     record, created = create_url_task(
         body=_body(),
@@ -75,15 +77,15 @@ def test_url_task_persists_plan_before_return_and_duplicate_keeps_winner(tmp_pat
         ensure_local_model_ready=lambda *_: (_ for _ in ()).throw(AssertionError("download-only must skip model checks")),
         ensure_translation_engine=_noop,
         settings=_settings(),
+        plugin_defaults=selected_plugins,
     )
     assert created
     assert record.plugin_plan_json
     assert parse_plugin_plan(record.plugin_plan_json)["slots"]["download"]["plugin_id"] == "custom.downloader"
 
-    monkeypatch.setenv(
-        "SUBTRANS_PIPELINE_PLUGINS",
-        json.dumps({"download": {"plugin_id": "replacement.downloader", "implementation_version": "6"}}),
-    )
+    selected_plugins["download"] = {
+        "plugin_id": "replacement.downloader", "implementation_version": "6"
+    }
     duplicate, created_again = create_url_task(
         body=_body(),
         store=store,
@@ -92,6 +94,7 @@ def test_url_task_persists_plan_before_return_and_duplicate_keeps_winner(tmp_pat
         ensure_local_model_ready=_noop,
         ensure_translation_engine=_noop,
         settings=_settings(),
+        plugin_defaults=selected_plugins,
     )
     assert not created_again
     assert duplicate.id == record.id
@@ -205,8 +208,7 @@ def _plugin_map(**stages):
     })
 
 
-def test_custom_transcriber_does_not_require_local_whisper_model(tmp_path, monkeypatch):
-    monkeypatch.setenv("SUBTRANS_PIPELINE_PLUGINS", _plugin_map(transcribe="custom.asr"))
+def test_custom_transcriber_does_not_require_local_whisper_model(tmp_path):
     store = TaskStore(tmp_path / "tasks.db")
     calls = []
     record, created = create_url_task(
@@ -219,6 +221,7 @@ def test_custom_transcriber_does_not_require_local_whisper_model(tmp_path, monke
         ),
         ensure_translation_engine=lambda *args: calls.append("translation-ready"),
         settings=_settings(),
+        plugin_defaults=json.loads(_plugin_map(transcribe="custom.asr")),
     )
 
     assert created
@@ -370,8 +373,7 @@ def test_builtin_http_whisper_skips_local_model_readiness_on_upload(tmp_path):
     assert enqueued == [record.id]
 
 
-def test_custom_transcriber_skips_local_model_readiness_on_upload(tmp_path, monkeypatch):
-    monkeypatch.setenv("SUBTRANS_PIPELINE_PLUGINS", _plugin_map(transcribe="custom.asr"))
+def test_custom_transcriber_skips_local_model_readiness_on_upload(tmp_path):
     store = TaskStore(tmp_path / "tasks.db")
     enqueued = []
     record = create_upload_task(
@@ -392,16 +394,13 @@ def test_custom_transcriber_skips_local_model_readiness_on_upload(tmp_path, monk
         upload_error=lambda *_args, **_kwargs: RuntimeError("unexpected"),
         http_exception_type=HTTPException,
         source_video_stem="source", upload_video_extensions={".mp4"},
+        plugin_defaults=json.loads(_plugin_map(transcribe="custom.asr")),
     )
     assert parse_plugin_plan(record.plugin_plan_json)["slots"]["transcribe"]["plugin_id"] == "custom.asr"
     assert enqueued == [record.id]
 
 
-def test_custom_translator_skips_builtin_local_language_readiness(tmp_path, monkeypatch):
-    monkeypatch.setenv(
-        "SUBTRANS_PIPELINE_PLUGINS",
-        _plugin_map(transcribe="custom.asr", translate="custom.translate"),
-    )
+def test_custom_translator_skips_builtin_local_language_readiness(tmp_path):
     store = TaskStore(tmp_path / "tasks.db")
     record, created = create_url_task(
         body=_body(
@@ -419,6 +418,7 @@ def test_custom_translator_skips_builtin_local_language_readiness(tmp_path, monk
             AssertionError("custom translator owns local engine readiness")
         ),
         settings=_settings(),
+        plugin_defaults=json.loads(_plugin_map(transcribe="custom.asr", translate="custom.translate")),
     )
     assert created
     plan = parse_plugin_plan(record.plugin_plan_json)
@@ -426,24 +426,22 @@ def test_custom_translator_skips_builtin_local_language_readiness(tmp_path, monk
 
 
 @pytest.mark.parametrize("engine_store", [None, _EngineStore(enabled=0)])
-def test_custom_translator_still_requires_existing_enabled_engine_record(
-    tmp_path, monkeypatch, engine_store
+def test_custom_translator_does_not_require_existing_enabled_engine_record(
+    tmp_path, engine_store
 ):
-    monkeypatch.setenv("SUBTRANS_PIPELINE_PLUGINS", _plugin_map(translate="custom.translate"))
     store = TaskStore(tmp_path / "tasks.db")
-    with pytest.raises(HTTPException) as raised:
-        create_url_task(
-            body=_body(needSubtitle=True, engine="cloud"),
-            store=store,
-            engines=engine_store,
-            ensure_supported_translation_languages=_noop,
-            ensure_local_model_ready=_noop,
-            ensure_translation_engine=_noop,
-            settings=_settings(),
-        )
-    assert raised.value.status_code == 422
-    assert "翻译引擎" in str(raised.value.detail)
-    assert store.list() == []
+    record, created = create_url_task(
+        body=_body(needSubtitle=True, engine="cloud"),
+        store=store,
+        engines=engine_store,
+        ensure_supported_translation_languages=_noop,
+        ensure_local_model_ready=_noop,
+        ensure_translation_engine=lambda *_: pytest.fail("custom translator used builtin engine"),
+        settings=_settings(),
+        plugin_defaults=json.loads(_plugin_map(translate="custom.translate")),
+    )
+    assert created
+    assert parse_plugin_plan(record.plugin_plan_json)["slots"]["translate"]["plugin_id"] == "custom.translate"
 
 
 def test_builtin_local_ct2_language_error_keeps_422_and_creates_nothing(tmp_path):
@@ -461,3 +459,94 @@ def test_builtin_local_ct2_language_error_keeps_422_and_creates_nothing(tmp_path
     assert raised.value.status_code == 422
     assert raised.value.detail["code"] == "UNSUPPORTED_TRANSLATION_LANGUAGE"
     assert store.list() == []
+
+
+def test_creation_freezes_plugin_defaults_before_real_runtime_resolution(tmp_path, monkeypatch):
+    from test_plugin_preflight import _plugins
+
+    _plugins(monkeypatch, transcribe="custom.asr")
+    store = TaskStore(tmp_path / "frozen-plugins.db")
+    engines = TranslationEngineStore()
+    engine = engines.create(name="Cloud", api_type="openai_compatible", model="fixed",
+                            base_url="https://translate.example/v1", api_key="test-key")
+    engines.update(engine.id, availability="AVAILABLE")
+
+    def resolve_then_replace_defaults(**kwargs):
+        runtime = model_runtime.resolve_runtime(**kwargs)
+        _plugins(monkeypatch, transcribe="unregistered.new-asr")
+        return runtime
+
+    record, created = create_url_task(
+        body=_body(needSubtitle=True, engine=engine.id), store=store, engines=engines,
+        ensure_supported_translation_languages=_noop,
+        ensure_local_model_ready=lambda *_: pytest.fail("custom ASR used builtin model"),
+        ensure_translation_engine=_noop, resolve_runtime=resolve_then_replace_defaults,
+        settings=runtime_settings,
+    )
+    assert created
+    assert parse_plugin_plan(record.plugin_plan_json)["slots"]["transcribe"]["plugin_id"] == "custom.asr"
+
+
+@pytest.mark.parametrize("step", ["reburn:claim", "subtitle_edit:claim"])
+def test_cancel_refuses_active_subtitle_operation_before_pipeline_cleanup(tmp_path, step):
+    from src.service.task.task_lifecycle import LifecycleConflictError, cancel_task
+
+    store = TaskStore(tmp_path / "operations.db")
+    record = store.create(url="https://video.example/operation", source_lang="en",
+                          target_lang="zh-CN", mode="mono", burn="soft",
+                          model="local:tiny", engine="unused")
+    store.update(record.id, status="BURNING", current_step=step)
+    with pytest.raises(LifecycleConflictError, match="字幕操作进行中"):
+        cancel_task(store=store, task_id=record.id,
+                    cancel_pipeline=lambda *_: pytest.fail("operation cancelled pipeline"),
+                    to_out=lambda value: value)
+    assert store.get(record.id).status == "BURNING"
+
+
+def test_retry_losing_conditional_write_does_not_enqueue(tmp_path, monkeypatch):
+    from src.service.task.task_lifecycle import LifecycleConflictError
+
+    store = TaskStore(tmp_path / "retry-cas.db")
+    record = store.create(url="https://video.example/retry", source_lang="en",
+                          target_lang="zh-CN", mode="mono", burn="soft",
+                          model="local:tiny", engine="unused")
+    store.update(record.id, status="FAILED")
+    conditional_update = store.update_if_status
+
+    def claim_before_update(task_id, expected_statuses, **fields):
+        store.update(task_id, status="BURNING", current_step="reburn:other-worker")
+        return conditional_update(task_id, expected_statuses, **fields)
+
+    monkeypatch.setattr(store, "update_if_status", claim_before_update)
+    with pytest.raises(LifecycleConflictError, match="任务状态已变化"):
+        retry_task(store=store, task_id=record.id,
+                   enqueue_pipeline=lambda *_: pytest.fail("CAS loser enqueued task"),
+                   to_out=lambda value: value)
+    assert store.get(record.id).current_step == "reburn:other-worker"
+
+
+def test_delete_losing_conditional_write_keeps_existing_files(tmp_path, monkeypatch):
+    from src.service.task.task_lifecycle import LifecycleConflictError, delete_task
+
+    store = TaskStore(tmp_path / "delete-cas.db")
+    record = store.create(url="https://video.example/delete", source_lang="en",
+                          target_lang="zh-CN", mode="mono", burn="soft",
+                          model="local:tiny", engine="unused")
+    store.update(record.id, status="SUCCESS")
+    directory = tmp_path / record.id
+    directory.mkdir()
+    output = directory / "output_soft.mp4"
+    output.write_bytes(b"previous-video")
+    conditional_delete = store.delete_if_status
+
+    def claim_before_delete(task_id, expected_statuses):
+        store.update(task_id, status="BURNING", current_step="reburn:other-worker")
+        return conditional_delete(task_id, expected_statuses)
+
+    monkeypatch.setattr(store, "delete_if_status", claim_before_delete)
+    with pytest.raises(LifecycleConflictError, match="任务状态已变化"):
+        delete_task(store=store, task_id=record.id, task_dir=lambda _id: directory,
+                    cleanup_partial_artifacts=lambda *_: pytest.fail("CAS loser cleaned files"),
+                    release_lock=lambda *_: pytest.fail("CAS loser released editor lock"))
+    assert output.read_bytes() == b"previous-video"
+    assert store.get(record.id).current_step == "reburn:other-worker"

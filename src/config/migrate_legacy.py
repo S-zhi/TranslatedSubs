@@ -258,6 +258,20 @@ def import_legacy_sources(
         if any((deepseek["api_key"], "SUBTRANS_DEEPSEEK_BASE_URL" in legacy,
                 "SUBTRANS_DEEPSEEK_MODEL" in legacy)):
             engines.setdefault("deepseek", deepseek)
+    plugin_defaults = None
+    if legacy.get("SUBTRANS_PIPELINE_PLUGINS"):
+        from src.config.plugin_schema import DEFAULT_PLUGIN_IDS
+        try:
+            plugin_defaults = json.loads(legacy["SUBTRANS_PIPELINE_PLUGINS"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("legacy plugin defaults must be valid JSON") from exc
+        if not isinstance(plugin_defaults, dict) or set(plugin_defaults) - set(DEFAULT_PLUGIN_IDS):
+            raise ValueError("legacy plugin defaults contain unsupported stages")
+        for identity in plugin_defaults.values():
+            if not isinstance(identity, dict) or set(identity) != {"plugin_id", "implementation_version"} or any(
+                not isinstance(item, str) or not item.strip() for item in identity.values()
+            ):
+                raise ValueError("invalid legacy plugin identity")
     counts = {"business": 0, "models": 0, "engines": 0}
     current = provider.read()
     existing_sources = set(
@@ -295,7 +309,8 @@ def import_legacy_sources(
         or (merge_defaults and current.values["business"].get(key) == BUSINESS_DEFAULTS.get(key))
         for source in new_sources for key in business_by_source[source]
     )
-    if not sources_to_mark and not business_work and not pending_models and not pending_engines:
+    plugin_work = plugin_defaults is not None and "plugins_env" not in existing_sources
+    if not sources_to_mark and not business_work and not pending_models and not pending_engines and not plugin_work:
         return {"business": 0, "models": 0, "engines": 0, "revision": current.revision}
 
     def apply(document):
@@ -318,6 +333,19 @@ def import_legacy_sources(
                 counts["business"] += 1
         meta = document.setdefault("meta", {})
         imported_sources = set(meta.get("legacy_sources_imported", []))
+        if plugin_work:
+            from src.config.plugin_schema import default_plugin_section
+            # Existing Redis plugin selections always win, including built-in
+            # defaults explicitly saved through the new settings API.
+            if "plugins" not in document or (
+                document.get("plugins") == default_plugin_section()
+                and not document.get("meta", {}).get("plugins_configured")
+            ):
+                section = default_plugin_section()
+                for stage, identity in plugin_defaults.items():
+                    section["byId"][section["defaults"][stage]].update(identity)
+                document["plugins"] = section
+            imported_sources.add("plugins_env")
         meta["legacy_sources_imported"] = sorted(imported_sources | sources_to_mark)
         target_models = document.setdefault("models", {})
         for kind, value in pending_models.items():

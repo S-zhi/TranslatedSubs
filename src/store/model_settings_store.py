@@ -14,6 +14,7 @@ from typing import Any
 
 from src.config.config_repository import ConfigSnapshot, get_config_provider
 from src.config.model_schema import validate_models
+from src.store.plugin_instance_store import PluginInstanceConflict
 
 KINDS = ("llm", "whisper", "tts")
 
@@ -179,7 +180,16 @@ class ModelSettingsStore:
                     for kind in KINDS
                 }
                 candidates = self._prepare_values(values, base)
+            instances = document.get("plugins", {}).get("byId", {}).values()
             for kind in values:
+                candidate_ids = {card["id"] for card in candidates[kind].get("models", [])}
+                if any(
+                    instance.get("model_ref") is not None
+                    and instance["model_ref"].get("kind") == kind
+                    and instance["model_ref"].get("card_id") not in candidate_ids
+                    for instance in instances
+                ):
+                    raise PluginInstanceConflict("模型卡被插件实例引用，请先解除绑定")
                 current[kind] = copy.deepcopy(candidates[kind])
                 models[kind] = copy.deepcopy(current[kind])
 

@@ -23,11 +23,12 @@ from src.handler.schemas import to_out
 from src.core.downloader import ProbeResult
 from src.store import ProbeStore, TaskStore, TaskRecord, TranslationEngineStore
 from src.config.config_repository import get_config_provider
+from test_plugin_preflight import creation_plugins  # noqa: F401
 
 
 
 @pytest.fixture
-def client(tmp_path, monkeypatch):
+def client(tmp_path, monkeypatch, creation_plugins):
     import dataclasses
     reset_singletons()
     db_path = tmp_path / "test.db"

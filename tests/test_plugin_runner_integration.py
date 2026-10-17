@@ -19,6 +19,9 @@ from src.service.orchestrator import PipelineEvent
 from src.service.plugin_plan import parse_plugin_plan
 from src.service.task import task_lifecycle
 from src.store import TaskStore, TranslationEngineStore
+from test_plugin_preflight import creation_plugins  # noqa: F401
+
+pytestmark = pytest.mark.usefixtures("creation_plugins")
 
 
 @pytest.fixture
@@ -54,7 +57,10 @@ def _body(engine_id: str, *, need_subtitle: bool = True) -> SimpleNamespace:
     )
 
 
-def _create_url_task(task_store, engine_store, engine_id, *, need_subtitle=True, settings=None):
+def _create_url_task(
+    task_store, engine_store, engine_id, *, need_subtitle=True, settings=None,
+    plugin_defaults=None,
+):
     return task_lifecycle.create_url_task(
         body=_body(engine_id, need_subtitle=need_subtitle),
         store=task_store,
@@ -63,6 +69,7 @@ def _create_url_task(task_store, engine_store, engine_id, *, need_subtitle=True,
         ensure_local_model_ready=lambda *args: None,
         ensure_translation_engine=lambda *args: None,
         settings=settings,
+        plugin_defaults=plugin_defaults,
     )
 
 
@@ -77,29 +84,25 @@ def _run_with_capture(monkeypatch, task_id, callback):
 
 def test_created_plan_snapshots_engine_and_default_plugin_identity(stores, monkeypatch):
     task_store, engine_store, engine = stores
-    monkeypatch.setenv(
-        "SUBTRANS_PIPELINE_PLUGINS",
-        json.dumps({
-            "download": {"plugin_id": "backend.ytdlp-v2", "implementation_version": "2"},
-            "translate": {"plugin_id": "backend.translator-v4", "implementation_version": "4"},
-        }),
+    selected_plugins = {
+        "download": {"plugin_id": "backend.ytdlp-v2", "implementation_version": "2"}
+    }
+    record, created = _create_url_task(
+        task_store, engine_store, engine.id, plugin_defaults=selected_plugins,
     )
-    record, created = _create_url_task(task_store, engine_store, engine.id)
     assert created
     saved_plan = record.plugin_plan_json
     saved = parse_plugin_plan(saved_plan)
     assert saved["slots"]["download"]["plugin_id"] == "backend.ytdlp-v2"
-    assert saved["slots"]["translate"]["plugin_id"] == "backend.translator-v4"
+    assert saved["slots"]["translate"]["plugin_id"] == "builtin.translation_engine"
     assert saved["slots"]["translate"]["config"]["base_url"] == "https://old.example/v1"
     assert saved["slots"]["translate"]["config"]["model"] == "old-model"
 
-    monkeypatch.setenv(
-        "SUBTRANS_PIPELINE_PLUGINS",
-        json.dumps({
-            "download": {"plugin_id": "backend.ytdlp-v3", "implementation_version": "3"},
-            "translate": {"plugin_id": "backend.translator-v5", "implementation_version": "5"},
-        }),
-    )
+    selected_plugins.update({
+        "download": {"plugin_id": "backend.ytdlp-v3", "implementation_version": "3"},
+        "translate": {"plugin_id": "backend.translator-v5", "implementation_version": "5"},
+    })
+    monkeypatch.setenv("SUBTRANS_PIPELINE_PLUGINS", json.dumps(selected_plugins))
     engine_store.update(engine.id, base_url="https://new.example/v2", model="new-model", api_key="key-v2")
     captured = {}
 
@@ -114,7 +117,7 @@ def test_created_plan_snapshots_engine_and_default_plugin_identity(stores, monke
     persisted = task_store.get(record.id)
     assert persisted.plugin_plan_json == saved_plan
     assert captured["plan"]["slots"]["download"]["plugin_id"] == "backend.ytdlp-v2"
-    assert captured["plan"]["slots"]["translate"]["plugin_id"] == "backend.translator-v4"
+    assert captured["plan"]["slots"]["translate"]["plugin_id"] == "builtin.translation_engine"
     assert captured["plan"]["slots"]["translate"]["config"]["base_url"] == "https://old.example/v1"
     assert captured["plan"]["slots"]["translate"]["config"]["model"] == "old-model"
     assert captured["key"] == "key-v2"
@@ -405,3 +408,110 @@ def test_mcp_business_client_posts_to_same_rest_create_route_and_hides_plan(
     assert record is not None and record.task_origin == "mcp"
     assert record.plugin_plan_json
     assert "plugin_plan_json" not in response and "pluginPlanJson" not in response
+
+
+def test_custom_translation_runner_does_not_resolve_builtin_engine(stores, monkeypatch):
+    from src.service.model_runtime import resolve_runtime
+    from test_plugin_preflight import _plugins
+
+    task_store, engine_store, _engine = stores
+    _plugins(monkeypatch, translate="custom.translate", transcribe="custom.asr")
+    record, created = task_lifecycle.create_url_task(
+        body=_body("no-engine"), store=task_store, engines=engine_store,
+        ensure_supported_translation_languages=lambda *_: pytest.fail("custom translator checked language"),
+        ensure_local_model_ready=lambda *_: pytest.fail("custom ASR checked local model"),
+        ensure_translation_engine=lambda *_: pytest.fail("custom translator checked engine"),
+        resolve_runtime=resolve_runtime,
+    )
+    assert created
+    monkeypatch.setattr(runner, "_snapshot_engine_config", lambda *_args, **_kwargs: pytest.fail("custom runner read builtin engine"))
+    seen = {}
+    _run_with_capture(monkeypatch, record.id, lambda _params, kwargs: seen.update(kwargs))
+    assert task_store.get(record.id).status == "SUCCESS"
+    assert seen["plugin_plan"]["slots"]["translate"]["plugin_id"] == "custom.translate"
+
+
+@pytest.mark.parametrize("plan_version", [1, 2])
+def test_legacy_custom_translator_without_model_migrates_and_retries(
+    stores, monkeypatch, plan_version,
+):
+    from src.service.model_runtime import resolve_runtime
+    from test_plugin_preflight import _plugins
+
+    task_store, engine_store, _engine = stores
+    _plugins(monkeypatch, translate="custom.translate", transcribe="custom.asr")
+    record, _ = task_lifecycle.create_url_task(
+        body=_body("retired-engine"), store=task_store, engines=engine_store,
+        ensure_supported_translation_languages=lambda *_: None,
+        ensure_local_model_ready=lambda *_: None,
+        ensure_translation_engine=lambda *_: None,
+        resolve_runtime=resolve_runtime,
+    )
+    plan = parse_plugin_plan(record.plugin_plan_json)
+    assert plan["slots"]["translate"]["config"]["model"] == ""
+    if plan_version == 1:
+        plan = {"schema_version": 1, "slots": {
+            purpose: {key: slot[key] for key in (
+                "plugin_id", "implementation_version", "config",
+            )}
+            for purpose, slot in plan["slots"].items()
+        }}
+    saved_plan = json.dumps(plan)
+    task_store.update(record.id, runtime_config_json=None, plugin_plan_json=saved_plan)
+    monkeypatch.setattr(runner, "_snapshot_engine_config", lambda *_args, **_kwargs: pytest.fail("custom translator resolved builtin engine"))
+    observed = []
+    _run_with_capture(monkeypatch, record.id, lambda _params, kwargs: observed.append(kwargs["plugin_plan"]))
+    migrated = task_store.get(record.id)
+    assert migrated.status == "SUCCESS"
+    assert json.loads(migrated.runtime_config_json)["engine"]["source"] == "disabled"
+    assert migrated.plugin_plan_json == saved_plan
+
+    task_store.update(record.id, status="FAILED", error="retry test")
+    queued = []
+    task_lifecycle.retry_task(
+        store=task_store, task_id=record.id, enqueue_pipeline=queued.append,
+        to_out=lambda item: item,
+    )
+    _run_with_capture(monkeypatch, record.id, lambda _params, kwargs: observed.append(kwargs["plugin_plan"]))
+    retried = task_store.get(record.id)
+    assert queued == [record.id]
+    assert retried.status == "SUCCESS"
+    assert retried.runtime_config_json == migrated.runtime_config_json
+    assert retried.plugin_plan_json == saved_plan
+    assert observed == [plan, plan]
+
+
+def test_legacy_builtin_translator_still_rejects_missing_model(stores):
+    task_store, _engine_store, engine = stores
+    record = task_store.create(
+        url="https://video.example/invalid-model", source_lang="en", target_lang="zh-CN",
+        mode="mono", burn="soft", model="local:tiny", engine=engine.id,
+    )
+    with pytest.raises(ValueError, match="engine.model"):
+        runner._upgrade_legacy_snapshot({}, record, get_config_provider().read(), {
+            "schema_version": 1,
+            "slots": {"translate": {
+                "plugin_id": "builtin.translation_engine",
+                "implementation_version": "1",
+                "config": {"engine_id": engine.id, "model": ""},
+            }},
+        })
+
+
+@pytest.mark.parametrize("step", ["reburn:claim", "subtitle_edit:claim"])
+def test_recovery_preserves_interrupted_subtitle_operations(stores, monkeypatch, step):
+    task_store, _engine_store, engine = stores
+    record = task_store.create(
+        url="https://video.example/recovery", source_lang="en", target_lang="zh-CN",
+        mode="mono", burn="soft", model="local:tiny", engine=engine.id,
+    )
+    task_store.update(record.id, status="BURNING", current_step=step,
+                      output_video="output_soft.mp4", output_subtitle="translated.srt")
+    monkeypatch.setattr(runner, "enqueue_pipeline", lambda *_: pytest.fail("subtitle operation restarted full pipeline"))
+    monkeypatch.setattr(runner, "_cleanup_partial_artifacts", lambda *_: pytest.fail("recovery removed existing output"))
+    assert runner.recover_interrupted_tasks() == []
+    updated = task_store.get(record.id)
+    assert updated.status == "FAILED"
+    assert updated.error_code == "subtitle_operation_interrupted"
+    assert updated.output_video == "output_soft.mp4"
+    assert updated.output_subtitle == "translated.srt"

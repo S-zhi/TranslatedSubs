@@ -5,13 +5,15 @@
   - PUT   /api/tasks/{id}/subtitles       保存编辑后的 SRT（覆盖或写入版本文件）
   - POST  /api/tasks/{id}/subtitles/burn  基于当前 SRT 重新烧录成品视频
 
-仅复用 src.core.srt_utils 和 src.core.subtitle_burner，不新建存储 helper。
+保存与重烧共用任务操作锁和状态认领；重烧只执行任务保存的 render.subtitle 插槽。
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import re
+import tempfile
 import threading
 import uuid
 from pathlib import Path
@@ -21,17 +23,19 @@ from typing import Generator, List, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
-from src.config import (
-    ORIGINAL_SRT,
-    OUTPUT_VIDEO,
-    OUTPUT_VIDEO_NAMES,
-    SOURCE_VIDEO_STEM,
-    TRANSLATED_SRT,
-    task_dir,
-)
+from src.config import ORIGINAL_SRT, OUTPUT_VIDEO_NAMES, TRANSLATED_SRT, task_dir
 from src.core.srt_utils import Subtitle, parse_srt, read_srt_content, write_srt
-from src.core.subtitle_burner import BurnError, burn_subtitles
 from src.handler.deps import get_store, require_api_token
+from src.plugin_system import PluginCancelled, PluginError
+from src.service.subtitle_reburn import (
+    SubtitleOperationError,
+    SubtitlePublication,
+    discard_subtitle_publication,
+    reburn_task,
+    require_terminal_task,
+    restore_operation,
+)
+from src.service.task_operations import get_task_operation_lock
 from src.store import TaskStore
 
 logger = logging.getLogger(__name__)
@@ -70,7 +74,7 @@ def task_write_lock(task_id: str) -> Generator[None, None, None]:
         entry.ref_count += 1
 
     try:
-        with entry.lock:
+        with get_task_operation_lock(task_id), entry.lock:
             yield
     finally:
         with _write_locks_guard:
@@ -248,38 +252,57 @@ def save_subtitles(
     默认覆盖 `original.srt` / `translated.srt`；
     当 `version` 给出时（如 "v2"）写入 `original.v2.srt`，原文件保留。
     """
-    rec = _require(store, task_id)
-    d = task_dir(task_id)
-    if not d.exists():
-        raise HTTPException(status_code=409, detail="任务目录尚未生成")
-
-    with task_write_lock(task_id):
-        target_path, rel_name = _resolve_target_path(d, body.locale, body.version)
-
-        # 校验、读取现有编码与写回必须处于同一临界区，避免并发保存时基于过期文件状态写入。
-        if body.version is not None and rel_name in {ORIGINAL_SRT, TRANSLATED_SRT, *OUTPUT_VIDEO_NAMES}:
-            raise HTTPException(status_code=400, detail="非法的版本文件名")
-
-        sorted_entries = sorted(body.entries, key=lambda e: (e.start, e.index))
-        subs = [
-            Subtitle(
-                index=e.index,
-                start=float(e.start),
-                end=float(e.end),
-                text=e.text,
-            )
-            for e in sorted_entries
-        ]
-
-        encoding = "utf-8-sig"
-        if target_path.exists():
+    try:
+        require_terminal_task(store, task_id)
+        with task_write_lock(task_id):
+            require_terminal_task(store, task_id)
+            d = task_dir(task_id).resolve()
+            if not d.is_dir():
+                raise HTTPException(status_code=409, detail="任务目录尚未生成")
+            target_path, rel_name = _resolve_target_path(d, body.locale, body.version)
+            if body.version is not None and rel_name in {ORIGINAL_SRT, TRANSLATED_SRT, *OUTPUT_VIDEO_NAMES}:
+                raise HTTPException(status_code=400, detail="非法的版本文件名")
+            claimed = store.claim_operation(task_id, operation="subtitle_edit")
+            if claimed is None:
+                raise HTTPException(status_code=409, detail="任务正在处理，请稍后重试")
+            previous, token = claimed
+            publication = None
+            temporary = None
             try:
-                _, encoding = read_srt_content(target_path)
-            except Exception:
-                pass
-
-        # 版本文件：若已存在则直接覆盖（用户主动保存即确认）；保留原始编码或默认 utf-8-sig
-        write_srt(subs, target_path, encoding=encoding)
+                discard_subtitle_publication(task_id, d)
+                sorted_entries = sorted(body.entries, key=lambda e: (e.start, e.index))
+                subs = [
+                    Subtitle(index=e.index, start=float(e.start), end=float(e.end), text=e.text)
+                    for e in sorted_entries
+                ]
+                encoding = "utf-8-sig"
+                if target_path.exists():
+                    try:
+                        _, encoding = read_srt_content(target_path)
+                    except Exception:
+                        pass
+                fd, name = tempfile.mkstemp(prefix=".subtitle-edit-", suffix=".srt", dir=d)
+                os.close(fd)
+                temporary = Path(name)
+                publication = SubtitlePublication(
+                    d, (target_path,), record=previous, token=token,
+                    temporary_names=(temporary.name,),
+                )
+                write_srt(subs, temporary, encoding=encoding)
+                os.replace(temporary, target_path)
+                if restore_operation(store, previous, token) is None:
+                    raise HTTPException(status_code=409, detail="字幕保存时任务状态已改变")
+                publication.discard_backups()
+            except BaseException:
+                if publication is not None:
+                    publication.restore()
+                restore_operation(store, previous, token)
+                raise
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+    except SubtitleOperationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
     logger.info(
         "字幕已保存: task=%s locale=%s version=%s count=%d -> %s",
@@ -301,39 +324,20 @@ def reburn_subtitles(
     body: Optional[dict] = None,
     store: TaskStore = Depends(get_store),
 ) -> ReburnOut:
-    """基于任务当前 TRANSLATED_SRT 重新烧录 output.mp4，复用 burn_subtitles。
+    """只运行保存计划中的 render.subtitle，验证后原子发布新成品。
 
-    请求体可选：
-      { "mode": "hard" | "soft" }   不传则按任务原始 burn 模式
+    请求体可选 {"mode": "hard" | "soft"}，仅覆盖本次调用的插槽副本。
     """
-    rec = _require(store, task_id)
-    d = task_dir(task_id)
-    if not d.exists():
-        raise HTTPException(status_code=409, detail="任务目录尚未生成")
-
-    srt_path = d / TRANSLATED_SRT
-    if not srt_path.exists():
-        raise HTTPException(
-            status_code=409,
-            detail="译文字幕尚未生成，无法烧录。请先完成翻译或手动上传字幕。",
-        )
-
-    # 源视频：source.* 任意扩展名
-    sources = sorted(d.glob(f"{SOURCE_VIDEO_STEM}.*"))
-    if not sources:
-        raise HTTPException(status_code=409, detail="找不到源视频 source.*")
-    video_path = sources[0]
-
-    mode = (body or {}).get("mode") or rec.burn
-    if mode not in ("hard", "soft"):
-        raise HTTPException(status_code=400, detail=f"非法的 burn 模式: {mode}")
-
     try:
-        result = burn_subtitles(video_path, srt_path, task_id, mode=mode)
-    except BurnError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-
-    out_name = result.output_path.name
-    # 把 DB 里的 output_video 同步刷新，方便前端通过 /download 立即拿到新版本
-    store.update(task_id, output_video=result.output_path.name)
-    return ReburnOut(ok=True, taskId=task_id, mode=mode, outputPath=out_name)
+        output = reburn_task(store, task_id, mode=(body or {}).get("mode"))
+    except SubtitleOperationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    except PluginError as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+    except PluginCancelled as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ReburnOut(
+        ok=True, taskId=task_id,
+        mode="soft" if output.name == "output_soft.mp4" else "hard",
+        outputPath=output.name,
+    )

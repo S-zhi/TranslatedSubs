@@ -16,6 +16,7 @@ from src.plugin_system import (
     TTSResult,
 )
 from src.plugin_system.contracts import PluginConfig
+from src.plugins.builtin.configuration import BuiltinFactory
 
 
 PLUGIN_ID = "builtin.kokoro"
@@ -23,7 +24,7 @@ _REQUIRED_CONFIG_KEYS = frozenset({"voice", "target_lang", "bilingual"})
 _ALLOWED_CONFIG_KEYS = _REQUIRED_CONFIG_KEYS | {"speed", "model_id", "output_format"}
 
 
-class KokoroFactory:
+class KokoroFactory(BuiltinFactory):
     """Lightweight factory; model dependencies load only when a session runs."""
 
     stage = "tts"

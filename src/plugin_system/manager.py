@@ -144,6 +144,69 @@ class PluginManager:
     def __init__(self, registry: PluginRegistry) -> None:
         self._registry = registry
 
+    def catalog(self) -> list[dict[str, Any]]:
+        entries = []
+        for registered in self._registry.entries():
+            manifest = registered.manifest
+            describe = getattr(registered.factory, "describe", None)
+            details = describe() if callable(describe) else {}
+            entries.append({
+                "plugin_id": manifest.plugin_id,
+                "implementation_version": manifest.implementation_version,
+                "stage": manifest.stage,
+                "operations": sorted(manifest.operations),
+                "capabilities": sorted(manifest.capabilities),
+                "name": manifest.plugin_id,
+                "description": "",
+                "config_schema": {},
+                "config_schema_version": 1,
+                "bindings": [],
+                **details,
+            })
+        return entries
+
+    def validate_config(
+        self, plugin_id: str, implementation_version: str, config: PluginConfig,
+        *, purpose: str | None = None, partial: bool = True,
+    ) -> dict[str, Any]:
+        registered = self._resolve(plugin_id, implementation_version, None)
+        frozen = self._freeze_config(config, registered.manifest)
+        validator = getattr(registered.factory, "validate_config", None)
+        if callable(validator):
+            try:
+                return dict(validator(frozen, purpose=purpose, partial=partial))
+            except (TypeError, ValueError) as exc:
+                raise self._error("invalid_input", registered.manifest, str(exc), exc) from exc
+        if purpose is None and config:
+            raise self._error("invalid_input", registered.manifest, "plugin has no editable configuration schema")
+        return dict(frozen)
+
+    def preflight(
+        self, plugin_id: str, implementation_version: str, *, operation: str,
+        purpose: str, config: PluginConfig, source_lang: str = "", target_lang: str = "",
+    ) -> None:
+        registered = self._resolve(plugin_id, implementation_version, None)
+        manifest = registered.manifest
+        valid = any(
+            contract[0] == manifest.stage and contract[1] == operation and purpose in _PURPOSES[request_type]
+            for request_type, contract in _TASK_OPERATIONS.items()
+        )
+        if not valid or operation not in manifest.operations:
+            raise self._error("invalid_input", manifest, "preflight operation does not match the plugin")
+        frozen = self._freeze_config(config, manifest)
+        preflight = getattr(registered.factory, "preflight", None)
+        if not callable(preflight):
+            raise self._error("plugin_unavailable", manifest, "plugin does not support dependency preflight")
+        try:
+            preflight(frozen, operation=operation, purpose=purpose,
+                      source_lang=source_lang, target_lang=target_lang)
+        except PluginError:
+            raise
+        except (ValueError, TypeError) as exc:
+            raise self._error("invalid_input", manifest, str(exc), exc) from exc
+        except Exception as exc:
+            raise self._error("dependency_missing", manifest, "plugin dependency preflight failed", exc) from exc
+
     def run(
         self,
         plugin_id: str,
@@ -376,7 +439,9 @@ class PluginManager:
         if isinstance(request, TTSRequest):
             return ((request.output_audio, "dubbed.wav"),)
         if isinstance(request, SubtitleRenderRequest):
-            return ((request.output_video, f"output_{request.mode}.mp4"),)
+            name = request.output_video.name
+            expected = name if re.fullmatch(r"\.reburn-[a-f0-9]{32}\.mp4", name) else f"output_{request.mode}.mp4"
+            return ((request.output_video, expected),)
         if isinstance(request, DubMuxRequest):
             return ((request.mixed_audio, "dubbed_mix.wav"), (request.output_video, "output_dubbed.mp4"))
         return ()
@@ -525,7 +590,8 @@ class PluginManager:
         elif isinstance(request, SubtitleRenderRequest) and isinstance(result, SubtitleRenderResult):
             if result.video_path != request.output_video:
                 raise self._error("invalid_result", manifest, "render result path does not match its request")
-            self._require_name(result.video_path, f"output_{request.mode}.mp4", manifest)
+            expected_name = self._request_outputs(request)[0][1]
+            self._require_name(result.video_path, expected_name, manifest)
             artifacts = (result.video_path,)
         elif isinstance(request, DubMuxRequest) and isinstance(result, DubMuxResult):
             if result.video_path != request.output_video or result.mixed_audio != request.mixed_audio:

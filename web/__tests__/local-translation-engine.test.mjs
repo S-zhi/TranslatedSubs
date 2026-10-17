@@ -133,6 +133,7 @@ test("task payload reads selected values even while language selects are disable
     ttsEnabled: true,
     ttsVoice: "af_heart",
     originalVoiceMode: "keep",
+    pluginInstances: {},
   });
 });
 

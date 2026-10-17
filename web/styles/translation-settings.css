@@ -1,6 +1,6 @@
 .advanced-settings { display:flex; flex-direction:column; gap:18px; }
 .advanced-tabs { display:flex; align-items:flex-end; gap:3px; min-height:46px; overflow-x:auto; border-bottom:1px solid var(--border); scrollbar-width:thin; }
-.advanced-tab { position:relative; display:inline-flex; align-items:center; gap:8px; min-height:46px; padding:0 14px; color:var(--text-3); background:transparent; border:0; border-bottom:2px solid transparent; font:600 12px var(--font-mono); cursor:pointer; transition:color .18s ease, border-color .18s ease, background .18s ease; }
+.advanced-tab { position:relative; display:inline-flex; flex-shrink:0; white-space:nowrap; align-items:center; gap:8px; min-height:46px; padding:0 14px; color:var(--text-3); background:transparent; border:0; border-bottom:2px solid transparent; font:600 12px var(--font-mono); cursor:pointer; transition:color .18s ease, border-color .18s ease, background .18s ease; }
 .advanced-tab::after { content:""; position:absolute; right:12px; bottom:-2px; left:12px; height:2px; background:var(--accent); transform:scaleX(0); transform-origin:center; transition:transform .2s ease; }
 .advanced-tab i { font-size:17px; }
 .advanced-tab:hover { color:var(--text); background:var(--surface-2); }

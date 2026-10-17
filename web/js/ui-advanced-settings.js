@@ -3,7 +3,7 @@
 import { $, $$ } from "./utils.js";
 import { state, subscribe, setSettingsTab } from "./store.js";
 
-const SETTINGS_TABS = new Set(["engines", "audio", "probe", "drive"]);
+const SETTINGS_TABS = new Set(["engines", "audio", "probe", "drive", "plugins"]);
 
 function selectTab(tabName, tabs, panels, syncState = true) {
   if (!SETTINGS_TABS.has(tabName)) tabName = "engines";

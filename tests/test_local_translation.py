@@ -30,6 +30,7 @@ from src.service.translation_model_manager import (
     TranslationModelManager,
 )
 from src.store import DEFAULT_TRANSLATION_ENGINE_ID, TaskStore, TranslationEngineStore
+from test_plugin_preflight import creation_plugins  # noqa: F401
 
 
 class _FakeTokenizer:
@@ -598,6 +599,7 @@ def test_local_srt_bilingual_preserves_timestamps(monkeypatch, tmp_path):
     assert [item.text for item in translated] == ["Hello there.\n你好。", "Goodbye.\n再见。"]
 
 
+@pytest.mark.usefixtures("creation_plugins")
 def test_local_engine_creates_url_and_upload_tasks_without_api_key(monkeypatch, tmp_path):
     ready = True
 
@@ -633,7 +635,7 @@ def test_local_engine_creates_url_and_upload_tasks_without_api_key(monkeypatch, 
         sourceLang="en", targetLang="zh", mode="bilingual", burn="soft",
         model="local:tiny", engine=ENGINE_ID, needSubtitle=True,
         ttsEnabled=False, ttsVoice="auto", originalVoiceMode="keep",
-        store=task_store, engines=engine_store,
+        pluginInstances=None, store=task_store, engines=engine_store,
     )
     assert upload_result.engine == ENGINE_ID
     assert len(queued) == 2

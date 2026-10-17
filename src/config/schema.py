@@ -174,9 +174,12 @@ def validate_business_value(key: str, value: Any, *, allow_reset: bool = False) 
 def default_document() -> dict[str, Any]:
     import copy
 
+    from .plugin_schema import default_plugin_section
+
     return {
         "business": copy.deepcopy(BUSINESS_DEFAULTS),
         "models": {},
         "engines": {"byId": {}},
+        "plugins": default_plugin_section(),
         "meta": {"legacy_sources_imported": []},
     }

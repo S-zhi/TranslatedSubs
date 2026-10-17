@@ -135,7 +135,7 @@ BROWSER_COOKIE_SOURCES = frozenset({
     "safari",
 })
 _probe_cache_lock = threading.Lock()
-_probe_cache: OrderedDict[tuple[str, str, str, str], tuple[float, ProbeResult]] = OrderedDict()
+_probe_cache: OrderedDict[tuple[str, str, str, str, str], tuple[float, ProbeResult]] = OrderedDict()
 
 
 def clear_probe_cache() -> None:
@@ -587,6 +587,7 @@ def probe_video(
         str(effective_cookies or ""),
         str(effective_format),
         str(effective_proxy or ""),
+        str(effective_timeout),
     )
     now = time.time()
 

@@ -87,11 +87,13 @@ def burn_subtitles(
     on_progress: Optional[ProgressHook] = None,
     *,
     mode: str = "hard",
+    output_path: Path | str | None = None,
 ) -> BurnResult:
-    """把字幕烧录 / 内封到视频，输出 data/{task_id}/output.mp4。
+    """把字幕烧录 / 内封到视频，默认输出任务目录的模式化成品。
 
     Args:
         mode: "hard" 硬烧录（重编码）；"soft" 软字幕（内封可开关）。
+        output_path: 可选的任务目录内 MP4 路径，供宿主先生成临时成品。
 
     Raises:
         BurnError: 输入缺失、模式非法、ffmpeg 失败或产物缺失。
@@ -114,11 +116,30 @@ def burn_subtitles(
     out_dir = ensure_task_dir(task_id)
     if mode not in ("hard", "soft"):
         raise BurnError(f"未知烧录模式: {mode}")
-    out_path = out_dir / output_video_filename(mode)
+    out_path = Path(output_path) if output_path is not None else out_dir / output_video_filename(mode)
+    try:
+        if (
+            out_path.is_symlink()
+            or out_path.suffix.lower() != ".mp4"
+            or out_path.resolve().parent != out_dir.resolve()
+            or (out_path.exists() and not out_path.is_file())
+        ):
+            raise BurnError("输出路径必须是任务目录内的普通 MP4 文件")
+        for source in (video_path, srt_path):
+            if out_path.resolve() == source.resolve() or (
+                out_path.exists() and out_path.samefile(source)
+            ):
+                raise BurnError("输出路径不能覆盖输入视频或字幕")
+    except (OSError, ValueError, RuntimeError) as exc:
+        if isinstance(exc, BurnError):
+            raise
+        raise BurnError("输出路径无效或超出任务目录") from exc
 
     tmp_burn_path = out_dir / "tmp_burn.srt"
     cwd: Optional[str] = None
     if mode == "hard":
+        if tmp_burn_path.is_symlink():
+            raise BurnError("临时字幕路径不能是符号链接")
         if not has_subtitles_filter(settings.ffmpeg_bin):
             raise BurnError(
                 "当前 ffmpeg 未编译 libass，硬烧录所需的 subtitles 滤镜不可用。"

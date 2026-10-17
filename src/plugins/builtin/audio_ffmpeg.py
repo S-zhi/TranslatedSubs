@@ -14,6 +14,7 @@ from src.plugin_system import (
     PluginManifest,
 )
 from src.plugin_system.contracts import PluginConfig
+from src.plugins.builtin.configuration import BuiltinFactory
 
 
 PLUGIN_ID = "builtin.ffmpeg_audio"
@@ -24,7 +25,7 @@ _OUTPUTS_BY_PURPOSE = {
 }
 
 
-class AudioFFmpegFactory:
+class AudioFFmpegFactory(BuiltinFactory):
     """Lightweight factory that creates one stateless extraction session per call."""
 
     stage = "audio_extract"

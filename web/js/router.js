@@ -24,7 +24,19 @@ export function viewFromPath(pathname = window.location.pathname) {
 
 export function pathForView(view) {
   const path = ROUTES[view]?.path || ROUTES.tasks.path;
-  return view === "model-settings" && state.modelKind !== "llm" ? `${path}?kind=${state.modelKind}` : path;
+  if (view === "model-settings" && state.modelKind !== "llm") return `${path}?kind=${state.modelKind}`;
+  if (view === "other-settings" && SETTINGS_TABS.has(state.settingsTab) && state.settingsTab !== "engines") return `${path}?tab=${state.settingsTab}`;
+  return path;
+}
+
+const SETTINGS_TABS = new Set(["engines", "audio", "probe", "drive", "plugins"]);
+
+function settingsTabFromLocation() {
+  const path = window.location.pathname.replace(/\/$/, "");
+  if (path === "/probe") return "probe";
+  if (path === "/drive") return "drive";
+  const tab = new URLSearchParams(window.location.search).get("tab");
+  return SETTINGS_TABS.has(tab) ? tab : "engines";
 }
 
 function modelKindFromLocation() {
@@ -39,27 +51,24 @@ function updateDocument(view) {
 }
 
 export function initRouter() {
-  const originalPath = window.location.pathname.replace(/\/$/, "") || "/tasks";
   const initialView = viewFromPath();
   setModelKind(modelKindFromLocation(), { history: false });
+  if (initialView === "other-settings") setSettingsTab(settingsTabFromLocation(), { history: false });
   if (window.location.pathname !== pathForView(initialView)) {
     window.history.replaceState({ view: initialView }, "", pathForView(initialView));
   }
-  if (originalPath === "/probe") setSettingsTab("probe");
-  if (originalPath === "/drive") setSettingsTab("drive");
   setView(initialView, { history: false });
   updateDocument(initialView);
 
   window.addEventListener("popstate", () => {
-    const path = window.location.pathname;
     setModelKind(modelKindFromLocation(), { history: false });
-    if (path === "/probe") setSettingsTab("probe");
-    if (path === "/drive") setSettingsTab("drive");
+    if (viewFromPath() === "other-settings") setSettingsTab(settingsTabFromLocation(), { history: false });
     setView(viewFromPath(), { history: false });
+    updateDocument(state.view);
   });
 
   subscribe(({ type, history }) => {
-    if (type !== "view" && type !== "model-kind" && type !== "legacy-model-navigation") return;
+    if (!["view", "model-kind", "legacy-model-navigation", "settings-tab"].includes(type)) return;
     const view = state.view;
     const path = pathForView(view);
     updateDocument(view);
