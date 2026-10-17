@@ -1,4 +1,10 @@
+import os
 from types import SimpleNamespace
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 import src.service.runtime_check as runtime_check
 
 
@@ -17,7 +23,73 @@ def _ready(monkeypatch):
     monkeypatch.setattr(runtime_check.shutil, "which", lambda command: f"/usr/bin/{command}")
     monkeypatch.setattr(runtime_check.importlib.util, "find_spec", lambda _: object())
     monkeypatch.setattr(runtime_check, "has_subtitles_filter", lambda _: True)
-    monkeypatch.setattr(runtime_check, "_check_writable_directory", lambda _: "writable")
+
+
+def test_check_writable_directory_creates_directory(tmp_path):
+    path = tmp_path / "new" / "nested"
+
+    assert runtime_check._check_writable_directory(path) == "writable"
+    assert path.is_dir()
+
+
+def test_check_writable_directory_reports_not_writable(monkeypatch, tmp_path):
+    monkeypatch.setattr(os, "access", lambda path, mode: False)
+
+    assert runtime_check._check_writable_directory(tmp_path) == "not_writable"
+
+
+def test_check_writable_directory_reports_unavailable(tmp_path):
+    path = tmp_path / "file"
+    path.write_text("not a directory", encoding="utf-8")
+
+    assert runtime_check._check_writable_directory(path) == "unavailable"
+    assert runtime_check._check_writable_directory(path / "nested") == "unavailable"
+
+
+@pytest.mark.parametrize("directory", ["data_directory", "database_directory"])
+@pytest.mark.parametrize("status", ["writable", "not_writable", "unavailable"])
+def test_health_ready_reports_directory_status(monkeypatch, tmp_path, directory, status):
+    from src.handler.health import router
+
+    current = _settings(tmp_path)
+    monkeypatch.setattr(runtime_check, "settings", current)
+    _ready(monkeypatch)
+    paths = {
+        "data_directory": current.data_dir,
+        "database_directory": current.db_path.parent,
+    }
+    target = paths[directory]
+    if status == "unavailable":
+        target.write_text("not a directory", encoding="utf-8")
+    elif status == "not_writable":
+        access = os.access
+        monkeypatch.setattr(
+            os, "access", lambda path, mode: False if path == target else access(path, mode),
+        )
+
+    app = FastAPI()
+    app.include_router(router)
+    with TestClient(app) as client:
+        response = client.get("/api/health/ready")
+
+    assert response.status_code == 200
+    result = response.json()
+    ready = status == "writable"
+    for name, path in paths.items():
+        assert result["checks"][name] == (status if name == directory else "writable")
+        assert path.is_dir() is (status != "unavailable" or name != directory)
+    assert result["ok"] is ready
+    assert result["initialized"] is ready
+    for capability in ("download", "full_pipeline", "soft_burn"):
+        assert result["capabilities"][capability] is ready
+    if ready:
+        assert result["missing"] == []
+        assert result["agent_action"] == "continue"
+    else:
+        hint = "数据目录可写权限" if directory == "data_directory" else "数据库目录可写权限"
+        assert len(result["missing"]) == 1
+        assert hint in result["missing"][0]
+        assert result["agent_action"] == "ask_user_to_configure"
 
 
 def test_readiness_has_no_removed_backend_fields_or_external_check(monkeypatch, tmp_path):

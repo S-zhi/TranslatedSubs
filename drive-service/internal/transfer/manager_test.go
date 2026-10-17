@@ -80,15 +80,23 @@ func TestBatchDriveUploadPropagatesMetadataAndAggregates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.StartDriveUpload(upload); err != nil {
+	transfer, err := manager.StartDriveUpload(upload)
+	if err != nil {
 		t.Fatal(err)
 	}
 
+	// SUCCESS is visible before the worker's final state writes finish.
+	// Wait for it to exit so TempDir cleanup cannot race with persistence.
 	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		current, ok := state.GetFolderEntry(entry.ID)
-		if ok && current.State == StateSuccess {
+	for {
+		manager.mu.Lock()
+		_, running := manager.cancels[transfer.ID]
+		manager.mu.Unlock()
+		if !running {
 			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for upload worker to finish")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
