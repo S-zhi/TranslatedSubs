@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import errno
+import hashlib
 import importlib.util
+import inspect
+import json
 import logging
+import os
 import shutil
 import tempfile
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Callable, Optional
+from urllib.parse import urlsplit
 
 from src.config import settings
 
@@ -20,6 +27,7 @@ MODEL_REPO = "Helsinki-NLP/opus-mt-en-zh"
 MODEL_REVISION = "408d9bc410a388e1d9aef112a2daba955b945255"
 ENGINE_ID = "local-opus-en-zh"
 MODEL_NAME = "本地 CPU 英译中"
+_PROVENANCE = ".subtrans-translation.json"
 MODEL_STATUS_NOT_INSTALLED = "NOT_INSTALLED"
 MODEL_STATUS_DOWNLOADING = "DOWNLOADING"
 MODEL_STATUS_CONVERTING = "CONVERTING"
@@ -87,10 +95,12 @@ class TranslationModelManager:
         snapshot_download_fn: Optional[Callable] = None,
         converter_factory: Optional[Callable] = None,
         runtime_factory: Optional[Callable] = None,
+        endpoint: Optional[str] = None,
     ):
         base_dir = Path(settings.data_dir) / "models" / "translation"
         self.model_dir = Path(model_dir) if model_dir is not None else base_dir / "opus-mt-en-zh"
         self.revision = revision
+        self.endpoint = endpoint
         self._snapshot_download_fn = snapshot_download_fn
         self._converter_factory = converter_factory
         self._runtime_factory = runtime_factory
@@ -105,6 +115,10 @@ class TranslationModelManager:
         self._status = MODEL_STATUS_READY if self._installed(self.model_dir) else MODEL_STATUS_NOT_INSTALLED
         self._error: Optional[str] = None
         self._working_dir: Optional[Path] = None
+        # None means this attempt has no observable transfer counters. Never
+        # derive these from staging size: conversion writes unrelated bytes.
+        self._downloaded_bytes: Optional[int] = None
+        self._total_bytes: Optional[int] = None
 
     @staticmethod
     def _installed(path: Path) -> bool:
@@ -139,15 +153,50 @@ class TranslationModelManager:
                 status = MODEL_STATUS_FAILED
                 self._status = status
                 self._error = "本地模型文件不完整或已丢失"
+            provenance = self._provenance()
+            if (status == MODEL_STATUS_READY and os.environ.get("SUBTRANS_DESKTOP") == "1"
+                    and provenance.get("revision") != self.revision):
+                status = self._status = MODEL_STATUS_FAILED
+                self._error = "本地模型来源未知、版本不符或文件已变化，请重试模型准备"
             measured_dir = self._working_dir if self._working_dir and self._working_dir.exists() else self.model_dir
+            restored_progress = status == MODEL_STATUS_READY and self._downloaded_bytes is None
             return {
                 "model_status": status,
                 "installed_bytes": _directory_size(measured_dir),
                 "model_error": self._error,
+                "downloaded_bytes": provenance.get("downloaded_bytes") if restored_progress else self._downloaded_bytes,
+                "total_bytes": provenance.get("total_bytes") if restored_progress else self._total_bytes,
+                "revision": provenance.get("revision"),
+                "phase": status.lower(),
             }
+
+    def _provenance(self) -> dict:
+        """Only a persisted, unchanged, validated install can attest its pin."""
+        from src.service.model_manager import _stamps_match
+
+        marker = self.model_dir / _PROVENANCE
+        try:
+            if self.model_dir.is_symlink() or marker.is_symlink() or marker.stat().st_size > 16384:
+                return {}
+            value = json.loads(marker.read_text(encoding="utf-8"))
+            if (not isinstance(value, dict) or value.get("repo") != MODEL_REPO
+                    or value.get("validated") != "cpu/int8"
+                    or not isinstance(value.get("revision"), str)
+                    or len(value["revision"]) != 40
+                    or any(c not in "0123456789abcdef" for c in value["revision"])
+                    or not _stamps_match(self.model_dir, value.get("files"))):
+                return {}
+            required = {"config.json", "model.bin", *_TOKENIZER_FILES[:4]}
+            if not required.issubset(value["files"]) or not self._installed(self.model_dir):
+                return {}
+            return value
+        except (OSError, ValueError, TypeError):
+            return {}
 
     def is_ready(self) -> bool:
         with self._lock:
+            if os.environ.get("SUBTRANS_DESKTOP") == "1":
+                return self.status()["model_status"] == MODEL_STATUS_READY
             if self._status == MODEL_STATUS_FAILED or not self._installed(self.model_dir):
                 if self._status == MODEL_STATUS_READY:
                     self._status = MODEL_STATUS_FAILED
@@ -236,14 +285,18 @@ class TranslationModelManager:
         with self._lock:
             if self._future is not None and not self._future.done():
                 return self.status()
-            if self._status != MODEL_STATUS_FAILED and self.is_ready():
+            provenance = self._provenance()
+            needs_pin = os.environ.get("SUBTRANS_DESKTOP") == "1" or bool(provenance)
+            if (self._status != MODEL_STATUS_FAILED and self.is_ready()
+                    and (not needs_pin or provenance.get("revision") == self.revision)):
                 self._status = MODEL_STATUS_READY
                 self._error = None
                 return self.status()
-            self.model_dir.parent.mkdir(parents=True, exist_ok=True)
             self._status = MODEL_STATUS_DOWNLOADING
             self._error = None
             self._working_dir = None
+            self._downloaded_bytes = None
+            self._total_bytes = None
             self._future = self._executor.submit(self._install)
             return self.status()
 
@@ -286,10 +339,38 @@ class TranslationModelManager:
             raise
 
     def _install(self) -> None:
+        # Separate managers/processes sharing a desktop home must not publish
+        # competing conversions. No lock files are added in legacy server mode.
+        try:
+            with self._installation_lock():
+                self._install_model()
+        except Exception as exc:
+            self.mark_failed(exc)
+
+    @contextmanager
+    def _installation_lock(self):
+        if os.environ.get("SUBTRANS_DESKTOP") != "1":
+            yield
+            return
+        import fcntl
+
+        self.model_dir.parent.mkdir(parents=True, exist_ok=True)
+        if any(path.is_symlink() for path in (self.model_dir, *self.model_dir.parents)):
+            raise TranslationModelError("模型存储路径不能包含符号链接")
+        fd = os.open(self.model_dir.parent / ".translation-install.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            os.close(fd)
+
+    def _install_model(self) -> None:
         work_dir: Optional[Path] = None
+        preserve_backup = False
         try:
             with self._lock:
                 self._status = MODEL_STATUS_DOWNLOADING
+            self.model_dir.parent.mkdir(parents=True, exist_ok=True)
             work_dir = Path(tempfile.mkdtemp(prefix=".opus-mt-en-zh-", dir=self.model_dir.parent))
             with self._lock:
                 self._working_dir = work_dir
@@ -299,6 +380,9 @@ class TranslationModelManager:
 
             with self._lock:
                 self._status = MODEL_STATUS_CONVERTING
+            # Source bytes are only a conservative conversion-space budget,
+            # never reported as bytes transferred or exact output size.
+            self._ensure_free_space(_directory_size(snapshot_path), work_dir)
             converted_dir = work_dir / "converted"
             converter = self._make_converter(snapshot_path)
             converter.convert(str(converted_dir), quantization="int8")
@@ -312,53 +396,220 @@ class TranslationModelManager:
 
             with self._lock:
                 self._status = MODEL_STATUS_CHECKING
-            tokenizer, translator = self._load_runtime(converted_dir)
+            inter_threads = max(1, int(settings.local_ct2_inter_threads))
+            intra_threads = max(1, int(settings.local_ct2_intra_threads))
+            tokenizer, translator = self._load_runtime(
+                converted_dir, inter_threads=inter_threads, intra_threads=intra_threads,
+            )
             smoke = self._translate_batch(["Hello."], tokenizer, translator)
             if len(smoke) != 1 or not smoke[0].strip():
                 raise TranslationModelError("CPU INT8 模型烟测未返回译文", code="smoke_test_failed")
 
+            from src.service.model_manager import _file_stamps
+            from src.desktop.models import model_install_guard
+
+            files = [path.name for path in converted_dir.iterdir() if path.is_file()]
+            (converted_dir / _PROVENANCE).write_text(json.dumps({
+                "repo": MODEL_REPO, "revision": self.revision, "validated": "cpu/int8",
+                "files": _file_stamps(converted_dir, files),
+                "downloaded_bytes": self._downloaded_bytes, "total_bytes": self._total_bytes,
+            }), encoding="utf-8")
+
             backup = work_dir / "previous"
-            if self.model_dir.exists():
-                self.model_dir.rename(backup)
-            try:
-                converted_dir.rename(self.model_dir)
-            except Exception:
-                if backup.exists() and not self.model_dir.exists():
-                    backup.rename(self.model_dir)
-                raise
-            with self._lock:
-                self._runtime = (tokenizer, translator)
-                self._status = MODEL_STATUS_READY
-                self._error = None
+            with model_install_guard() if self.model_dir.exists() else nullcontext():
+                with self._runtime_lock:
+                    if self.model_dir.exists():
+                        self.model_dir.rename(backup)
+                        preserve_backup = True
+                    try:
+                        converted_dir.rename(self.model_dir)
+                    except Exception:
+                        if backup.exists() and not self.model_dir.exists():
+                            try:
+                                backup.rename(self.model_dir)
+                                preserve_backup = False
+                            except OSError as exc:
+                                raise TranslationModelError(
+                                    f"模型发布与恢复失败，旧模型仍保留在 {backup}", code="publish_failed"
+                                ) from exc
+                        raise
+                    # Desktop predecessors are retained, never deleted while a
+                    # pipeline might still hold its tokenizer/runtime files.
+                    preserve_backup = backup.exists() and os.environ.get("SUBTRANS_DESKTOP") == "1"
+                    with self._lock:
+                        self._runtime = (tokenizer, translator)
+                        self._runtime_key = (str(self.model_dir), inter_threads, intra_threads)
+                        self._status = MODEL_STATUS_READY
+                        self._error = None
         except Exception as exc:
             with self._lock:
+                failed_phase = self._status.lower()
                 self._status = MODEL_STATUS_FAILED
-                self._error = str(exc)
+                message = "磁盘空间不足，请释放空间后重试" if (
+                    isinstance(exc, OSError) and exc.errno == errno.ENOSPC
+                ) else str(exc)
+                self._error = f"{failed_phase}: {message}"
         finally:
-            if work_dir is not None:
+            if work_dir is not None and not preserve_backup:
                 shutil.rmtree(work_dir, ignore_errors=True)
+            elif work_dir is not None:
+                # Retain only the predecessor/recovery data, not an extra copy
+                # of downloaded source weights after conversion has finished.
+                shutil.rmtree(work_dir / "snapshot", ignore_errors=True)
             with self._lock:
                 self._working_dir = None
 
     def _download_snapshot(self, local_dir: Path) -> Path:
+        endpoint = self._download_endpoint()
         if self._snapshot_download_fn is None:
-            from huggingface_hub import snapshot_download
-
-            download_fn = snapshot_download
+            returned = self._download_http_snapshot(local_dir, endpoint)
         else:
             download_fn = self._snapshot_download_fn
-        returned = download_fn(
-            repo_id=MODEL_REPO,
-            revision=self.revision,
-            allow_patterns=list(_ALLOWED_FILES),
-            local_dir=str(local_dir),
-        )
+            kwargs = dict(
+                repo_id=MODEL_REPO, revision=self.revision,
+                allow_patterns=list(_ALLOWED_FILES), local_dir=str(local_dir),
+            )
+            # Legacy injected functions accept exactly these four arguments.
+            # Opt-in progress callbacks report absolute transfer bytes.
+            try:
+                parameters = inspect.signature(download_fn).parameters
+            except (TypeError, ValueError):
+                parameters = {}
+            if "progress_callback" in parameters:
+                kwargs["progress_callback"] = self._record_download_progress
+            if endpoint is not None:
+                if "endpoint" not in parameters and not any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()
+                ):
+                    raise TranslationModelError(
+                        "注入的下载器不支持配置模型源", code="unsupported_endpoint"
+                    )
+                kwargs["endpoint"] = endpoint
+            returned = download_fn(**kwargs)
         snapshot_path = Path(returned) if returned else local_dir
         if not snapshot_path.is_dir():
             snapshot_path = local_dir
         if not (snapshot_path / "config.json").is_file() or not (snapshot_path / "pytorch_model.bin").is_file():
             raise TranslationModelError("模型仓库缺少所需权重或配置文件", code="download_failed")
         return snapshot_path
+
+    def _download_endpoint(self) -> Optional[str]:
+        endpoint = self.endpoint
+        if endpoint is None and os.environ.get("SUBTRANS_DESKTOP") == "1":
+            endpoint = os.environ.get("SUBTRANS_DESKTOP_MODEL_ENDPOINT") or None
+        if endpoint is None:
+            return None
+        try:
+            parsed = urlsplit(endpoint)
+            valid = (
+                parsed.scheme == "https" and parsed.hostname and parsed.port != 0
+                and not parsed.username and not parsed.password
+                and not parsed.query and not parsed.fragment
+                and not any(character.isspace() for character in endpoint)
+            )
+        except ValueError:
+            valid = False
+        if not valid:
+            raise TranslationModelError("模型源必须是无凭据的 HTTPS 地址", code="invalid_endpoint")
+        return endpoint.rstrip("/")
+
+    @staticmethod
+    def _ensure_free_space(required_bytes: int, path: Path) -> None:
+        if required_bytes > shutil.disk_usage(path).free:
+            raise TranslationModelError(
+                f"磁盘空间不足，当前阶段至少需要 {required_bytes} 字节可用空间，请释放空间后重试",
+                code="insufficient_disk_space",
+            )
+
+    def _record_download_progress(self, downloaded_bytes: int, total_bytes: Optional[int]) -> None:
+        if (
+            type(downloaded_bytes) is not int or downloaded_bytes < 0
+            or (total_bytes is not None and (
+                type(total_bytes) is not int or total_bytes < downloaded_bytes
+            ))
+        ):
+            raise TranslationModelError("下载器返回了无效的字节进度", code="invalid_progress")
+        with self._lock:
+            if self._status != MODEL_STATUS_DOWNLOADING:
+                return
+            self._downloaded_bytes = downloaded_bytes
+            self._total_bytes = total_bytes
+
+    def _download_http_snapshot(self, local_dir: Path, endpoint: Optional[str]) -> Path:
+        """Stream the pinned public files; count only bytes received this attempt.
+
+        Hub 0.36 snapshot_download exposes a file-count bar, not transfer bytes.
+        A private HTTP client avoids global progress patches shared with Whisper.
+        Failed attempts are cleaned and retried from zero, not silently resumed.
+        """
+        import httpx
+        from huggingface_hub import HfApi, hf_hub_url
+
+        endpoint = endpoint or "https://huggingface.co"
+        try:
+            info = HfApi(endpoint=endpoint, token=False).model_info(
+                MODEL_REPO, revision=self.revision, files_metadata=True, timeout=15,
+            )
+        except Exception as exc:
+            raise TranslationModelError("获取模型文件信息失败，请检查网络和模型源后重试", code="download_failed") from exc
+        if info.sha != self.revision:
+            raise TranslationModelError("模型源返回的版本与固定版本不一致", code="revision_mismatch")
+        files = {item.rfilename: item for item in (info.siblings or []) if item.rfilename in _ALLOWED_FILES}
+        required = {"config.json", "pytorch_model.bin", *_TOKENIZER_FILES[:4]}
+        if not required.issubset(files):
+            raise TranslationModelError("模型仓库缺少所需权重或 tokenizer 文件", code="download_failed")
+        sizes = [getattr(item, "size", None) for item in files.values()]
+        total = sum(sizes) if all(type(size) is int and size >= 0 for size in sizes) else None
+        self._record_download_progress(0, total)
+        if total is not None:
+            # Reserve source + a conservative source-sized conversion budget.
+            self._ensure_free_space(total * 2, local_dir)
+        downloaded = 0
+
+        def require_https(request):
+            if request.url.scheme != "https":
+                raise TranslationModelError("模型下载重定向必须使用 HTTPS", code="invalid_endpoint")
+
+        try:
+            with httpx.Client(
+                follow_redirects=True, timeout=30,
+                headers={"Accept-Encoding": "identity"},
+                event_hooks={"request": [require_https]},
+            ) as client:
+                for name, item in files.items():
+                    size = getattr(item, "size", None)
+                    size = size if type(size) is int and size >= 0 else None
+                    lfs = getattr(item, "lfs", None)
+                    expected_hash = getattr(lfs, "sha256", None)
+                    if isinstance(lfs, dict):
+                        expected_hash = lfs.get("sha256")
+                    digest = hashlib.sha256() if lfs else hashlib.sha1()
+                    if not lfs and size is not None:
+                        digest.update(f"blob {size}\0".encode())
+                        expected_hash = getattr(item, "blob_id", None)
+                    received = 0
+                    url = hf_hub_url(MODEL_REPO, name, revision=self.revision, endpoint=endpoint)
+                    with client.stream("GET", url) as response:
+                        response.raise_for_status()
+                        if response.status_code != 200 or response.headers.get("Content-Encoding", "identity") != "identity":
+                            raise TranslationModelError("模型源返回了非完整原始文件", code="download_failed")
+                        with (local_dir / name).open("wb") as output:
+                            for chunk in response.iter_raw():
+                                received += len(chunk)
+                                downloaded += len(chunk)
+                                if size is not None and received > size:
+                                    raise TranslationModelError("模型文件大小与元数据不一致", code="download_failed")
+                                self._record_download_progress(downloaded, total)
+                                output.write(chunk)
+                                digest.update(chunk)
+                    if (size is not None and received != size) or (
+                        expected_hash and digest.hexdigest() != expected_hash
+                    ):
+                        raise TranslationModelError("模型文件完整性校验失败，请重试", code="download_failed")
+        except httpx.HTTPError as exc:
+            # Avoid exposing signed CDN URLs in public status/error logs.
+            raise TranslationModelError("模型下载失败，请检查网络和模型源后重试", code="download_failed") from exc
+        return local_dir
 
     def _make_converter(self, source_dir: Path):
         if self._converter_factory is not None:

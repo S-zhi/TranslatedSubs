@@ -20,7 +20,8 @@
     <link rel="stylesheet" href="styles/plugin-settings.css" />
     <link rel="stylesheet" href="styles/developer.css" />
     <link rel="stylesheet" href="styles/workbench.css" />
-    <script src="https://unpkg.com/@phosphor-icons/web@2.1.1"></script>
+    <link rel="stylesheet" href="vendor/phosphor/regular/style.css" />
+    <link rel="stylesheet" href="styles/desktop.css" />
   </head>
   <body>
     <div class="container" aria-hidden="true"></div>
@@ -84,8 +85,11 @@
 
       <!-- 内容区 -->
       <main class="content">
+        <section id="desktopUpdate" class="desktop-update desktop-only" aria-label="应用更新" hidden></section>
         <!-- ============ 任务 ============ -->
         <section class="view is-active" data-view="tasks" id="view-tasks">
+          <section id="desktopStatus" class="desktop-status desktop-only" aria-label="基础模型准备" hidden></section>
+          <p class="desktop-notice desktop-only">英语 → 简体中文 · 中英双语硬字幕 · 本地处理<br />字幕由机器生成，可能存在识别或翻译错误。YouTube 公开视频需要当前网络可访问；也可选择本地视频。</p>
           <header class="workspace-header">
             <div class="workspace-header__path"><i class="ph ph-squares-four" aria-hidden="true"></i><span>创作工作台</span></div>
             <span class="workspace-header__meta">TranslatedSubs Studio</span>
@@ -321,6 +325,7 @@
 
         <!-- ============ 预览 ============ -->
         <section class="view" data-view="preview" id="view-preview">
+          <p class="desktop-notice desktop-only">字幕由机器生成，请核对重要信息。导出带字幕视频或字幕文件时，可选择保存位置。</p>
           <div class="screening">
             <div class="screening__stage" id="previewStage"></div>
             <aside class="screening__rail">

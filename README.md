@@ -13,7 +13,7 @@ TranslatedSubs is a video and audio understanding workbench for downloading medi
 - **Flexible local deployment and model choices**: Start quickly or run a lightweight setup; configure more capable models for better matching, including community models.
 - **Parallel tasks and resource visibility**: Run multiple jobs at once and review their status and resource use. Google Drive sync is also available.
 - **Dedicated model fine-tuning service**: Fine-tune supported models through a separate service to improve results for your needs.
-- **Use across devices**: Available on the web, Windows, and macOS, with mobile support planned for the future.
+- **Use across devices**: Run the web workbench from source on Windows and macOS. The Apple Silicon desktop app is in development; no signed desktop release is available yet.
 
 Supported video platforms:
 [![YouTube](https://img.shields.io/badge/YouTube-FF0033?style=plastic&logo=youtube&logoColor=white)](https://www.youtube.com/)
@@ -30,6 +30,16 @@ Supported video platforms:
 ![TranslatedSubs](./docs/assets/readme-demo-1.png)
 
 ![TranslatedSubs](./docs/assets/readme-demo-2.png)
+
+## macOS 桌面一期（开发中）
+
+**目前没有可下载的已签名、公证桌面正式版。** Apple Silicon 桌面版正在开发，原生窗口复用 Web 工作台；开发构建与普通用户安装包的区别见[桌面安装与开发指南](./docs/macos-desktop-install.md)。
+
+首版目标是安装 DMG 后无需配置 Python、Redis、FFmpeg 或 API Key，首次联网自动准备模型，再用本地转写、英文到简体中文翻译和压制生成中英双语硬字幕 MP4，并可单独导出字幕。模型下载仍需要网络与等待；YouTube 公开视频下载取决于用户网络能否访问目标视频，本地视频流程独立可用。字幕由机器生成，需要人工核对。
+
+关闭窗口继续后台处理；主动退出在有任务时提示确认，中断任务重开后可重试，**不保证断点续处理**。更新仅检查版本、展示说明并引导下载新版 DMG，由用户安装。上述流程仍需完整验收，不能把开发完成视作发行通过：M1／8GB 的 60 分钟、1080p 样本两小时处理目标、最低 macOS 支持版本、国内外网络和签名公证均未验收通过。见[发行检查表](./docs/macos-desktop-release.md)与[产品约定](./docs/macos-desktop-v1-product-brief.md)。
+
+下面的源码、Redis 和 Docker 步骤继续适用于服务端／浏览器工作台。桌面模式使用独立 SQLite 配置，不要求普通用户运行 Redis。
 
 ## Build from source
 
@@ -220,6 +230,8 @@ Most detailed guides below are in Chinese; the transcriber protocol is in Englis
 
 - [Documentation index](./docs/README.md)
 - [Local quick start](./docs/local-quick-start.md)
+- [macOS 桌面安装与开发（开发中）](./docs/macos-desktop-install.md)
+- [macOS 桌面发行检查表](./docs/macos-desktop-release.md)
 - [Linux deployment](./docs/quick-start-linux.md)
 - [MCP Server](./docs/mcp-server.md)
 - [MCP Agent guide](./docs/mcp-agent-guide.md)

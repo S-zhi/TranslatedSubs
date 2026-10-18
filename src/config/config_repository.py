@@ -1,7 +1,8 @@
-"""Redis-only repository for the aggregate shared configuration document."""
+"""Aggregate configuration: Redis for servers, explicit SQLite desktop mode."""
 from __future__ import annotations
 
 import copy
+import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -165,6 +166,14 @@ def get_config_provider() -> ConfigProvider:
     with _provider_lock:
         if _provider is None:
             bootstrap = load_bootstrap()
+            if os.environ.get("SUBTRANS_DESKTOP") == "1":
+                from .sqlite_config import SQLiteConfigProvider, desktop_default_document
+
+                _provider = SQLiteConfigProvider(
+                    bootstrap["paths"]["configDbPath"],
+                    initial_document=desktop_default_document(),
+                )
+                return _provider
             redis = bootstrap["redis"]
             namespace = str(redis.get("namespace") or "translatedsubs-local").strip()
             url = str(redis.get("url") or "redis://localhost:6379/0")

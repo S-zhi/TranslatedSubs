@@ -1,6 +1,10 @@
 # 本地快速启动
 
-本文介绍如何运行 TranslatedSubs。业务配置保存在 Redis；机器本地的 Redis 地址、数据路径和监听参数保存在 `config.local.json`。
+本文介绍如何从源码运行 TranslatedSubs 服务端与浏览器工作台。此模式的业务配置保存在 Redis；机器本地的 Redis 地址、数据路径和监听参数保存在 `config.local.json`。
+
+Apple Silicon 原生桌面版正在开发，**目前没有可下载的已签名、公证正式版**；开发入口见[桌面安装与开发指南](./macos-desktop-install.md)，发行条件见[发行检查表](./macos-desktop-release.md)。桌面模式由原生窗口管理本机后端，使用独立 SQLite 配置，数据默认放在 `~/Library/Application Support/TranslateSub`。无需 Redis 的桌面约定不改变本文服务端步骤，也不自动迁移已有 Redis 配置。
+
+桌面正式版的目标是无需用户安装运行依赖或填写 API Key；首次仍需联网下载模型，准备后在本机转写、翻译和压制。当前源码开发仍需开发工具，不能以本机启动成功代替干净设备验收。不要为试用桌面模式修改现有服务端的 `config.local.json`。
 
 ## 准备依赖
 

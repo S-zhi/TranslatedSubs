@@ -1,5 +1,7 @@
 /* 任务控制台：参数初始化 + URL 校验 + 提交 */
 
+import { desktopTaskPayload } from "./desktop.js";
+import { applyDesktopDefaults } from "./desktop-ui.js";
 import { $, el } from "./utils.js";
 import { createTask } from "./store.js";
 import { toast } from "./toast.js";
@@ -362,27 +364,30 @@ async function initSrtOptions() {
   engineLanguageController?.sync();
 }
 
-export function initConsole() {
+export function initConsole({ desktop = null } = {}) {
   // 初始化控制台表单交互。
   engineLanguageController = createEngineLanguageController({
     engineSelect: $("#engine"),
     sourceSelect: $("#sourceLang"),
     targetSelect: $("#targetLang"),
   });
-  initEngines();
-  engineLanguageController.setEngines([LOCAL_ENGINE_FALLBACK]);
-  document.addEventListener("translation-engines-change", () => loadEngines());
-  document.addEventListener("viewchange", (event) => {
-    if (event.detail?.view === "tasks") {
-      loadEngines();
-      refreshTaskWhisperState({ force: true });
-    }
-  });
-  document.addEventListener("whisper-models-change", queueTaskWhisperRefresh);
-  document.addEventListener("model-settings-change", queueTaskWhisperRefresh);
-  initSrtOptions();
+  if (!desktop) {
+    initEngines();
+    engineLanguageController.setEngines([LOCAL_ENGINE_FALLBACK]);
+    document.addEventListener("translation-engines-change", () => loadEngines());
+    document.addEventListener("viewchange", (event) => {
+      if (event.detail?.view === "tasks") {
+        loadEngines();
+        refreshTaskWhisperState({ force: true });
+      }
+    });
+    document.addEventListener("whisper-models-change", queueTaskWhisperRefresh);
+    document.addEventListener("model-settings-change", queueTaskWhisperRefresh);
+    initSrtOptions();
+  }
 
   const form = $("#taskForm");
+  if (desktop) $("#quality").value = "1080p";
   const urlInput = $("#url");
   const fileInput = $("#videoFile");
   const uploadBtn = $("#uploadBtn");
@@ -402,8 +407,10 @@ export function initConsole() {
     submitBtn.disabled = submitting
       || probeState.status === "checking"
       || probeState.status === "failed"
-      || (taskPluginController && !taskPluginController.isReady())
-      || (needsSubtitle && !(taskPluginController ? taskPluginController.whisperReady() : taskWhisperState?.ok));
+      || (desktop ? !desktop.snapshot.ready : (
+        (taskPluginController && !taskPluginController.isReady())
+        || (needsSubtitle && !(taskPluginController ? taskPluginController.whisperReady() : taskWhisperState?.ok))
+      ));
   }
   taskSubmitSync = syncSubmitDisabled;
   syncSubmitDisabled();
@@ -613,6 +620,10 @@ export function initConsole() {
   // 「是否需要字幕」：选“仅下载”时禁用字幕相关参数（源/目标语言、模式、烧录、模型、引擎），但保留画质选项
   const paramsBox = form.querySelector(".params");
   function syncSubtitleParams() {
+    if (desktop) {
+      applyDesktopDefaults(form, desktop.snapshot.defaults);
+      return;
+    }
     const need = form.elements.needSubtitle.value === "on";
     if (!need && ttsEnabledInput.checked) {
       ttsEnabledInput.checked = false;
@@ -651,7 +662,7 @@ export function initConsole() {
     syncTtsHint();
   });
   syncSubtitleParams();
-  taskPluginController = createTaskPluginController({
+  taskPluginController = desktop ? null : createTaskPluginController({
     root: $("#taskPluginOptions"), form,
     getWhisperState: () => taskWhisperState,
     onChange: () => {
@@ -667,7 +678,13 @@ export function initConsole() {
     lastWhisperSelection = $("#model").value;
     syncSubmitDisabled();
   });
-  loadEngines();
+  if (!desktop) loadEngines();
+  if (desktop) {
+    desktop.subscribe((state) => {
+      applyDesktopDefaults(form, state.defaults);
+      syncSubmitDisabled();
+    });
+  }
 
   $("#engine").addEventListener("change", () => {
     if (engineLanguageController.sync()) toast("本地引擎仅支持英语 → 简体中文", "ph-info");
@@ -675,64 +692,75 @@ export function initConsole() {
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const videoFile = currentVideoFile();
-    const url = urlInput.value.trim();
     if (submitting) return;
-    if (taskPluginController) {
-      await taskPluginController.refresh({ force: true });
-      if (!taskPluginController.isReady()) {
-        toast(taskPluginController.error() || "请先修复插件选择", "ph-warning-circle");
-        return;
-      }
-    }
-    const selectedEngine = engineLanguageController.selectedEngine();
-
-    if (form.elements.needSubtitle.value === "on" && (!taskPluginController || taskPluginController.requiresWhisperInventory())) {
-      const whisperState = await refreshTaskWhisperState({ force: true });
-      if (!whisperState?.ok) {
-        toast(whisperState?.message || "无法确认 Whisper 模型状态，请稍后重试。", "ph-warning-circle");
-        return;
-      }
-      const selectedModel = $("#model").value;
-      if (!whisperState.options.some((item) => item.value === selectedModel)) {
-        toast("所选 Whisper 模型已不可用，请在模型设置中修复。", "ph-warning-circle");
-        return;
-      }
-    }
-
-    if (!taskPluginController?.llmBound() && requiresReadyLocalTranslation(selectedEngine, form.elements.needSubtitle.value === "on")) {
-      toast("本地模型尚未就绪，请先下载并转换模型", "ph-warning-circle");
-      return;
-    }
-
-    if (ttsEnabledInput.checked && !syncTtsHint()) {
-      $("#targetLang").focus();
-      return;
-    }
-
-    if (!videoFile && (!url || !isValidUrl(url))) {
-      setProbeState("failed", "请输入有效的视频链接（以 http(s):// 开头）", true);
-      urlInput.focus();
-      return;
-    }
-
-    if (!videoFile) {
-      const probe = await ensureProbeOk(url);
-      if (!probe.ok) {
-        urlInput.focus();
-        return;
-      }
-    }
-
-    const collectedPayload = collectTaskPayload(form);
-    const payload = {
-      ...(taskPluginController ? taskPluginController.applyPayload(collectedPayload) : collectedPayload),
-      ...(videoFile ? { file: videoFile } : { url }),
-    };
-
     submitting = true;
     syncSubmitDisabled();
     try {
+      if (desktop) {
+        await desktop.refresh();
+        if (!desktop.snapshot.ready) {
+          toast("基础模型尚未就绪，请先完成模型准备。", "ph-warning-circle");
+          return;
+        }
+      }
+      if (!desktop && taskPluginController) {
+        await taskPluginController.refresh({ force: true });
+        if (!taskPluginController.isReady()) {
+          toast(taskPluginController.error() || "请先修复插件选择", "ph-warning-circle");
+          return;
+        }
+      }
+      const videoFile = currentVideoFile();
+      const url = urlInput.value.trim();
+      const selectedEngine = engineLanguageController.selectedEngine();
+
+      if (!desktop && form.elements.needSubtitle.value === "on"
+          && (!taskPluginController || taskPluginController.requiresWhisperInventory())) {
+        const whisperState = await refreshTaskWhisperState({ force: true });
+        if (!whisperState?.ok) {
+          toast(whisperState?.message || "无法确认 Whisper 模型状态，请稍后重试。", "ph-warning-circle");
+          return;
+        }
+        const selectedModel = $("#model").value;
+        if (!whisperState.options.some((item) => item.value === selectedModel)) {
+          toast("所选 Whisper 模型已不可用，请在模型设置中修复。", "ph-warning-circle");
+          return;
+        }
+      }
+
+      if (!desktop && !taskPluginController?.llmBound()
+          && requiresReadyLocalTranslation(selectedEngine, form.elements.needSubtitle.value === "on")) {
+        toast("本地模型尚未就绪，请先下载并转换模型", "ph-warning-circle");
+        return;
+      }
+
+      if (ttsEnabledInput.checked && !syncTtsHint()) {
+        $("#targetLang").focus();
+        return;
+      }
+
+      if (!videoFile && (!url || !isValidUrl(url))) {
+        setProbeState("failed", "请输入有效的视频链接（以 http(s):// 开头）", true);
+        urlInput.focus();
+        return;
+      }
+
+      if (!videoFile) {
+        const probe = await ensureProbeOk(url);
+        if (!probe.ok) {
+          urlInput.focus();
+          return;
+        }
+      }
+
+      const collectedPayload = collectTaskPayload(form);
+      let payload = {
+        ...(!desktop && taskPluginController ? taskPluginController.applyPayload(collectedPayload) : collectedPayload),
+        ...(videoFile ? { file: videoFile } : { url }),
+      };
+
+      // Recheck after an asynchronous URL probe; preparation may have restarted.
+      if (desktop) payload = desktopTaskPayload(payload, desktop.snapshot);
       await createTask(payload);
       toast("任务已加入队列", "ph-check-circle");
       urlInput.value = "";

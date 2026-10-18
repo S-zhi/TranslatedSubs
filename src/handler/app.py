@@ -10,8 +10,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 from pathlib import Path
+import sys
+
+if os.environ.get("SUBTRANS_DESKTOP") == "1":
+    from src.desktop.runtime import configure_environment
+
+    configure_environment()
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -81,13 +89,40 @@ class DynamicCORSMiddleware(CORSMiddleware):
         )
         await dynamic(scope, receive, send)
 
-# 项目根目录下的 web 前端目录（向上两级即 src/handler/app.py -> src/handler -> 项目根）
-_WEB_DIR = Path(__file__).resolve().parents[2] / "web"
+def resolve_web_dir() -> Path:
+    """PyInstaller places collected web assets directly below its bundle root."""
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if bundle_root is not None:
+        return Path(bundle_root) / "web"
+    return Path(__file__).resolve().parents[2] / "web"
+
+
+_WEB_DIR = resolve_web_dir()
 
 
 
 def create_app(debug: bool | None = None) -> FastAPI:
     app = FastAPI(title="TranslatedSubs API", version="0.1.0")
+    desktop_mode = os.environ.get("SUBTRANS_DESKTOP") == "1"
+    if desktop_mode:
+        from src.desktop.api import create_desktop_router, require_desktop_session
+        from src.desktop.runtime import configure_environment
+        from src.desktop.security import DesktopSecurityMiddleware
+        from src.handler.deps import require_api_token
+
+        configure_environment()
+        app.state.desktop_accepting_tasks = True
+        app.state.desktop_inflight_mutations = 0
+        app.state.desktop_mutations_drained = asyncio.Event()
+        app.state.desktop_mutations_drained.set()
+        app.state.desktop_tasks_stopped = False
+        app.state.desktop_shutdown_lock = asyncio.Lock()
+        app.add_middleware(
+            DesktopSecurityMiddleware,
+            token=os.environ["SUBTRANS_DESKTOP_SESSION_TOKEN"], state=app.state,
+        )
+        app.dependency_overrides[require_api_token] = require_desktop_session
+        app.include_router(create_desktop_router(_WEB_DIR))
 
     @app.exception_handler(ConfigUnavailable)
     async def config_unavailable_handler(request: Request, exc: ConfigUnavailable):
@@ -104,12 +139,13 @@ def create_app(debug: bool | None = None) -> FastAPI:
         }})
 
     # 本机工作台：只允许配置中的前端来源访问 API。
-    app.add_middleware(
-        DynamicCORSMiddleware,
-        allow_origins=[],
-        allow_methods=["GET", "POST", "DELETE", "PUT", "PATCH", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "X-API-Token", "If-Match"],
-    )
+    if not desktop_mode:
+        app.add_middleware(
+            DynamicCORSMiddleware,
+            allow_origins=[],
+            allow_methods=["GET", "POST", "DELETE", "PUT", "PATCH", "OPTIONS"],
+            allow_headers=["Authorization", "Content-Type", "X-API-Token", "If-Match"],
+        )
 
     # 按业务挂载路由，后续新增业务在此 include 即可
     app.include_router(tasks.router)
@@ -155,6 +191,8 @@ def create_app(debug: bool | None = None) -> FastAPI:
         try:
             initialize_config_document()
         except ConfigUnavailable:
+            if desktop_mode:
+                raise
             logger.exception("Redis shared configuration unavailable; skipping recovery startup")
             return
 
@@ -183,6 +221,15 @@ def create_app(debug: bool | None = None) -> FastAPI:
             if abnormal:
                 logger.warning("启动扫描检测到 %d 个磁盘故障或存储迁移任务: %s", abnormal, downgraded)
 
+        if desktop_mode:
+            from src.desktop.api import start_desktop_preparation
+            from src.desktop.lifecycle import recover_desktop_tasks
+
+            recover_desktop_tasks()
+            app.state.desktop_prepare_task = asyncio.create_task(start_desktop_preparation())
+            start_retention_scheduler()
+            return
+
         # Local translation is optional at startup.  If a complete model and
         # its optional dependencies are already present, warm the cached
         # runtime in the background without blocking API startup or downloading.
@@ -205,8 +252,22 @@ def create_app(debug: bool | None = None) -> FastAPI:
         if effective_debug:
             logger.info("debug 模式：已跳过网站连通性检查")
     @app.on_event("shutdown")
-    def _shutdown_runner() -> None:
+    async def _shutdown_runner() -> None:
         """关闭应用时通知 runner 线程池退出。"""
+        if desktop_mode:
+            from src.desktop.api import stop_desktop_tasks
+            from src.desktop.runtime import stop_desktop_retention
+
+            try:
+                await stop_desktop_tasks(app)
+            finally:
+                preparation = getattr(app.state, "desktop_prepare_task", None)
+                if preparation is not None and not preparation.done():
+                    preparation.cancel()
+                    await asyncio.gather(preparation, return_exceptions=True)
+                shutdown_executor(wait=False)
+                await stop_desktop_retention()
+            return
         stop_startup_probe()
         stop_config_subscription()
         get_translation_model_manager().cancel_warmup()

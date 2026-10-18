@@ -643,6 +643,26 @@ def recover_interrupted_tasks() -> list[str]:
     return recovered
 
 
+def _execution_business_settings(runtime_snapshot: dict, config_bundle) -> dict:
+    """Keep task routing frozen, but follow relocated desktop bundle tools.
+
+    Desktop startup refreshes these machine-local paths in the validated config
+    aggregate after native launcher validation. Use that same aggregate read,
+    never re-read environment paths or mutate the persisted task snapshot.
+    """
+    business = dict(runtime_snapshot["business"])
+    if os.environ.get("SUBTRANS_DESKTOP") == "1":
+        current = config_bundle.values["business"]
+        for key in ("ffmpeg_bin", "ffprobe_bin"):
+            path = current.get(key)
+            validate_business_value(key, path)
+            if not (isinstance(path, str) and os.path.isabs(path)
+                    and os.path.isfile(path) and os.access(path, os.X_OK)):
+                raise ValueError(f"Desktop bootstrap executable unavailable: {key}")
+            business[key] = path
+    return business
+
+
 def _run(task_id: str) -> None:
     """线程内执行：读记录 → 跑五步 → 进度写库。"""
     with _task_state_lock(task_id):
@@ -741,7 +761,7 @@ def _run(task_id: str) -> None:
         # Resolve a missing legacy plan under the same business snapshot and
         # Redis aggregate used to complete its runtime routing.
         rec.engine = str((runtime_snapshot.get("engine") or {}).get("id") or rec.engine)
-        with settings_scope(runtime_snapshot["business"]):
+        with settings_scope(_execution_business_settings(runtime_snapshot, config_bundle)):
             ensure_parameters = inspect.signature(ensure_plan).parameters
             if "runtime_snapshot" in ensure_parameters:
                 rec = ensure_plan(
@@ -936,7 +956,7 @@ def _run(task_id: str) -> None:
         pipeline_kwargs["engine_config"] = engine_config
         # 保持第三方/旧测试注入的简化 runner 可用；正式编排器支持 engine_config。
         from src.plugins import get_plugin_manager
-        with settings_scope(runtime_snapshot["business"]):
+        with settings_scope(_execution_business_settings(runtime_snapshot, config_bundle)):
             if supports_plugin_plan:
                 run_pipeline(
                     params, on_event, plugin_manager=get_plugin_manager(),
