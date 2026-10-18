@@ -11,7 +11,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "redis>=5",
     "uvicorn[standard]>=0.49.0",
-    "yt-dlp>=2024.0.0",
+    "yt-dlp[default]>=2026.8.19",
 ]
 
 [project.optional-dependencies]

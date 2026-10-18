@@ -52,12 +52,14 @@ Install optional dependencies only for the features you use:
 - Kokoro TTS: `uv sync --extra tts`, plus the system `espeak-ng` package; download models at runtime. See the [TTS guide](./docs/tts.md).
 - Demucs must be installed separately. Go 1.23 or later is only needed for the Google Drive sidecar; Node.js is only needed for frontend tests.
 - 可选 cobalt 下载：连接自托管或获授权的 cobalt API（可用 `ghcr.io/imputnet/cobalt:11` 部署）；`httpx` 已在基础依赖中，未配置时仍默认使用 yt-dlp。部署、健康检查、认证与任务选择见 [cobalt 下载指南](./docs/cobalt-download.md)。
+- YouTube downloads: `uv sync` includes yt-dlp's default dependencies and its matching `yt-dlp-ejs` package. Also install Deno or Node.js 22 or later on the backend machine; both runtimes are enabled for downloads and probes. Node.js also runs the frontend tests.
+- Demucs must be installed separately. Go 1.23 or later is only needed for the Google Drive sidecar.
 
 If enabling multiple Python extras, include them in one `uv sync` command, for example `uv sync --extra local-translation --extra hf-models --extra tts`.
 
 ### macOS
 
-To run the project locally on macOS, you need Python 3.10–3.12, `uv`, and FFmpeg built with libass support. The API also serves the web workbench, so you do not need to install Node.js separately.
+To run the project locally on macOS, you need Python 3.10–3.12, `uv`, and FFmpeg built with libass support. The API also serves the web workbench. YouTube downloads additionally need Deno or Node.js 22 or later; see the [download checks (Chinese)](./docs/local-quick-start.md#youtube-下载检查).
 
 Run these commands in a suitable directory:
 
@@ -104,7 +106,7 @@ ffmpeg -hide_banner -filters | grep " subtitles "
 
 ### Windows
 
-On Windows 10 or 11, you can run TranslatedSubs from source in PowerShell. The project supports Python 3.10–3.12; these steps use Python 3.12 and install the versions pinned in `uv.lock`. The API serves the web workbench, so a separate Node.js installation is not needed.
+On Windows 10 or 11, you can run TranslatedSubs from source in PowerShell. The project supports Python 3.10–3.12; these steps use Python 3.12 and install the versions pinned in `uv.lock`. The API serves the web workbench. For YouTube downloads, install Deno or Node.js 22 or later and make it available on the backend's `PATH`.
 
 1. Install `uv`:
 
@@ -223,7 +225,7 @@ Keep the configured data and Redis volumes when upgrading. Do not commit `config
 - The API responds, but jobs cannot start: inspect `checks` and `capabilities` from `/api/health/ready` for the key, FFmpeg/FFprobe, yt-dlp, and storage status.
 - `MODEL_NOT_READY`: download and verify the selected Whisper model in Local Models before creating a subtitle job.
 - Hard subtitles are unavailable: install FFmpeg with libass or choose soft subtitles. Check with `ffmpeg -hide_banner -filters | grep ' subtitles '`.
-- A URL fails to download: run the download probe first. If the site requires login, configure the cookie file from Settings as described in the [local setup guide (Chinese)](./docs/local-quick-start.md).
+- A URL fails to download, or YouTube returns HTTP 403: follow the [YouTube download checks (Chinese)](./docs/local-quick-start.md#youtube-下载检查) to verify yt-dlp, EJS, and the backend's JavaScript runtime, then inspect the service's yt-dlp warnings and proxy route. A successful probe does not prove that the selected media stream can be downloaded. Configure a cookie file in Settings when the video requires login.
 
 ## Documentation
 
