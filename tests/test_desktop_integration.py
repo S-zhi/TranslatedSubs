@@ -1,7 +1,7 @@
 """Cold-process ASGI coverage with real desktop SQLite, never conftest memory.
 
-Only model readiness and task enqueue are substituted. No socket is bound and no
-model, media or update download is performed.
+Model readiness, media-tool availability and task enqueue are substituted. No
+socket is bound and no model, media or update download is performed.
 """
 from __future__ import annotations
 
@@ -65,6 +65,17 @@ translation = SimpleNamespace(is_ready=lambda: True,
     dependency_status=lambda: {"ready": True, "missing": []},
     status=lambda: {"model_status": "READY", "installed_bytes": 1, "model_error": None})
 translation_module.get_translation_model_manager = lambda: translation
+
+# CI does not install FFmpeg: this test uses synthetic media and verifies task
+# admission, not whether the distributable media tools can run.
+import shutil
+from src.core import ffmpeg_utils
+from src.plugins.builtin import configuration as plugin_configuration
+real_which = shutil.which
+plugin_configuration.shutil.which = lambda binary: (
+    str(binary) if Path(str(binary)).name in {"ffmpeg", "ffprobe"} else real_which(binary)
+)
+ffmpeg_utils.has_subtitles_filter = lambda _: True
 
 # Import before config initialization must not read business settings.
 from src.handler.app import create_app
