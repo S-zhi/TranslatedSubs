@@ -324,7 +324,10 @@ def download_video(
         # yt-dlp 的 HLS/DASH 分片默认串行；适度并发可避免单个视频被单连接吞吐限制。
         "concurrent_fragment_downloads": effective_concurrent_fragments,
         "quiet": True,
-        "no_warnings": True,
+        "no_warnings": False,
+        "logger": logger,
+        # yt-dlp 默认只启用 Deno；同时允许使用已安装的 Node.js（>=22）。
+        "js_runtimes": {"deno": {}, "node": {}},
         "noprogress": True,          # 关闭 yt-dlp 自带进度条，进度走我们的 hook
         "overwrites": True,          # 重跑时覆盖旧文件
     }
@@ -606,7 +609,9 @@ def probe_video(
         "format": effective_format,
         "noplaylist": True,
         "quiet": True,
-        "no_warnings": True,
+        "no_warnings": False,
+        "logger": logger,
+        "js_runtimes": {"deno": {}, "node": {}},
         "skip_download": True,
         "simulate": True,
         "socket_timeout": effective_timeout,
