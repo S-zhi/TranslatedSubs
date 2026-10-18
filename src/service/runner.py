@@ -884,6 +884,16 @@ def _run(task_id: str) -> None:
         }
         if ref not in allowed_refs:
             raise PluginError("credential_missing", "translate", "host", "credential is not authorized by this task plan")
+        if ref == "settings:cobalt_api_key":
+            download_slot = plugin_plan["slots"].get("download", {})
+            if (
+                download_slot.get("plugin_id") == "builtin.cobalt"
+                and download_slot.get("config", {}).get("credential_ref") == ref
+            ):
+                value = getattr(settings, "cobalt_api_key", None)
+                if isinstance(value, str) and value.strip():
+                    return value
+            raise PluginError("credential_missing", "download", "builtin.cobalt", "credential is unavailable")
         if isinstance(ref, str) and ref.startswith("model_card:"):
             from src.service.plugin_selection import resolve_model_credential
             try:

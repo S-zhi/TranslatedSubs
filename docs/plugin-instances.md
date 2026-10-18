@@ -6,7 +6,7 @@
 
 ## 阶段与默认实例
 
-每个阶段始终有一个启用的默认实例。初始默认如下，内置实现版本均为字符串 `"1"`：
+每个阶段始终有一个启用的默认实例。目前 catalog 有八个内置实现，仍有七个阶段和七个初始默认实例；可选 `builtin.cobalt` 与 `builtin.ytdlp` 同属下载阶段，创建 cobalt 实例不会改变默认项。初始默认如下，内置实现版本均为字符串 `"1"`：
 
 | 阶段 | 内置实现 | 初始实例 ID |
 |---|---|---|
@@ -34,7 +34,9 @@
 
 `model_ref` 与 `engine_ref` 互斥；未绑定时沿用任务和当前模型设置。固定绑定按 ID 解析，不因切换“当前模型”而更换目标。任务表单会显示绑定来源，并锁定由绑定决定的模型、翻译引擎或音色选项。被实例引用的模型卡和翻译引擎不能删除，即使实例已停用也需先解除绑定。
 
-插件 `config` 只接受声明的非敏感字段，不保存 API Key、Cookie、密码或带凭据的 URL。密钥在模型/引擎设置中维护；任务计划只保存凭据引用，执行时读取固定 ID 对应的当前密钥，因此轮换密钥仍可生效。引用失效时明确报错，不自动换到另一模型或引擎。
+插件 `config` 只接受声明的非敏感字段，不保存 API Key、Cookie、密码或带凭据的 URL。模型/引擎密钥在对应设置中维护；任务计划只保存凭据引用，执行时读取固定 ID 对应的当前密钥，因此轮换密钥仍可生效。引用失效时明确报错，不自动换到另一模型或引擎。
+
+cobalt 实例使用 `access_mode: "anonymous"`（默认）或 `"api_key"`，实际密钥由 `PATCH /api/settings/runtime` 的 `cobalt_api_key` 保存，读取仅显示 `hasSecrets.cobalt_api_key`。v1 所有认证 cobalt 实例共用这把部署级密钥；不能在实例 config 中设置 Key 或 `credential_ref`。配置与操作示例见 [cobalt 下载指南](cobalt-download.md)。
 
 内置 Whisper 实例可选择本地后端或 HTTP ASR。HTTP ASR 检查其服务地址与依赖，不要求本地 Whisper 已安装或模型已就绪。**绑定 Whisper 模型卡后，实例不能同时覆盖 `backend` 或 `service_url`**；后端和地址由模型卡决定，设置页会清除这两项覆盖。未绑定的本地 Whisper 实例也不能配置 HTTP 服务地址。
 
@@ -115,7 +117,9 @@ formData.append("pluginInstances", JSON.stringify({ transcribe: "asr-http" }));
 
 示例中的 `asr-http` 需先创建为可用的转写实例。字段可省略；`{}` 表示所有所需阶段跟随默认。无效 JSON、无效阶段或所需阶段的无效实例会被拒绝，不静默回退。
 
-`POST /api/tasks/probe` 同样接受 `pluginInstances` 对象和 `quality`，只解析下载阶段，例如 `{"url":"https://example.com/video","pluginInstances":{"download":"download-retry"},"quality":"720p"}`。省略实例时跟随下载默认项。工作台自动探测与提交使用同一下载选择；切换实例、画质或刷新到变更后的下载配置会作废旧探测结果并重新检查。缓存区分有效代理、Cookie、格式和超时配置，避免不同下载配置串用探测结果。
+`POST /api/tasks/probe` 同样接受 `pluginInstances` 对象和 `quality`，只解析下载阶段，例如 `{"url":"https://example.com/video","pluginInstances":{"download":"download-retry"},"quality":"720p"}`。省略实例时跟随下载默认项。工作台自动探测与提交使用同一下载选择；切换实例、画质或刷新到变更后的下载配置会作废旧探测结果并重新检查。缓存区分有效代理、Cookie、格式和超时配置，以及 cobalt endpoint、认证模式和回退策略，避免不同下载配置串用探测结果。
+
+使用 cobalt 时，先在下载阶段创建 `builtin.cobalt` 实例并填写 `endpoint`，再在任务高级选项或 `pluginInstances.download` 中选择该实例 ID。探测只解析地址，返回 `formatsCount: 0`、空 `availableQualities`/`formats` 和未知时长，不提供完整格式元数据。`fallback_policy` 默认 `none`；显式设为 `ytdlp` 才会对已分类的可恢复失败回退。无效实例、配置、凭据、取消或访问限制不触发回退；`picker` 与 `local-processing` 尚未实现。服务部署、字段与边界见 [cobalt 下载指南](cobalt-download.md)。
 
 创建时按实际执行的 slot 调用所选 factory 的 preflight，检查身份、配置和依赖。预检不创建执行 session、不加载模型权重，也不执行下载、转写、翻译或封装。未使用的阶段不会触发其依赖检查；预检失败不会入队或保存任务目录。预检通过不代表真实远程服务或模型推理已验证，上传文件后续仍有媒体格式与时长校验。
 

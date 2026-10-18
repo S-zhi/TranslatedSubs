@@ -440,6 +440,7 @@ class PipelineContext:
             return None
 
         output_paths = {self.directory / name for name in output_names}
+        previously_unpublished = self._unpublished.copy()
         self._unpublished.update(output_paths)
         self._pending_purposes.add(purpose)
         preexisting_download_files = set()
@@ -493,10 +494,11 @@ class PipelineContext:
                 self._collect_new_download_files(preexisting_download_files)
             # A failed call must not leave artifacts that a later run can mistake
             # for published output. Preserve already completed purposes.
+            failed_paths = output_paths | (self._unpublished - previously_unpublished)
             AssetResolver.cleanup_unpublished_invocation(
-                self.task_id, output_paths, {purpose}
+                self.task_id, failed_paths, {purpose}
             )
-            self._unpublished.difference_update(output_paths)
+            self._unpublished.difference_update(failed_paths)
             self._pending_purposes.discard(purpose)
             raise
 
@@ -577,10 +579,9 @@ class DownloadHandler(PipelineHandler):
                 url=params.url, quality=config["quality"], target_dir=context.directory,
             )
             existing_state, existing, _ = AssetResolver.resolve_source(tid)
-            output_names = (existing.name,) if existing_state == ResourceState.AVAILABLE and existing else ()
             download = context.invoke(
                 "download", request, stage="download", operation="download",
-                inputs={"url": params.url}, output_names=output_names,
+                inputs={"url": params.url}, output_names=(),
                 legacy_compatible=existing is not None,
             )
             context.resources.video_path = AssetResolver.require_source(tid)

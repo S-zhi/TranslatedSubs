@@ -12,11 +12,20 @@ const PLUGINS = [
   ["builtin.translation_engine", "translate", "翻译引擎", "使用引擎或模型卡翻译字幕", { batch_size: integer("翻译批量", 1, 200, 20), local_batch_size: integer("本地翻译批量", 1, 200, 8), timeout_seconds: integer("超时（秒）", 1, 86400, 60) }, ["engine", "llm"]],
   ["builtin.kokoro", "tts", "Kokoro 配音", "按字幕时间线合成中文或英文配音", { speed: { type: "number", label: "语速", minimum: 0.1, maximum: 4, default: 1 }, model_id: { type: "string", label: "Kokoro 模型", enum: [null, "kokoro-v1", "hexgrad/Kokoro-82M-v1.1-zh"], nullable: true } }, ["tts"]],
   ["builtin.ffmpeg_render", "render", "FFmpeg 字幕与配音封装", "生成硬字幕、软字幕及配音视频", {}, []],
+  ["builtin.cobalt", "download", "Cobalt 下载", "通过自托管或已授权的 Cobalt 服务下载；API Key 在运行设置中配置；探测不提供格式列表，可显式开启 yt-dlp 回退", {
+    endpoint: { type: "string", label: "Cobalt 服务地址", required: true, format: "url", maxLength: 2048 },
+    socket_timeout: integer("连接超时（秒）", 1, 300, 30),
+    access_mode: { type: "string", label: "访问方式", enum: ["anonymous", "api_key"], default: "anonymous" },
+    fallback_policy: { type: "string", label: "失败后切换", enum: ["none", "ytdlp"], default: "none" },
+    filename_style: { type: "string", label: "文件名风格", enum: ["classic", "pretty", "basic", "nerdy"], default: "basic" },
+    audio_format: { type: "string", label: "音频格式", enum: ["best", "mp3", "ogg", "wav", "opus"], default: "best" },
+  }, []],
 ].map(([plugin_id, stage, name, description, config_schema, bindings]) => ({
   plugin_id, implementation_version: "1", stage, name, description, config_schema, bindings,
   operations: stage === "render" ? ["subtitle", "dub_mux"] : [stage],
-  capabilities: [], config_schema_version: 1,
+  capabilities: stage === "download" ? ["probe"] : [], config_schema_version: 1,
 }));
+const DEFAULT_PLUGINS = PLUGIN_STAGES.map(({ id }) => PLUGINS.find((plugin) => plugin.stage === id));
 
 const copy = (value) => JSON.parse(JSON.stringify(value));
 const fail = (message, status = 422, code = "PLUGIN_INVALID") => {
@@ -36,12 +45,12 @@ export function createMockPluginApi({ storage = () => globalThis.localStorage, g
     } catch (_) {}
     return memory || {
       revision: 1,
-      instances: PLUGINS.map((plugin) => ({
+      instances: DEFAULT_PLUGINS.map((plugin) => ({
         id: `default-${plugin.stage}`, name: `${plugin.name} · 默认`, stage: plugin.stage,
         plugin_id: plugin.plugin_id, implementation_version: plugin.implementation_version,
         config_schema_version: plugin.config_schema_version, enabled: true, config: {}, model_ref: null, engine_ref: null,
       })),
-      defaults: Object.fromEntries(PLUGINS.map((plugin) => [plugin.stage, `default-${plugin.stage}`])),
+      defaults: Object.fromEntries(DEFAULT_PLUGINS.map((plugin) => [plugin.stage, `default-${plugin.stage}`])),
     };
   }
   function write(state) {
@@ -77,6 +86,15 @@ export function createMockPluginApi({ storage = () => globalThis.localStorage, g
     if (!record.config || typeof record.config !== "object" || Array.isArray(record.config) || Object.keys(record.config).some((key) => !fields.has(key))) fail("插件配置包含不支持的字段");
     const parsed = parsePluginConfig(plugin.config_schema, record.config);
     if (Object.keys(parsed.errors).length) fail(Object.values(parsed.errors).join("；"));
+    if (plugin.plugin_id === "builtin.cobalt") {
+      const endpoint = parsed.config.endpoint;
+      try {
+        if (!/^https?:\/\//.test(endpoint) || /[\s\\?#]/.test(endpoint)) throw new Error();
+        const url = new URL(endpoint);
+        if (!url.hostname || url.username || url.password || url.port === "0" || /\/\/[^/]*@/.test(endpoint)) throw new Error();
+      } catch (_) { fail("cobalt 服务地址必须是无凭据的 HTTP(S) URL"); }
+      parsed.config.endpoint = endpoint.replace(/\/+$/, "") + "/";
+    }
     return { ...record, config: parsed.config, model_ref: record.model_ref || null, engine_ref: record.engine_ref || null };
   }
   return {

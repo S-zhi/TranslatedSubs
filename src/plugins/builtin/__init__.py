@@ -11,6 +11,8 @@ from src.plugins.builtin.vocal_demucs import DemucsFactory
 
 def factories():
     """Return lightweight factories; sessions load runtime capabilities on demand."""
+    from src.plugins.builtin.downloader_cobalt import CobaltFactory
+
     return (
         YtDlpFactory(),
         AudioFFmpegFactory(),
@@ -19,6 +21,7 @@ def factories():
         TranslatorEngineFactory(),
         KokoroFactory(),
         FFmpegRenderFactory(),
+        CobaltFactory(),
     )
 
 

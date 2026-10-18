@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { PLUGIN_STAGES, resolveTaskPluginBindings, selectedPluginInstances, taskPluginStages } from "../js/plugin-settings.js";
 import { collectTaskPluginInstances, createTaskPluginController } from "../js/task-plugins.js";
+import { createMockPluginApi } from "../js/mock-plugins.js";
 
 class NodeMock {
   constructor(value = "") { this.value = value; this.dataset = {}; this.disabled = false; this.handlers = {}; this.classList = { toggle() {} }; this.options = []; this.html = ""; }
@@ -99,6 +100,52 @@ test("download fingerprint changes for selected instance edits and default chang
   state.defaults.download = "proxy-download";
   await controller.refresh();
   assert.notEqual(controller.downloadFingerprint(), initial, "following a new default invalidates probe");
+});
+
+test("cobalt task selection and endpoint/auth/fallback changes invalidate the download fingerprint", async () => {
+  const { state, nodes, form, controller } = fixture();
+  Object.assign(state, await createMockPluginApi({ storage: () => null }).listPluginInstances());
+  form.elements.needSubtitle.value = "off";
+  form.elements.ttsEnabled.checked = false;
+  await controller.refresh();
+  const initial = controller.downloadFingerprint();
+  assert.equal(JSON.parse(initial).plugin_id, "builtin.ytdlp");
+  const cobalt = {
+    ...state.instances.find((item) => item.stage === "download"),
+    id: "cobalt-local", name: "本机 cobalt", plugin_id: "builtin.cobalt",
+    config: { endpoint: "http://127.0.0.1:9000/", access_mode: "anonymous", fallback_policy: "none" },
+  };
+  state.instances.push(cobalt);
+  await controller.refresh();
+  assert.equal(controller.downloadFingerprint(), initial, "adding cobalt preserves the yt-dlp default probe");
+  assert.match(nodes.get("#taskPluginStages").innerHTML, /<option value="cobalt-local">本机 cobalt<\/option>/);
+  nodes.get("#taskPluginStages").handlers.change({ target: { dataset: { taskPluginStage: "download" }, value: cobalt.id } });
+  assert.equal(controller.isReady(), true);
+  assert.deepEqual(controller.applyPayload({ quality: "720p" }), { quality: "720p", pluginInstances: { download: cobalt.id } });
+  let fingerprint = controller.downloadFingerprint();
+  assert.equal(JSON.parse(fingerprint).plugin_id, "builtin.cobalt");
+  assert.notEqual(fingerprint, initial);
+  for (const [key, value] of [["endpoint", "https://cobalt.internal/"], ["access_mode", "api_key"], ["fallback_policy", "ytdlp"]]) {
+    cobalt.config[key] = value;
+    await controller.refresh();
+    const changed = controller.downloadFingerprint();
+    assert.notEqual(changed, fingerprint, `${key} edit invalidates the selected instance probe`);
+    assert.equal(JSON.parse(changed).config[key], value);
+    fingerprint = changed;
+  }
+  nodes.get("#taskPluginStages").handlers.change({ target: { dataset: { taskPluginStage: "download" }, value: "" } });
+  assert.equal(controller.downloadFingerprint(), initial);
+  state.defaults.download = cobalt.id;
+  await controller.refresh();
+  assert.equal(JSON.parse(controller.downloadFingerprint()).plugin_id, "builtin.cobalt");
+  assert.deepEqual(controller.applyPayload({}).pluginInstances, {}, "following cobalt default remains an implicit choice");
+  nodes.get("#taskPluginStages").handlers.change({ target: { dataset: { taskPluginStage: "download" }, value: cobalt.id } });
+  cobalt.enabled = false;
+  state.defaults.download = "default-download";
+  await controller.refresh();
+  assert.equal(controller.isReady(), false);
+  assert.match(controller.error(), /cobalt-local/);
+  assert.equal(controller.downloadFingerprint(), "null", "invalid explicit selection does not fall back to yt-dlp");
 });
 
 test("removing bindings restores previous task values and model readiness locks", async () => {
