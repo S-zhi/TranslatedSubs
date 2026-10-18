@@ -137,6 +137,41 @@ test("task payload reads selected values even while language selects are disable
   });
 });
 
+test("fresh download-only payload omits empty unused selections and still permits task creation", async () => {
+  const fields = {
+    "#sourceLang": { value: "en" },
+    "#targetLang": { value: "zh-CN" },
+    "#model": { value: "", disabled: true },
+    "#engine": { value: "", disabled: true },
+    "#quality": { value: "720p" },
+  };
+  globalThis.document = { querySelector(selector) { return fields[selector] || null; } };
+  const form = { elements: {
+    mode: { value: "mono" }, burn: { value: "hard" }, needSubtitle: { value: "off" },
+    ttsEnabled: { checked: false }, ttsVoice: { value: "auto" }, originalVoiceMode: { value: "keep" },
+  } };
+  const payload = JSON.parse(JSON.stringify(collectTaskPayload(form)));
+  assert.equal(payload.needSubtitle, false);
+  assert.equal(Object.hasOwn(payload, "model"), false, "omission lets the API use its unused-stage default");
+  assert.equal(Object.hasOwn(payload, "engine"), false);
+  assert.deepEqual(payload.pluginInstances, {});
+  const task = await Api.createTask({ ...payload, url: "https://example.com/download-only" });
+  assert.equal(task.status, "PENDING", "download-only creation does not require a ready local model");
+
+  fields["#model"].value = "local:small";
+  fields["#engine"].value = "local-opus-en-zh";
+  const selected = collectTaskPayload(form);
+  assert.equal(selected.model, "local:small");
+  assert.equal(selected.engine, "local-opus-en-zh");
+
+  fields["#model"].value = "";
+  fields["#engine"].value = "";
+  form.elements.needSubtitle.value = "on";
+  const subtitlePayload = collectTaskPayload(form);
+  assert.equal(subtitlePayload.model, "", "subtitle tasks preserve required-field validation");
+  assert.equal(subtitlePayload.engine, "");
+});
+
 test("an uninstalled local model blocks subtitle translation but permits download-only tasks", () => {
   const local = { id: "local-opus-en-zh", modelStatus: "NOT_INSTALLED" };
   assert.equal(requiresReadyLocalTranslation(local, true), true);

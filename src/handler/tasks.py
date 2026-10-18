@@ -148,6 +148,17 @@ def probe_video(
     slot = parse_plugin_plan(build_instance_plan(raw_plan, selected))["slots"]["download"]
 
     def resolve_credential(ref):
+        allowed_refs = {
+            value for key, value in slot["config"].items()
+            if key in {"credential_ref", "cookies_ref"} and isinstance(value, str)
+        }
+        if ref not in allowed_refs:
+            raise PluginError("credential_missing", "download", slot["plugin_id"], "credential is not authorized by this probe plan")
+        if ref == "settings:cobalt_api_key":
+            if slot["plugin_id"] == "builtin.cobalt" and slot["config"].get("credential_ref") == ref:
+                value = getattr(settings, "cobalt_api_key", None)
+                if isinstance(value, str) and value.strip():
+                    return value
         if ref == "settings:cookies_file":
             value = getattr(settings, "cookies_file", None)
             if isinstance(value, (str, os.PathLike)):

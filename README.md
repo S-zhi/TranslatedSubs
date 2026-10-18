@@ -50,6 +50,8 @@ Install optional dependencies only for the features you use:
 - Local English → Simplified Chinese translation: `uv sync --extra local-translation` (then download and convert the model in Settings).
 - Hugging Face Whisper models: `uv sync --extra hf-models`.
 - Kokoro TTS: `uv sync --extra tts`, plus the system `espeak-ng` package; download models at runtime. See the [TTS guide](./docs/tts.md).
+- Demucs must be installed separately. Go 1.23 or later is only needed for the Google Drive sidecar; Node.js is only needed for frontend tests.
+- 可选 cobalt 下载：连接自托管或获授权的 cobalt API（可用 `ghcr.io/imputnet/cobalt:11` 部署）；`httpx` 已在基础依赖中，未配置时仍默认使用 yt-dlp。部署、健康检查、认证与任务选择见 [cobalt 下载指南](./docs/cobalt-download.md)。
 - YouTube downloads: `uv sync` includes yt-dlp's default dependencies and its matching `yt-dlp-ejs` package. Also install Deno or Node.js 22 or later on the backend machine; both runtimes are enabled for downloads and probes. Node.js also runs the frontend tests.
 - Demucs must be installed separately. Go 1.23 or later is only needed for the Google Drive sidecar.
 
@@ -200,7 +202,7 @@ Open <http://localhost:8000/>. Run `curl http://127.0.0.1:8000/api/health` to ch
 - **MCP integration**: Let Codex, Claude Desktop, and other AI clients create and track jobs from natural language.
 - **Google Drive extension**: Upload, download, and organize task files when results need to move through a shared file workflow.
 - **Replaceable transcription backends**: Choose local faster-whisper or a compatible HTTP service for different cost, speed, and privacy needs.
-- **插件实例**：在 `/settings?tab=plugins` 管理七类流水线阶段的实例、默认项与模型/引擎绑定；任务高级选项可指定实例，创建时预检并固定执行计划。详见[插件实例指南](./docs/plugin-instances.md)。
+- **插件实例**：在 `/settings?tab=plugins` 管理七类流水线阶段的实例、默认项与模型/引擎绑定；任务高级选项可指定实例，创建时预检并固定执行计划。八个内置实现包含可选 cobalt 下载与探测，初始下载默认仍为 yt-dlp；cobalt 不提供完整格式列表，回退默认关闭。详见[插件实例指南](./docs/plugin-instances.md)与 [cobalt 下载指南](./docs/cobalt-download.md)。
 
 ## From video to subtitles
 
@@ -238,6 +240,7 @@ Most detailed guides below are in Chinese; the transcriber protocol is in Englis
 - [MCP Agent guide](./docs/mcp-agent-guide.md)
 - [Transcriber service protocol (English)](./docs/transcriber-service.md)
 - [插件实例与任务选择](./docs/plugin-instances.md)
+- [cobalt 下载、自托管与回退](./docs/cobalt-download.md)
 - [Google Drive sidecar](./drive-service/README.md)
 
 ## Development

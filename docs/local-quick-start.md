@@ -65,6 +65,13 @@ curl http://127.0.0.1:8000/api/health/ready
 
 然后访问 <http://127.0.0.1:8000/>。MCP 配置也保存在 `config.local.json`；参见 [MCP Server 文档](./mcp-server.md)。
 
+## 可选：cobalt 下载服务
+
+默认下载器仍是 yt-dlp。需要 cobalt 时，另行部署 `ghcr.io/imputnet/cobalt:11`，或配置已获授权的服务；不提供默认公共实例。`httpx` 已由基础依赖安装，无需新增 Python extra，后续转写与 FFmpeg 依赖照常按需准备。
+
+cobalt 的 `API_URL` 与插件 `endpoint` 必须能被 TranslatedSubs 后端访问；容器内的 `127.0.0.1` 不是宿主机。启动后从后端所在环境执行 `curl --fail http://<cobalt 地址>/`，检查 JSON 中的 `cobalt.version` 和 `cobalt.url`。该检查只验证 API 可达。
+
+然后在 **设置 → 插件 → 下载 → 新增实例** 选择 cobalt，填写地址、`access_mode` 与 `fallback_policy`，在任务高级选项选择实例。密钥通过 `PATCH /api/settings/runtime` 的 `cobalt_api_key` 保存；GET 仅返回 `hasSecrets.cobalt_api_key`，所有认证 cobalt 实例共用这一把 Key。回退默认关闭。完整 Docker 命令、CAS revision 示例、探测限制与回退条件见 [cobalt 下载指南](./cobalt-download.md)。
 ## YouTube 下载检查
 
 `uv sync` 安装 `yt-dlp[default]`，其中包含与下载器版本匹配的 `yt-dlp-ejs`。YouTube 的 JavaScript 校验还需要后端机器安装 Deno 或 Node.js 22 及以上版本，并让运行后端的进程能通过 `PATH` 找到它。下载和链接探测均启用 Deno、Node；只在浏览器所在电脑安装运行时无法帮助远程后端。

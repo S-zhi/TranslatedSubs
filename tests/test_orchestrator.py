@@ -285,6 +285,95 @@ def test_download_plugin_failure_stops_pipeline_before_next_stage(monkeypatch, t
     assert events[-1].status == "FAILED"
 
 
+@pytest.mark.parametrize("failure", ["run", "close", "metadata_before", "metadata_after"])
+def test_download_retry_failure_cleans_new_artifacts_and_preserves_completed_stages(
+    monkeypatch, tmp_path, failure,
+):
+    from src.plugin_system import PluginManifest
+    from src.plugin_system.manager import PluginManager
+    from src.plugin_system.registry import PluginRegistry
+    from src.service.asset_resolver import ResourceState
+
+    first, _, _ = _run(monkeypatch, tmp_path)
+    assert first.status == "SUCCESS"
+    published = {
+        path: path.read_bytes() for path in tmp_path.iterdir()
+        if path.name not in {"source.mp4", "download.plugin-meta.json"}
+    }
+    assert tmp_path / "output_hard.mp4" in published
+    session_calls = []
+
+    class DownloadSession:
+        def validate(self, request):
+            pass
+
+        def run(self, request):
+            session_calls.append("run")
+            # Cache invalidation must precede the retry's new artifact writes.
+            assert not (request.target_dir / "source.mp4").exists()
+            assert not (request.target_dir / "download.plugin-meta.json").exists()
+            output = request.target_dir / "source.webm"
+            output.write_bytes(b"\x1a\x45\xdf\xa3replacement-webm")
+            (request.target_dir / "source.webm.part").write_bytes(b"partial")
+            (request.target_dir / "download.tmp").write_bytes(b"temporary")
+            if failure == "run":
+                raise RuntimeError("download failed after writing output")
+            return DownloadResult(output)
+
+        def close(self):
+            session_calls.append("close")
+            if failure == "close":
+                raise RuntimeError("download client close failed")
+
+    class DownloadFactory:
+        stage = "download"
+        manifest = PluginManifest(
+            plugin_id="fixture.download", stage="download", implementation_version="1",
+            operations=frozenset({"download"}),
+        )
+
+        def create_session(self, config, context):
+            return DownloadSession()
+
+    factory = DownloadFactory()
+    registry = PluginRegistry()
+    registry.register(factory.manifest, factory)
+    params = _params(need_subtitle=False)
+    plan = _plan(params)
+    plan["slots"]["download"]["plugin_id"] = factory.manifest.plugin_id
+    if failure.startswith("metadata"):
+        write_metadata = orchestrator.AssetResolver.write_plugin_cache_metadata
+
+        def fail_publication(task_id, metadata):
+            if failure == "metadata_after":
+                write_metadata(task_id, metadata)
+            raise OSError("download metadata publication failed")
+
+        monkeypatch.setattr(
+            orchestrator.AssetResolver, "write_plugin_cache_metadata", fail_publication
+        )
+    events = []
+    expected_error = OSError if failure.startswith("metadata") else PluginError
+    with pytest.raises(expected_error):
+        run_pipeline(
+            params, events.append, plugin_manager=PluginManager(registry), plugin_plan=plan,
+            credential_resolver=lambda ref: "secret",
+        )
+
+    assert session_calls == ["run", "close"]
+    assert events[-1].status == "FAILED"
+    assert events[-1].error_code == {
+        "run": "execution_error", "close": "cleanup_error",
+        "metadata_before": "io_error", "metadata_after": "io_error",
+    }[failure]
+    assert not list(tmp_path.glob("source.*"))
+    assert not (tmp_path / "download.tmp").exists()
+    assert not (tmp_path / "download.plugin-meta.json").exists()
+    state, source, _ = orchestrator.AssetResolver.resolve_source(params.task_id)
+    assert state == ResourceState.DELETED and source is None
+    assert {path: path.read_bytes() for path in published} == published
+
+
 def test_resume_reuses_valid_cached_stages_and_recomputes_invalidated_suffix(monkeypatch, tmp_path):
     params = _params()
     monkeypatch.setattr(orchestrator, "task_dir", lambda task_id: tmp_path)

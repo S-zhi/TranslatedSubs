@@ -117,7 +117,7 @@ export function createEngineLanguageController({ engineSelect, sourceSelect, tar
 }
 
 export function collectTaskPayload(form) {
-  return {
+  const payload = {
     sourceLang: $("#sourceLang").value,
     targetLang: $("#targetLang").value,
     mode: form.elements.mode.value,
@@ -131,6 +131,11 @@ export function collectTaskPayload(form) {
     originalVoiceMode: form.elements.originalVoiceMode.value,
     pluginInstances: collectTaskPluginInstances(form),
   };
+  if (!payload.needSubtitle) {
+    if (!payload.model) delete payload.model;
+    if (!payload.engine) delete payload.engine;
+  }
+  return payload;
 }
 
 function normalizeTaskEngines(engines) {

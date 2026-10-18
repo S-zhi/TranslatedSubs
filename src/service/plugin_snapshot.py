@@ -23,8 +23,10 @@ _MODEL_CREDENTIAL = re.compile(r"^model_card:(llm|whisper|tts):[A-Za-z0-9_.-]{1,
 _SECRET_FIELD = re.compile(r"(?i)(api_?key|password|secret|token|authorization|cookie)")
 
 
-def _reference(value: Any, purpose: str, config: dict[str, Any]) -> None:
+def _reference(value: Any, purpose: str, config: dict[str, Any], plugin_id: str) -> None:
     if value is None:
+        return
+    if purpose == "download" and plugin_id == "builtin.cobalt" and value == "settings:cobalt_api_key":
         return
     if purpose == "transcribe" and value == "settings:transcriber_api_key":
         return
@@ -72,7 +74,7 @@ def validate_instance_plan(value: object) -> dict[str, Any]:
                 raise ValueError("plugin configuration numbers must be finite")
             if isinstance(item, str) and len(item) > 8192:
                 raise ValueError("plugin configuration value is too long")
-            if isinstance(item, str) and (key.endswith("url") or key == "proxy") and item:
+            if isinstance(item, str) and (key.endswith("url") or key in {"proxy", "endpoint"}) and item:
                 parsed = urlsplit(item)
                 if parsed.username is not None or parsed.password is not None or parsed.fragment or any(
                     _SECRET_FIELD.search(query_key) or query_key.lower() == "key"
@@ -80,7 +82,7 @@ def validate_instance_plan(value: object) -> dict[str, Any]:
                 ):
                     raise ValueError("plugin plan URL contains credentials")
         if "credential_ref" in config:
-            _reference(config["credential_ref"], purpose, config)
+            _reference(config["credential_ref"], purpose, config, entry["plugin_id"])
         if config.get("cookies_ref") not in {None, "settings:cookies_file"}:
             raise ValueError("invalid cookie reference in plugin plan")
         copied = {**entry, "config": dict(config)}
