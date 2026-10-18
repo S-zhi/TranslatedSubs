@@ -20,6 +20,7 @@ from src.plugin_system import (
 )
 from src.plugin_system.contracts import PluginConfig
 from src.plugin_system.errors import sanitize_message
+from src.plugins.builtin.configuration import BuiltinFactory
 
 
 PLUGIN_ID = "builtin.ytdlp"
@@ -47,7 +48,7 @@ def _contains_url_secret(value: str) -> bool:
         return True
 
 
-class YtDlpFactory:
+class YtDlpFactory(BuiltinFactory):
     stage = "download"
     manifest = PluginManifest(
         plugin_id=PLUGIN_ID,

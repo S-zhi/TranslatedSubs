@@ -8,6 +8,7 @@ current secret only when execution starts.
 from __future__ import annotations
 
 import importlib.util
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -204,11 +205,25 @@ def _resolve_whisper(
     need_subtitle: bool,
     model_store: ModelSettingsStore,
     ensure_local_model_ready: Callable[[str], None] | None,
+    backend: str = "local_whisper",
 ) -> dict[str, Any]:
     if not need_subtitle:
         return {
             "source": "disabled", "cardId": None, "provider": "",
             "model": str(request_model or ""),
+        }
+    # Match the plugin plan: explicit local prefixes select local Whisper;
+    # otherwise HTTP ASR owns its model and must not read local model cards.
+    prefix, separator, _ = str(request_model or "").partition(":")
+    if str(backend).strip().lower() in {"http", "custom", "custom_http"} and not (
+        separator and prefix.strip().lower() in {
+            "local", "local_whisper", "whisper", "faster_whisper", "replicate",
+        }
+    ):
+        return {
+            "source": "request", "cardId": None,
+            "provider": str(backend).strip().lower(),
+            "model": str(request_model or "").strip(),
         }
     card = active_model_card(model_store, "whisper")
     source = "unified_whisper" if card is not None else "request"
@@ -326,6 +341,7 @@ def resolve_runtime(
     translation_model_manager: Any = None,
     config_snapshot: ConfigSnapshot | None = None,
     config_provider: Any = None,
+    plugin_defaults: Mapping[str, Mapping[str, str]] | None = None,
 ) -> RuntimePlan:
     # One aggregate read pins model cards, engines, and business settings to
     # one Redis revision. Secret values stay in the aggregate, but only the
@@ -340,18 +356,33 @@ def resolve_runtime(
     from src.store import TranslationEngineStore
     if engines is None or isinstance(engines, TranslationEngineStore):
         engines = TranslationEngineStore(snapshot=config)
+    from src.service.plugin_plan import DEFAULT_PLUGIN_IDS, resolve_plugin_defaults
+
+    selected_plugins = (
+        resolve_plugin_defaults() if plugin_defaults is None else plugin_defaults
+    )
+    builtin_translate = selected_plugins["translate"]["plugin_id"] == DEFAULT_PLUGIN_IDS["translate"]
+    builtin_transcribe = selected_plugins["transcribe"]["plugin_id"] == DEFAULT_PLUGIN_IDS["transcribe"]
+    builtin_tts = selected_plugins["tts"]["plugin_id"] == DEFAULT_PLUGIN_IDS["tts"]
+    business = default_settings.capture_business_snapshot(config_snapshot=config)
     engine_snapshot = _resolve_engine(
-        engine, need_subtitle, engines, model_store=model_store,
+        engine, need_subtitle and builtin_translate, engines, model_store=model_store,
         compat_settings=compat_settings, translation_model_manager=translation_model_manager,
     )
     whisper_snapshot = _resolve_whisper(
         request_model,
-        need_subtitle=need_subtitle,
+        need_subtitle=need_subtitle and builtin_transcribe,
         model_store=model_store,
         ensure_local_model_ready=ensure_local_model_ready,
+        backend=str(business.get("transcriber_backend") or "local_whisper"),
     )
-    tts_snapshot = _resolve_tts(tts_enabled, tts_voice, model_store=model_store, target_lang=target_lang)
-    business = default_settings.capture_business_snapshot(config_snapshot=config)
+    tts_snapshot = _resolve_tts(
+        tts_enabled and need_subtitle and builtin_tts, tts_voice,
+        model_store=model_store, target_lang=target_lang,
+    )
+    if tts_enabled and need_subtitle and not builtin_tts:
+        # Keep request options without consulting the built-in Kokoro card.
+        tts_snapshot["enabled"] = True
     return RuntimePlan({
         "schemaVersion": _SNAPSHOT_VERSION,
         "configRevision": config.revision,

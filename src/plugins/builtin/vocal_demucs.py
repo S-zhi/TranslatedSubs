@@ -14,13 +14,14 @@ from src.plugin_system import (
     VocalSeparateResult,
 )
 from src.plugin_system.contracts import PluginConfig
+from src.plugins.builtin.configuration import BuiltinFactory
 
 
 PLUGIN_ID = "builtin.vocal_demucs"
 _ALLOWED_CONFIG_KEYS = frozenset({"backend", "model", "threads", "command", "timeout_seconds"})
 
 
-class DemucsFactory:
+class DemucsFactory(BuiltinFactory):
     stage = "vocal_separate"
     manifest = PluginManifest(
         plugin_id=PLUGIN_ID,

@@ -3,6 +3,9 @@
 import { TERMINAL, LANG_LABEL } from "./constants.js";
 import { DEFAULT_SITES } from "./developer-sites-data.js";
 import { uid, clamp, shortUrl, statusForProgress } from "./utils.js";
+import { createMockPluginApi } from "./mock-plugins.js";
+import { apiAuthHeaders, authenticatedApiUrl } from "./api-auth.js";
+import { selectedPluginInstances, resolveTaskPluginBindings } from "./plugin-settings.js";
 
 const CFG = (typeof window !== "undefined" && window.APP_CONFIG) || {
   API_BASE_URL:
@@ -33,6 +36,9 @@ function probeRequestBody(url, options = {}) {
   if (typeof browser === "string" && BROWSER_COOKIE_SOURCES.has(browser)) {
     body.cookiesFromBrowser = browser;
   }
+  const download = options?.pluginInstances?.download;
+  if (typeof download === "string" && download) body.pluginInstances = { download };
+  if (typeof options?.quality === "string" && options.quality) body.quality = options.quality;
   return body;
 }
 
@@ -43,10 +49,15 @@ async function request(base, path, options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(`${base}${path}`, {
+    const response = await fetch(`${base}${path}`, {
       ...fetchOptions,
+      headers: apiAuthHeaders(base, fetchOptions.headers),
       signal: controller.signal,
     });
+    if (response.status === 401 && typeof document !== "undefined") {
+      document.dispatchEvent(new CustomEvent("subtrans:api-auth-required"));
+    }
+    return response;
   } catch (e) {
     if (e && e.name === "AbortError") {
       throw new Error("连接后端超时，请检查 FastAPI 是否启动");
@@ -97,6 +108,11 @@ async function readError(res, fallback) {
   error.detail = detailValue;
   error.code = detailValue && typeof detailValue === "object" ? detailValue.code : undefined;
   return error;
+}
+
+function pluginWriteHeaders(revision) {
+  if (!Number.isInteger(revision) || revision < 0) throw new Error("请先刷新插件设置，取得有效版本后重试");
+  return { "Content-Type": "application/json", "If-Match": String(revision) };
 }
 
 const MODEL_SETTING_FIELDS = {
@@ -212,6 +228,7 @@ const RealApi = {
     body.append("ttsEnabled", String(payload.ttsEnabled));
     body.append("ttsVoice", payload.ttsVoice || "auto");
     body.append("originalVoiceMode", payload.originalVoiceMode || "keep");
+    body.append("pluginInstances", JSON.stringify(payload.pluginInstances || {}));
 
     const res = await request(this.base, "/api/tasks/upload", {
       method: "POST",
@@ -393,6 +410,56 @@ const RealApi = {
     if (!res.ok) throw await readError(res, "删除翻译引擎失败");
   },
 
+  async getPluginCatalog() {
+    const res = await request(this.base, "/api/settings/plugins/catalog");
+    if (!res.ok) throw await readError(res, "读取插件目录失败");
+    return res.json();
+  },
+
+  async listPluginInstances() {
+    const res = await request(this.base, "/api/settings/plugins/instances");
+    if (!res.ok) throw await readError(res, "读取插件实例失败");
+    return res.json();
+  },
+
+  async getPluginInstance(id) {
+    const res = await request(this.base, `/api/settings/plugins/instances/${encodeURIComponent(id)}`);
+    if (!res.ok) throw await readError(res, "读取插件实例详情失败");
+    return res.json();
+  },
+
+  async createPluginInstance(payload, revision) {
+    const res = await request(this.base, "/api/settings/plugins/instances", {
+      method: "POST", headers: pluginWriteHeaders(revision), body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw await readError(res, "新增插件实例失败");
+    return res.json();
+  },
+
+  async updatePluginInstance(id, payload, revision) {
+    const res = await request(this.base, `/api/settings/plugins/instances/${encodeURIComponent(id)}`, {
+      method: "PUT", headers: pluginWriteHeaders(revision), body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw await readError(res, "保存插件实例失败");
+    return res.json();
+  },
+
+  async deletePluginInstance(id, revision) {
+    const res = await request(this.base, `/api/settings/plugins/instances/${encodeURIComponent(id)}`, {
+      method: "DELETE", headers: pluginWriteHeaders(revision),
+    });
+    if (!res.ok) throw await readError(res, "删除插件实例失败");
+    return res.json();
+  },
+
+  async updatePluginDefaults(defaults, revision) {
+    const res = await request(this.base, "/api/settings/plugins/defaults", {
+      method: "PUT", headers: pluginWriteHeaders(revision), body: JSON.stringify({ defaults }),
+    });
+    if (!res.ok) throw await readError(res, "保存默认插件失败");
+    return res.json();
+  },
+
   // 统一模型设置：后端返回的 API Key 应为脱敏值或仅 hasApiKey 标志。
   async getModelSettings() {
     const res = await request(this.base, "/api/settings/models");
@@ -473,7 +540,7 @@ const RealApi = {
   },
 
   taskFileUrl(id, path) {
-    return `${this.base}/api/tasks/${encodeURIComponent(id)}/file?path=${encodeURIComponent(path)}`;
+    return authenticatedApiUrl(this.base, `/api/tasks/${encodeURIComponent(id)}/file?path=${encodeURIComponent(path)}`);
   },
 
   // ---------- 本地资源治理 ----------
@@ -595,7 +662,7 @@ const RealApi = {
 
     const connect = () => {
       if (isClosed) return;
-      es = new EventSource(`${this.base}/api/tasks/${id}/stream`);
+      es = new EventSource(authenticatedApiUrl(this.base, `/api/tasks/${id}/stream`));
 
       const handlePayload = (data) => {
         if (!data) return;
@@ -659,13 +726,10 @@ const RealApi = {
   },
 
   downloadUrl(id, kind) {
-    return kind === "subtitle"
-      ? `${this.base}/api/tasks/${id}/subtitle`
-      : kind === "dubbed"
-        ? `${this.base}/api/tasks/${id}/dubbed`
-      : kind === "source"
-        ? `${this.base}/api/tasks/${id}/source`
-      : `${this.base}/api/tasks/${id}/download`;
+    const artifact = kind === "subtitle" ? "subtitle"
+      : kind === "dubbed" ? "dubbed"
+        : kind === "source" ? "source" : "download";
+    return authenticatedApiUrl(this.base, `/api/tasks/${id}/${artifact}`);
   },
 };
 
@@ -852,14 +916,34 @@ const MockApi = (() => {
   const find = (id) => tasks.find((t) => t.id === id);
   const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
+  const pluginApi = createMockPluginApi({
+    getModels: async () => ({ ..._readMockSettings(), whisper: _settingsWithAssetStatus(_readMockSettings().whisper) }),
+    getEngines: async () => MockApi.listTranslationEngines(),
+  });
+
+  async function _pluginTaskState(payload, sourceType) {
+    const snapshot = await pluginApi.listPluginInstances();
+    const task = { sourceType, needSubtitle: payload.needSubtitle !== false, ttsEnabled: payload.ttsEnabled };
+    const pluginInstances = selectedPluginInstances(payload.pluginInstances || {}, task);
+    const settings = { ..._readMockSettings(), whisper: _settingsWithAssetStatus(_readMockSettings().whisper) };
+    const engines = await MockApi.listTranslationEngines();
+    const { resolved, errors } = resolveTaskPluginBindings({ snapshot, selections: pluginInstances, task, settings, engines });
+    if (errors.length) throw modelApiError("PLUGIN_INVALID", errors.join("；"), 422);
+    return { pluginInstances, resolved };
+  }
+
   return {
+    ...pluginApi,
     async createTask(payload) {
-      const model = _effectiveTaskModel(payload);
+      const plugins = await _pluginTaskState(payload, "url");
+      const model = plugins.resolved.transcribe?.model?.model || _effectiveTaskModel(payload);
       _ensureTaskModelReady(model, payload.needSubtitle !== false);
       const t = {
         id: uid(), url: payload.url, title: null,
         sourceLang: payload.sourceLang, targetLang: payload.targetLang,
-        mode: payload.mode, burn: payload.burn, model, engine: payload.engine,
+        mode: payload.mode, burn: payload.burn, model, engine: plugins.resolved.translate?.engine?.id || payload.engine,
+        pluginInstances: plugins.pluginInstances,
+        ttsEnabled: payload.ttsEnabled, ttsVoice: plugins.resolved.tts?.model?.voice || payload.ttsVoice,
         runtimeConfig: { whisper: { ..._readMockSettings().whisper, model } },
         status: "PENDING", progress: 0, error: null, createdAt: Date.now(), outputs: null, _sim: true,
       };
@@ -867,12 +951,15 @@ const MockApi = (() => {
     },
     // 示例模式下模拟本地视频上传任务。
     async createUploadTask(payload) {
-      const model = _effectiveTaskModel(payload);
+      const plugins = await _pluginTaskState(payload, "upload");
+      const model = plugins.resolved.transcribe?.model?.model || _effectiveTaskModel(payload);
       _ensureTaskModelReady(model, payload.needSubtitle !== false);
       const t = {
         id: uid(), url: payload.file?.name || "uploaded-video", title: payload.file?.name || null,
         sourceLang: payload.sourceLang, targetLang: payload.targetLang,
-        mode: payload.mode, burn: payload.burn, model, engine: payload.engine,
+        mode: payload.mode, burn: payload.burn, model, engine: plugins.resolved.translate?.engine?.id || payload.engine,
+        pluginInstances: plugins.pluginInstances,
+        ttsEnabled: payload.ttsEnabled, ttsVoice: plugins.resolved.tts?.model?.voice || payload.ttsVoice,
         runtimeConfig: { whisper: { ..._readMockSettings().whisper, model } },
         sourceType: "upload", needSubtitle: payload.needSubtitle,
         status: "PENDING", progress: 0, error: null, createdAt: Date.now(), outputs: null, _sim: true,

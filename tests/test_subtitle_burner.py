@@ -182,6 +182,48 @@ def test_missing_output_after_run(inputs, tmp_path, monkeypatch):
         burn_subtitles(video, srt, "task1", mode="soft")
 
 
+def test_custom_output_path_keeps_default_output_untouched(inputs, tmp_path, monkeypatch):
+    video, srt = inputs
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+    previous = output_dir / "output_soft.mp4"
+    previous.write_bytes(b"old-finished-video")
+    temporary = output_dir / (".reburn-" + "a" * 32 + ".mp4")
+    monkeypatch.setattr(sb, "ensure_task_dir", _ensure(output_dir))
+    monkeypatch.setattr(sb, "probe_duration", lambda *args: 1.0)
+
+    def run(cmd, *args, **kwargs):
+        Path(cmd[-1]).write_bytes(b"rendered")
+
+    monkeypatch.setattr(sb, "run_ffmpeg", run)
+    result = burn_subtitles(video, srt, "task1", mode="soft", output_path=temporary)
+    assert result.output_path == temporary
+    assert temporary.read_bytes() == b"rendered"
+    assert previous.read_bytes() == b"old-finished-video"
+
+
+@pytest.mark.parametrize("target", ["outside", "input", "symlink", "hardlink", "not_mp4"])
+def test_custom_output_rejects_unsafe_or_overlapping_paths(inputs, tmp_path, monkeypatch, target):
+    video, srt = inputs
+    monkeypatch.setattr(sb, "ensure_task_dir", _ensure(tmp_path))
+    monkeypatch.setattr(sb, "run_ffmpeg", lambda *args, **kwargs: pytest.fail("invalid path reached FFmpeg"))
+    output = tmp_path / "new.mp4"
+    if target == "outside":
+        output = tmp_path.parent / "outside.mp4"
+    elif target == "input":
+        output = video
+    elif target == "symlink":
+        output.symlink_to(video)
+    elif target == "hardlink":
+        output.hardlink_to(video)
+    else:
+        output = tmp_path / "new.txt"
+    before = video.read_bytes()
+    with pytest.raises(BurnError, match="输出路径"):
+        burn_subtitles(video, srt, "task1", mode="soft", output_path=output)
+    assert video.read_bytes() == before
+
+
 # ---------- 真实 ffmpeg 集成 ----------
 
 _FFMPEG_OK = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))

@@ -28,6 +28,21 @@ def _make_task(store) -> str:
     return rec.id
 
 
+def test_recovery_failure_keeps_subtitle_claim_and_never_enqueues(store, monkeypatch):
+    from src.service import subtitle_reburn
+    task_id = _make_task(store)
+    store.update(task_id, status="SUCCESS", progress=100)
+    previous, token = store.claim_operation(task_id)
+    queued = []
+    monkeypatch.setattr(runner, "enqueue_pipeline", queued.append)
+    monkeypatch.setattr(subtitle_reburn, "recover_subtitle_publication", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk unavailable")))
+    assert runner.recover_interrupted_tasks() == []
+    current = store.get(task_id)
+    assert current.status == "BURNING"
+    assert current.current_step == token
+    assert queued == []
+
+
 def test_enqueue_submits_to_executor(monkeypatch):
     submitted = []
 

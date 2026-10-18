@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from src.config import output_video_filename, settings
@@ -18,12 +19,13 @@ from src.plugin_system import (
 )
 from src.plugin_system.contracts import PluginConfig
 from src.plugin_system.errors import sanitize_message
+from src.plugins.builtin.configuration import BuiltinFactory
 
 
 PLUGIN_ID = "builtin.ffmpeg_render"
 
 
-class FFmpegRenderFactory:
+class FFmpegRenderFactory(BuiltinFactory):
     stage = "render"
     manifest = PluginManifest(
         plugin_id=PLUGIN_ID,
@@ -67,10 +69,26 @@ class FFmpegRenderSession:
                 "invalid_input", "render request differs from its frozen configuration"
             )
         if valid_subtitle:
-            expected = self._context.task_dir / output_video_filename(request.mode)
+            expected = output_video_filename(request.mode)
             paths = (request.source_video, request.translated_srt)
-            if request.output_video.resolve() != expected.resolve():
+            output = request.output_video
+            if (
+                request.mode not in {"hard", "soft"}
+                or not output.is_absolute()
+                or output.parent.resolve() != self._context.task_dir.resolve()
+                or output.is_symlink()
+                or output.resolve().parent != self._context.task_dir.resolve()
+                or (
+                    output.name != expected
+                    and re.fullmatch(r"\.reburn-[0-9a-f]{32}\.mp4", output.name) is None
+                )
+            ):
                 raise self._error("invalid_input", "subtitle output path is invalid")
+            for source in paths:
+                if output.resolve() == source.resolve() or (
+                    output.exists() and source.exists() and output.samefile(source)
+                ):
+                    raise self._error("invalid_input", "subtitle output overlaps an input")
         else:
             expected = self._context.task_dir / "output_dubbed.mp4"
             paths = (request.base_video, request.source_audio, request.speech_audio)
@@ -103,6 +121,7 @@ class FFmpegRenderSession:
                     self._context.task_id,
                     on_progress=lambda progress: self._report(progress.percent),
                     mode=request.mode,
+                    output_path=request.output_video,
                 )
                 self._check_cancelled()
                 output = Path(result.output_path).resolve()

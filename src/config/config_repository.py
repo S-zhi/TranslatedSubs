@@ -12,6 +12,7 @@ from .bootstrap import load_bootstrap
 from .redis_store import ConfigSnapshot, RedisJsonConfigStore, RevisionConflict, ConfigUnavailable
 from .schema import BUSINESS_DEFAULTS, SECRET_KEYS, default_document, validate_business_value
 from .model_schema import validate_engines, validate_models
+from .plugin_schema import validate_plugin_section
 
 
 class ConfigProvider(Protocol):
@@ -224,6 +225,8 @@ def _validate_document(values: Any) -> None:
         raise ValueError("configuration engines.byId section must be an object")
     validate_models(values["models"])
     validate_engines(engines["byId"])
+    if "plugins" in values:
+        validate_plugin_section(values["plugins"], document=values)
     meta = values.get("meta", {})
     if not isinstance(meta, dict):
         raise ValueError("configuration meta section must be an object")

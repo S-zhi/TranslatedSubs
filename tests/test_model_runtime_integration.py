@@ -21,6 +21,9 @@ from src.service.orchestrator import PipelineEvent
 from src.handler import tasks as tasks_routes
 from src.store import ModelSettingsStore, TaskStore, TranslationEngineStore
 from src.config.config_repository import get_config_provider
+from test_plugin_preflight import creation_plugins  # noqa: F401
+
+pytestmark = pytest.mark.usefixtures("creation_plugins")
 
 
 class _ReadyTranslationManager:

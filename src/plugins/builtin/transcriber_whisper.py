@@ -17,6 +17,7 @@ from src.plugin_system import (
 )
 from src.plugin_system.contracts import PluginConfig
 from src.plugin_system.errors import sanitize_message
+from src.plugins.builtin.configuration import BuiltinFactory
 
 
 PLUGIN_ID = "builtin.whisper"
@@ -45,7 +46,7 @@ def _safe_message(error: Exception, secret: str | None) -> str:
     return sanitize_message(message)
 
 
-class WhisperFactory:
+class WhisperFactory(BuiltinFactory):
     stage = "transcribe"
     manifest = PluginManifest(
         plugin_id=PLUGIN_ID,
@@ -207,7 +208,10 @@ class WhisperSession:
                 )
             ):
                 raise ValueError("transcription service URL contains unsupported credentials")
-            if credential_ref not in {None, "settings:transcriber_api_key"}:
+            card_reference = isinstance(credential_ref, str) and re.fullmatch(
+                r"model_card:whisper:[A-Za-z0-9_.-]{1,160}:api_key", credential_ref
+            )
+            if credential_ref not in {None, "settings:transcriber_api_key"} and not card_reference:
                 raise ValueError("transcription credential reference is unsupported")
         else:
             if service_url is not None or credential_ref is not None:

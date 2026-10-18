@@ -16,6 +16,7 @@ from typing import List, Optional
 
 from src.config.config_repository import ConfigSnapshot, get_config_provider
 from src.config.model_schema import validate_engines
+from src.store.plugin_instance_store import PluginInstanceConflict
 
 ENGINE_TYPES = ("openai_compatible", "anthropic_compatible", "local_ct2")
 AVAILABILITY = ("UNCONFIGURED", "UNKNOWN", "CHECKING", "AVAILABLE", "UNAVAILABLE")
@@ -214,6 +215,13 @@ class TranslationEngineStore:
         if not existed:
             return False
         def apply(document: dict) -> None:
+            instances = document.get("plugins", {}).get("byId", {}).values()
+            if any(
+                instance.get("engine_ref") is not None
+                and instance["engine_ref"].get("id") == engine_id
+                for instance in instances
+            ):
+                raise PluginInstanceConflict("翻译引擎被插件实例引用，请先解除绑定")
             by_id = document.setdefault("engines", {}).setdefault("byId", {})
             item = by_id.get(engine_id)
             if item is not None:

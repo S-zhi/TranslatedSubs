@@ -63,25 +63,25 @@ def test_startup_batch_skips_all_probes_in_debug_mode(tmp_path):
 
 
 def test_probe_credential_resolver_accepts_cookie_path(monkeypatch, tmp_path):
-    from types import SimpleNamespace
-
+    from src.config.config_repository import get_config_provider
     from src.handler import tasks
     from src.plugin_system import ProbeResult as PluginProbeResult
+    from src.plugins import get_plugin_manager
 
     cookie_path = tmp_path / "cookies.txt"
     cookie_path.write_text("cookie")
-    monkeypatch.setattr(tasks, "settings", SimpleNamespace(cookies_file=cookie_path))
-    monkeypatch.setattr(tasks, "resolve_plugin_defaults", lambda: {})
-    monkeypatch.setattr(tasks, "resolve_plugin_plan", lambda **kwargs: {})
-    monkeypatch.setattr(tasks, "parse_plugin_plan", lambda plan: {
-        "slots": {"download": {
-            "plugin_id": "builtin.ytdlp", "implementation_version": "1", "config": {},
-        }},
-    })
+    get_config_provider().mutate(lambda document: document["business"].update({
+        "cookies_file": str(cookie_path),
+    }))
+    real_manager = get_plugin_manager()
 
     class Manager:
+        catalog = real_manager.catalog
+        validate_config = real_manager.validate_config
+
         def run_probe(self, plugin_id, version, request, config, context):
             assert context.resolve_credential("settings:cookies_file") == str(cookie_path)
+            assert config["cookies_ref"] == "settings:cookies_file"
             return PluginProbeResult(ok=True, title="Video")
 
     monkeypatch.setattr(tasks, "get_plugin_manager", lambda: Manager())

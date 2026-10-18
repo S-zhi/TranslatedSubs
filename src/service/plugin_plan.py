@@ -83,7 +83,10 @@ def _validate_non_sensitive_url(value: Any, field_name: str) -> str | None:
 
 
 def validate_plugin_plan(value: object) -> dict[str, Any]:
-    """Validate and copy a decoded v1 plan, rejecting unknown persisted fields."""
+    """Read original plans unchanged and dispatch instance-backed v2 plans."""
+    if isinstance(value, dict) and value.get("schema_version") == 2:
+        from src.service.plugin_snapshot import validate_instance_plan
+        return validate_instance_plan(value)
     if not isinstance(value, dict) or set(value) != {"schema_version", "slots"}:
         raise ValueError("plugin plan must contain only schema_version and slots")
     version = value["schema_version"]
@@ -335,13 +338,16 @@ def resolve_plugin_plan(
             }, resolved_plugin_defaults,
         )
 
-        if engines is None:
+        builtin_translation = resolved_plugin_defaults["translate"]["plugin_id"] == "builtin.translation_engine"
+        if engines is None and builtin_translation:
             raise ValueError("translation engine store is required for subtitle tasks")
-        engine_record = engines.get(engine)
-        if engine_record is None:
+        engine_record = engines.get(engine) if engines is not None else None
+        if engine_record is None and builtin_translation:
             raise ValueError("translation engine configuration does not exist")
-        if engine_record.id != engine:
+        if engine_record is not None and engine_record.id != engine:
             raise ValueError("translation engine store returned a mismatched configuration")
+        if engine_record is None:
+            engine_record = SimpleNamespace(id=engine, api_type="openai_compatible", base_url="", model="")
         api_type = engine_record.api_type
         if api_type not in {"local_ct2", "openai_compatible", "anthropic_compatible"}:
             raise ValueError("unsupported translation engine type")
@@ -355,7 +361,8 @@ def resolve_plugin_plan(
             raise ValueError("local_ct2 only supports en to zh-CN or zh")
         base_url = _validate_non_sensitive_url(engine_record.base_url, "base_url") or ""
         credential_ref = (
-            None if api_type == "local_ct2" else f"translation_engine:{engine_record.id}:api_key"
+            f"translation_engine:{engine_record.id}:api_key"
+            if builtin_translation and api_type != "local_ct2" else None
         )
         slots["translate"] = _slot(
             "translate", {

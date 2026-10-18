@@ -422,6 +422,85 @@ class TaskStore:
                 row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         return _row_to_record(row) if row else None
 
+    def claim_operation(
+        self,
+        task_id: str,
+        *,
+        operation: str = "reburn",
+        allowed_statuses: tuple[str, ...] = ("SUCCESS", "FAILED", "CANCELLED"),
+    ) -> tuple[TaskRecord, str] | None:
+        """Claim a terminal task without changing its stored execution plan."""
+        if operation not in {"reburn", "subtitle_edit"} or not allowed_statuses:
+            raise ValueError("unsupported task operation")
+        token = f"{operation}:{uuid.uuid4().hex}"
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            if row is None or row["status"] not in allowed_statuses or row["is_cancelling"]:
+                return None
+            previous = _row_to_record(row)
+            conn.execute(
+                "UPDATE tasks SET status = 'BURNING', current_step = ?, "
+                "progress = 0, updated_at = ? WHERE id = ?",
+                (token, _now_ms(), task_id),
+            )
+        return previous, token
+
+    def finish_operation(self, task_id: str, token: str, **fields) -> TaskRecord | None:
+        """Publish or restore a claimed operation only while it still owns the task."""
+        if not isinstance(token, str) or token.partition(":")[0] not in {"reburn", "subtitle_edit"}:
+            raise ValueError("invalid task operation token")
+        allowed = {key: value for key, value in fields.items() if key in _COLUMNS and key != "id"}
+        if not allowed or allowed.get("status") not in {"SUCCESS", "FAILED", "CANCELLED"}:
+            raise ValueError("task operation must finish in a terminal state")
+        allowed["updated_at"] = _now_ms()
+        assignments = ", ".join(f"{key} = ?" for key in allowed)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result = conn.execute(
+                f"UPDATE tasks SET {assignments} WHERE id = ? AND status = 'BURNING' "
+                "AND current_step = ? AND is_cancelling = 0",
+                [*allowed.values(), task_id, token],
+            )
+            if result.rowcount != 1:
+                return None
+            row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        return _row_to_record(row) if row else None
+
+    def update_if_status(
+        self, task_id: str, expected_statuses: tuple[str, ...], **fields
+    ) -> TaskRecord | None:
+        """Apply a lifecycle transition without overwriting another operation."""
+        allowed = {key: value for key, value in fields.items() if key in _COLUMNS and key != "id"}
+        if not expected_statuses or not allowed:
+            return None
+        allowed["updated_at"] = _now_ms()
+        assignments = ", ".join(f"{key} = ?" for key in allowed)
+        statuses = ", ".join("?" for _ in expected_statuses)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            result = conn.execute(
+                f"UPDATE tasks SET {assignments} WHERE id = ? AND status IN ({statuses}) "
+                "AND is_cancelling = 0",
+                [*allowed.values(), task_id, *expected_statuses],
+            )
+            if result.rowcount != 1:
+                return None
+            row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        return _row_to_record(row) if row else None
+
+    def delete_if_status(self, task_id: str, expected_statuses: tuple[str, ...]) -> bool:
+        """Delete only a terminal record that has not been claimed meanwhile."""
+        if not expected_statuses:
+            return False
+        statuses = ", ".join("?" for _ in expected_statuses)
+        with self._connect() as conn:
+            result = conn.execute(
+                f"DELETE FROM tasks WHERE id = ? AND status IN ({statuses}) AND is_cancelling = 0",
+                [task_id, *expected_statuses],
+            )
+            return result.rowcount == 1
+
     # ---------- 改 ----------
     def update(self, task_id: str, **fields) -> Optional[TaskRecord]:
         allowed = {k: v for k, v in fields.items() if k in _COLUMNS and k != "id"}
