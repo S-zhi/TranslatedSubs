@@ -35,6 +35,8 @@ from src.config.config_repository import (
 )
 from src.config.schema import BUSINESS_DEFAULTS
 from src.config.redis_store import RevisionConflict
+from src.plugin_system.errors import sanitize_message
+from src.store.plugin_instance_store import PluginInstanceConflict
 
 
 from src.handler import (
@@ -42,6 +44,7 @@ from src.handler import (
     business_settings,
     health,
     model_settings,
+    plugin_settings,
     srt,
     subtitle_editor,
     tasks,
@@ -129,6 +132,12 @@ def create_app(debug: bool | None = None) -> FastAPI:
     async def revision_conflict_handler(request: Request, exc: RevisionConflict):
         return JSONResponse(status_code=409, content={"detail": "配置版本冲突"})
 
+    @app.exception_handler(PluginInstanceConflict)
+    async def plugin_instance_conflict_handler(request: Request, exc: PluginInstanceConflict):
+        return JSONResponse(status_code=409, content={"detail": {
+            "code": "PLUGIN_INSTANCE_CONFLICT", "message": sanitize_message(exc),
+        }})
+
     # 本机工作台：只允许配置中的前端来源访问 API。
     if not desktop_mode:
         app.add_middleware(
@@ -146,6 +155,7 @@ def create_app(debug: bool | None = None) -> FastAPI:
     app.include_router(health.router)
     app.include_router(translation_engines.router)
     app.include_router(model_settings.router)
+    app.include_router(plugin_settings.router)
     app.include_router(audio_settings.router)
     app.include_router(business_settings.router)
 

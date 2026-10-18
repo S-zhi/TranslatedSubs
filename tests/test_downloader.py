@@ -823,6 +823,23 @@ def test_probe_video_ttl_caching(monkeypatch):
     assert len(calls) == 3
 
 
+def test_probe_cache_keeps_distinct_downloader_network_configs(monkeypatch):
+    calls = []
+
+    def on_extract(url, download, opts):
+        calls.append((opts.get("proxy"), opts["socket_timeout"]))
+        return {"title": str(calls[-1]), "formats": [{}]}
+
+    monkeypatch.setattr(downloader, "YoutubeDL", make_fake_ydl(on_extract))
+    url = "https://example.com/network-config"
+    first = probe_video(url, ttl_sec=60, proxy="http://proxy-a:8080", socket_timeout=5)
+    assert first.cached is False
+    assert probe_video(url, ttl_sec=60, proxy="http://proxy-a:8080", socket_timeout=5).cached is True
+    assert probe_video(url, ttl_sec=60, proxy="http://proxy-a:8080", socket_timeout=30).cached is False
+    assert probe_video(url, ttl_sec=60, proxy="http://proxy-b:8080", socket_timeout=5).cached is False
+    assert calls == [("http://proxy-a:8080", 5), ("http://proxy-a:8080", 30), ("http://proxy-b:8080", 5)]
+
+
 def test_probe_video_ttl_expiry(monkeypatch):
     """TTL 过期后，probe_video 重新调用 YoutubeDL。"""
     import time

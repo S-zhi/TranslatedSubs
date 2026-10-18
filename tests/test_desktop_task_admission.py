@@ -80,6 +80,7 @@ def admission(tmp_path, monkeypatch):
         record.status not in {"SUCCESS", "FAILED", "CANCELLED"} for record in store.list()
     ))
     monkeypatch.setattr(compat, "_ensure_local_model_ready", lambda *_: None)
+    monkeypatch.setattr(task_lifecycle, "preflight_plugin_plan", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(compat, "probe_duration", lambda *_: 10.0)
     monkeypatch.setattr(compat, "task_dir", lambda task_id: tmp_path / task_id)
     monkeypatch.setattr(compat, "settings", dataclasses.replace(compat.settings, data_dir=tmp_path))
@@ -141,7 +142,7 @@ def test_replacement_waits_for_persistence_and_enqueue(admission, monkeypatch, k
     request = _request(admission, kind)
     entered, release, published = threading.Event(), threading.Event(), threading.Event()
     if stage == "persist":
-        name = {"url": "create_if_no_recent_active", "upload": "create", "retry": "update"}[kind]
+        name = {"url": "create_if_no_recent_active", "upload": "create", "retry": "update_if_status"}[kind]
         original = getattr(admission.store, name)
 
         def gated(*args, **kwargs):

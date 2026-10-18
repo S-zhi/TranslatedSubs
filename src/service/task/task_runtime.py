@@ -155,10 +155,17 @@ def probe_and_record(
     probes: Any,
     probe_video: Callable[..., Any],
     probe_batch_manager: Any,
+    plugin_instances: dict[str, str] | None = None,
+    quality: str | None = None,
 ) -> tuple[Any, Any]:
-    """执行一次 yt-dlp 探测，并持久化成功或失败记录。"""
+    """按下载实例执行一次探测，并持久化成功或失败记录。"""
 
-    result = probe_video(url, cookies_from_browser=cookies_from_browser)
+    options = {"cookies_from_browser": cookies_from_browser}
+    if plugin_instances is not None:
+        options["plugin_instances"] = plugin_instances
+    if quality is not None:
+        options["quality"] = quality
+    result = probe_video(url, **options)
     record = probes.record(
         url=url,
         ok=result.ok,
@@ -175,7 +182,8 @@ def probe_and_record(
         thumbnail=result.thumbnail,
         uploader=result.uploader,
     )
-    probe_batch_manager.record_manual_probe(url, result, record.created_at)
+    if not (plugin_instances or {}).get("download"):
+        probe_batch_manager.record_manual_probe(url, result, record.created_at)
     return result, record
 
 

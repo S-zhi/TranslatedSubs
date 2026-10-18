@@ -17,7 +17,9 @@
     <link rel="stylesheet" href="styles/storage.css" />
     <link rel="stylesheet" href="styles/drive.css" />
     <link rel="stylesheet" href="styles/translation-settings.css" />
+    <link rel="stylesheet" href="styles/plugin-settings.css" />
     <link rel="stylesheet" href="styles/developer.css" />
+    <link rel="stylesheet" href="styles/workbench.css" />
     <link rel="stylesheet" href="vendor/phosphor/regular/style.css" />
     <link rel="stylesheet" href="styles/desktop.css" />
   </head>
@@ -88,8 +90,36 @@
         <section class="view is-active" data-view="tasks" id="view-tasks">
           <section id="desktopStatus" class="desktop-status desktop-only" aria-label="基础模型准备" hidden></section>
           <p class="desktop-notice desktop-only">英语 → 简体中文 · 中英双语硬字幕 · 本地处理<br />字幕由机器生成，可能存在识别或翻译错误。YouTube 公开视频需要当前网络可访问；也可选择本地视频。</p>
+          <header class="workspace-header">
+            <div class="workspace-header__path"><i class="ph ph-squares-four" aria-hidden="true"></i><span>创作工作台</span></div>
+            <span class="workspace-header__meta">TranslatedSubs Studio</span>
+          </header>
+
+          <section class="studio-hero" aria-labelledby="studioTitle">
+            <div class="studio-hero__copy">
+              <p class="studio-hero__eyebrow">VIDEO TO POSSIBILITIES</p>
+              <h1 class="studio-hero__title" id="studioTitle">让每一句话，<br /><span class="studio-hero__accent">跨越语言的边界。</span></h1>
+              <p class="studio-hero__description">从一段视频开始，让转写、翻译与字幕制作自然衔接。</p>
+              <div class="studio-hero__steps" aria-label="处理流程">
+                <span><i class="ph ph-download-simple" aria-hidden="true"></i><span>下载</span></span>
+                <i class="ph ph-arrow-right" aria-hidden="true"></i>
+                <span><i class="ph ph-waveform" aria-hidden="true"></i><span>转写</span></span>
+                <i class="ph ph-arrow-right" aria-hidden="true"></i>
+                <span><i class="ph ph-translate" aria-hidden="true"></i><span>翻译</span></span>
+              </div>
+            </div>
+            <div class="studio-hero__visual" id="studioVisual" aria-hidden="true">
+              <div class="studio-hero__fallback"></div>
+            </div>
+            <p class="studio-hero__caption"><i class="ph ph-waveform" aria-hidden="true"></i><span>声音流动，表达无界</span></p>
+            <button class="studio-hero__motion" id="motionToggle" type="button" aria-label="暂停动效" aria-pressed="true" title="暂停动效">
+              <i class="ph ph-pause" aria-hidden="true"></i><span class="studio-hero__motion-label">动效</span>
+            </button>
+          </section>
+
           <!-- 任务控制台 -->
           <form class="console" id="taskForm" novalidate>
+            <div class="console__heading"><h2>新建任务</h2><span class="console__shortcut"><i class="ph ph-link-simple" aria-hidden="true"></i><span>链接或本地文件</span></span></div>
             <div class="console__bar" id="consoleBar">
               <span class="console__icon" aria-hidden="true"><i class="ph ph-link-simple"></i></span>
               <input
@@ -167,6 +197,7 @@
                   <div class="param">
                     <span class="param__label">翻译引擎</span>
                     <select class="select" id="engine" name="engine" aria-label="翻译引擎"></select>
+                    <small id="taskEngineBindingHint" class="param__hint" aria-live="polite"></small>
                   </div>
                   <div class="param" id="qualityParam">
                     <span class="param__label">下载画质</span>
@@ -193,6 +224,7 @@
                       <option value="af_maple">英文女声 af_maple</option>
                       <option value="af_sol">英文女声 af_sol</option>
                     </select>
+                    <small id="taskTtsBindingHint" class="param__hint" aria-live="polite"></small>
                   </div>
                   <div class="param">
                     <span class="param__label">原始人声</span>
@@ -205,6 +237,15 @@
                 </div>
               </details>
             </div>
+            <details class="advanced-params task-plugins" id="taskPluginOptions">
+              <summary><i class="ph ph-plugs-connected" aria-hidden="true"></i><span>高级插件选择</span><i class="ph ph-caret-down advanced-params__chevron" aria-hidden="true"></i></summary>
+              <div class="task-plugins__body">
+                <p class="muted">未指定时跟随阶段默认实例。插件绑定的模型 / 引擎会显示来源并控制相应参数。</p>
+                <div class="task-plugins__grid" id="taskPluginStages"></div>
+                <p class="param__hint" id="taskPluginFeedback" role="status" aria-live="polite"></p>
+                <div class="task-plugins__actions"><button class="btn btn--ghost btn--sm" id="taskPluginRefresh" type="button">刷新插件</button><a href="/settings?tab=plugins">管理插件实例</a></div>
+              </div>
+            </details>
           </form>
 
           <!-- 处理队列 -->
@@ -646,9 +687,21 @@
         <!-- ============ 其他设置 ============ -->
         <section class="view" data-view="other-settings" id="view-other-settings">
           <div class="advanced-settings" id="advancedSettings">
+            <details class="plugin-editor" id="apiConnection">
+              <summary>后端连接 · API Token</summary>
+              <form id="apiConnectionForm">
+                <p class="muted">连接地址：<span id="apiConnectionBase"></span></p>
+                <label class="engine-field"><span>API Token</span><input id="apiConnectionToken" type="password" autocomplete="off" spellcheck="false" placeholder="后端未启用鉴权时可留空" /></label>
+                <p class="muted" id="apiConnectionFeedback" role="status">仅保存在当前标签页的会话中，刷新后继续使用。</p>
+                <div class="plugin-editor__foot"><button class="btn btn--ghost" id="apiConnectionClear" type="button">清除并刷新</button><button class="btn btn--primary" type="submit">保存并刷新</button></div>
+              </form>
+            </details>
             <nav class="advanced-tabs" role="tablist" aria-label="其他设置分类">
               <button class="advanced-tab" id="settings-tab-engines" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-engines" data-settings-tab="engines" tabindex="-1">
                 <i class="ph ph-sliders-horizontal" aria-hidden="true"></i><span>翻译引擎</span>
+              </button>
+              <button class="advanced-tab" id="settings-tab-plugins" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-plugins" data-settings-tab="plugins" tabindex="-1">
+                <i class="ph ph-plugs-connected" aria-hidden="true"></i><span>插件管理</span>
               </button>
               <button class="advanced-tab" id="settings-tab-audio" type="button" role="tab" aria-selected="false" aria-controls="settings-panel-audio" data-settings-tab="audio" tabindex="-1">
                 <i class="ph ph-waveform" aria-hidden="true"></i><span>音频增强</span>
@@ -661,6 +714,27 @@
               </button>
             </nav>
 
+            <div class="advanced-tab-panel" id="settings-panel-plugins" role="tabpanel" aria-labelledby="settings-tab-plugins" data-settings-panel="plugins" hidden>
+              <div class="translation-settings plugin-settings" id="pluginSettings">
+                <header class="translation-settings__head"><div><span class="eyebrow">SETTINGS / PLUGINS</span><h2>插件管理</h2><p>按处理阶段配置插件实例，为新任务选择默认实现。</p></div><div class="plugin-settings__actions"><span class="muted" id="pluginSettingsRevision">尚未加载</span><button class="btn btn--ghost" id="pluginRefresh" type="button">刷新</button><button class="btn btn--primary" id="pluginAdd" type="button"><i class="ph ph-plus" aria-hidden="true"></i><span>新增实例</span></button></div></header>
+                <div class="translation-settings__notice"><i class="ph ph-shield-check" aria-hidden="true"></i><span>模型与翻译引擎凭据继续在原设置中维护。实例只引用模型卡 / 引擎 ID；不绑定时沿用任务参数或当前模型。</span></div>
+                <p class="plugin-feedback" id="pluginSettingsFeedback" role="status" aria-live="polite" hidden></p>
+                <section class="plugin-editor" id="pluginInstanceEditor" aria-labelledby="pluginEditorTitle" hidden>
+                  <header class="plugin-editor__head"><h3 id="pluginEditorTitle">新增插件实例</h3><button class="btn btn--ghost btn--sm" id="pluginEditorCancel" type="button">取消</button></header>
+                  <form id="pluginInstanceForm" novalidate>
+                    <div class="plugin-form-grid"><label class="engine-field"><span>实例 ID</span><input name="id" type="text" maxlength="64" placeholder="例如 translate-main" autocomplete="off" /></label><label class="engine-field"><span>显示名称</span><input name="name" type="text" maxlength="120" placeholder="例如 日常翻译" /></label><label class="engine-field"><span>处理阶段</span><select name="stage"></select></label><label class="engine-field"><span>插件实现</span><select name="plugin"></select></label></div>
+                    <p class="muted" id="pluginVersionHint"></p>
+                    <label class="plugin-enabled"><input name="enabled" type="checkbox" checked /><span>启用此实例</span></label>
+                    <div class="plugin-form-grid" id="pluginConfigFields"></div>
+                    <label class="engine-field plugin-binding"><span>模型 / 引擎来源</span><select id="pluginBinding" name="binding"></select><small class="muted" id="pluginBindingHint"></small></label>
+                    <p class="plugin-feedback" id="pluginEditorFeedback" role="status" aria-live="polite" hidden></p>
+                    <div class="plugin-editor__foot"><button class="btn btn--ghost" id="pluginEditorRefresh" type="button">刷新版本并保留输入</button><button class="btn btn--primary" id="pluginSave" type="submit"><i class="ph ph-floppy-disk" aria-hidden="true"></i><span>保存实例</span></button></div>
+                  </form>
+                </section>
+                <div class="plugin-delete-confirm" id="pluginDeleteConfirm" role="alert" hidden><p id="pluginDeleteMessage"></p><button class="btn btn--ghost btn--sm" id="pluginDeleteCancel" type="button">取消</button><button class="btn btn--ghost btn--sm plugin-instance__delete" id="pluginDeleteAccept" type="button">确认删除</button></div>
+                <div id="pluginStageList" class="plugin-stage-list"></div>
+              </div>
+            </div>
             <div class="advanced-tab-panel" id="settings-panel-audio" role="tabpanel" aria-labelledby="settings-tab-audio" data-settings-panel="audio" hidden>
               <div class="audio-settings" id="audioSettings">
                 <header class="audio-settings__head">

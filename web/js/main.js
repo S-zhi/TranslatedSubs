@@ -19,11 +19,15 @@ import { initAudioSettings } from "./ui-audio-settings.js";
 import { initLocalModels } from "./ui-local-models.js";
 import { initAdvancedSettings } from "./ui-advanced-settings.js";
 import { initModelSettings } from "./ui-model-settings.js";
+import { initPluginSettings } from "./ui-plugin-settings.js";
 import { initRouter } from "./router.js";
 import { loadTasks, stopAll, setView, setFilter } from "./store.js";
 import { initDeveloperEntry } from "./developer-entry.js";
 import { initSupportedSitesView } from "./supported-sites.js";
+import { initApiConnection } from "./ui-api-connection.js";
+import { initWorkbench } from "./workbench.js";
 
+initApiConnection();
 initI18n();
 initTheme();
 const desktopMode = isDesktop();
@@ -33,7 +37,10 @@ if (!desktopMode) {
   initModelSettings();
 }
 initRouter();
-if (!desktopMode) initDeveloperEntry();
+if (!desktopMode) {
+  initPluginSettings();
+  initDeveloperEntry();
+}
 initShell();
 if (desktopMode) {
   // Keep restored/deep-linked server settings out of the desktop primary path.
@@ -58,6 +65,7 @@ if (!desktopMode) {
   initAudioSettings();
   initLocalModels();
   initSupportedSitesView();
+  initWorkbench();
 }
 desktop?.start();
 

@@ -121,18 +121,31 @@ class _ProbeContext:
         return self._credential_resolver(ref)
 
 
-def probe_video(url, *, cookies_from_browser=None, force_refresh=False):
+def probe_video(
+    url, *, cookies_from_browser=None, force_refresh=False,
+    plugin_instances=None, quality=None,
+):
     """Compatibility wrapper that runs the configured download plugin probe."""
-    defaults = resolve_plugin_defaults()
-    raw_plan = resolve_plugin_plan(
-        source_type="url", source_lang="auto", target_lang="zh-CN",
-        mode="mono", burn="hard", model="local:tiny",
-        engine=DEFAULT_TRANSLATION_ENGINE_ID, need_subtitle=False,
-        quality="480p", tts_enabled=False, tts_voice="auto",
-        original_voice_mode="keep", settings=settings,
-        plugin_defaults=defaults,
+    from src.config.config_repository import get_config_provider
+    from src.config.config import settings_scope
+    from src.service.plugin_selection import prepare_instance_selection, build_instance_plan
+
+    snapshot = get_config_provider().read()
+    selected = prepare_instance_selection(
+        snapshot, plugin_instances, request_model="local:tiny", engine=DEFAULT_TRANSLATION_ENGINE_ID,
+        tts_voice="auto", need_subtitle=False,
     )
-    slot = parse_plugin_plan(raw_plan)["slots"]["download"]
+    defaults = selected.plugin_defaults
+    with settings_scope(settings.capture_business_snapshot(config_snapshot=snapshot)):
+        raw_plan = resolve_plugin_plan(
+            source_type="url", source_lang="auto", target_lang="zh-CN",
+            mode="mono", burn="hard", model="local:tiny",
+            engine=DEFAULT_TRANSLATION_ENGINE_ID, need_subtitle=False,
+            quality=quality or "480p", tts_enabled=False, tts_voice="auto",
+            original_voice_mode="keep", settings=settings,
+            plugin_defaults=defaults,
+        )
+    slot = parse_plugin_plan(build_instance_plan(raw_plan, selected))["slots"]["download"]
 
     def resolve_credential(ref):
         if ref == "settings:cookies_file":
@@ -261,7 +274,13 @@ def _ensure_translation_engine(
 def resolve_runtime(**kwargs):
     """Resolve and snapshot all model routing for a newly created task."""
     kwargs.setdefault("compat_settings", settings)
-    kwargs.setdefault("translation_model_manager", get_translation_model_manager())
+    selected = kwargs.get("plugin_defaults")
+    builtin_translate = selected is None or selected["translate"]["plugin_id"] == "builtin.translation_engine"
+    if kwargs.get("need_subtitle") and builtin_translate and "translation_model_manager" not in kwargs:
+        engines = kwargs.get("engines")
+        engine = engines.get(kwargs.get("engine")) if engines is not None else None
+        if engine is not None and engine.api_type == "local_ct2":
+            kwargs["translation_model_manager"] = get_translation_model_manager()
     if "model_store" not in kwargs:
         engines = kwargs.get("engines")
         # The model store is Redis-backed too. Only preserve a path when an

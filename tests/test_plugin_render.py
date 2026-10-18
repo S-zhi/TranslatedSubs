@@ -70,6 +70,55 @@ def test_subtitle_request_uses_frozen_core_output_and_cancellation(tmp_path, mon
         cancelled.run(_video_request(tmp_path, video, srt))
 
 
+def test_subtitle_render_accepts_host_temporary_output_and_passes_it_to_core(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    video = tmp_path / "source.mp4"
+    srt = tmp_path / "translated.srt"
+    video.write_bytes(b"video")
+    srt.write_text("subtitle")
+    output = tmp_path / (".reburn-" + "c" * 32 + ".mp4")
+    context = FakeContext(task_dir=tmp_path, purpose="render.subtitle")
+    session = subtitle_ffmpeg.factory.create_session({"mode": "soft"}, context)
+    request = replace(_video_request(tmp_path, video, srt), output_video=output)
+
+    def burn(*args, output_path=None, **kwargs):
+        assert output_path == output
+        output_path.write_bytes(b"rendered")
+        return subtitle_ffmpeg.subtitle_burner.BurnResult(output_path, "soft", 8)
+
+    monkeypatch.setattr(subtitle_ffmpeg.subtitle_burner, "burn_subtitles", burn)
+    assert session.run(request) == SubtitleRenderResult(output)
+
+
+@pytest.mark.parametrize("target", ["outside", "source", "symlink", "arbitrary", "nested"])
+def test_subtitle_output_remains_confined_and_cannot_overwrite_input(tmp_path, target):
+    from dataclasses import replace
+
+    video = tmp_path / "source.mp4"
+    srt = tmp_path / "translated.srt"
+    video.write_bytes(b"video")
+    srt.write_text("subtitle")
+    temporary_name = ".reburn-" + "d" * 32 + ".mp4"
+    output = tmp_path / temporary_name
+    if target == "outside":
+        output = tmp_path.parent / temporary_name
+    elif target == "source":
+        output.hardlink_to(video)
+    elif target == "symlink":
+        output.symlink_to(video)
+    elif target == "arbitrary":
+        output = tmp_path / "arbitrary.mp4"
+    else:
+        output = tmp_path / "nested" / temporary_name
+    session = subtitle_ffmpeg.factory.create_session(
+        {"mode": "soft"}, FakeContext(task_dir=tmp_path, purpose="render.subtitle")
+    )
+    with pytest.raises(PluginError) as caught:
+        session.validate(replace(_video_request(tmp_path, video, srt), output_video=output))
+    assert caught.value.code == "invalid_input"
+
+
 def test_dub_mux_validates_stems_and_returns_exact_requested_paths(tmp_path, monkeypatch):
     base, source, speech, bg, vocal = [tmp_path / name for name in (
         "base.mp4", "source.wav", "speech.wav", "background.wav", "vocal.wav"

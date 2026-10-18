@@ -9,7 +9,7 @@ export const state = {
   filter: "all",       // all | active | done | failed
   view: "tasks",       // tasks | preview | editor | storage | model-settings | other-settings
   modelKind: "llm",
-  settingsTab: "engines", // engines | audio | probe | drive
+  settingsTab: "engines", // engines | audio | probe | drive | plugins
   previewId: null,
   loading: true,
   loadError: null,
@@ -48,7 +48,7 @@ export function setModelKind(kind, options = {}) {
   state.modelKind = kind;
   emit({ type: "model-kind", modelKind: kind, history: options.history !== false });
 }
-export function setSettingsTab(tab) {
+export function setSettingsTab(tab, options = {}) {
   // Legacy model navigation now lives in the dedicated model-settings view.
   if (tab === "models") {
     state.settingsTab = "models";
@@ -63,7 +63,7 @@ export function setSettingsTab(tab) {
   }
   if (!tab || state.settingsTab === tab) return;
   state.settingsTab = tab;
-  emit({ type: "settings-tab", settingsTab: tab });
+  emit({ type: "settings-tab", settingsTab: tab, history: options.history !== false });
 }
 export function setPreviewId(id) { state.previewId = id; emit({ type: "preview" }); }
 

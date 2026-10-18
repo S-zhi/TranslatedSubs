@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
+from src.config.config_repository import get_config_provider
 from src.handler.deps import get_store, require_api_token
 
 from src.service.model_manager import MODEL_NAMES, ModelDependencyError, ModelValidationError, model_manager
@@ -67,6 +68,28 @@ def download_local_model(model_name: str) -> dict:
 
 def _ensure_model_not_in_use(model_name: str, store: TaskStore) -> None:
     local_backends = {"local", "local_whisper", "whisper", "faster_whisper"}
+    document = get_config_provider().read().values
+    whisper = document.get("models", {}).get("whisper", {})
+    cards = {card["id"]: card for card in whisper.get("models", [])}
+    for instance in document.get("plugins", {}).get("byId", {}).values():
+        ref = instance.get("model_ref")
+        if not ref or ref.get("kind") != "whisper":
+            continue
+        card = cards.get(ref.get("card_id"))
+        if card is None:
+            continue
+        # Bindings may select a non-current card, with provider/model inherited
+        # from the category when omitted on that card.
+        effective = {**whisper, **card}
+        provider = str(effective.get("provider") or "local").strip().lower()
+        selected = str(effective.get("model") or "").strip()
+        backend, separator, selected_model = selected.partition(":")
+        if provider not in local_backends or (separator and backend.lower() not in local_backends):
+            continue
+        if (selected_model if separator else selected).strip() == model_name:
+            raise HTTPException(status_code=409, detail={
+                "code": "MODEL_IN_USE", "message": "有插件实例绑定了这个模型，请先解除绑定再清理",
+            })
     for task in store.list():
         if task.status in {"SUCCESS", "FAILED", "CANCELLED"} or not task.need_subtitle:
             continue

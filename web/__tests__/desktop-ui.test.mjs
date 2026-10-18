@@ -211,7 +211,7 @@ test('console blocks not-ready submissions, avoids legacy settings APIs, then su
   const calls = []; let unexpected = 0;
   const originals = new Map();
   const stub = (name, fn) => { originals.set(name, Api[name]); Api[name] = fn; };
-  for (const name of ['listTranslationEngines', 'getModelSettings', 'getRuntimeReadiness', 'listVideoLanguages', 'listTargetLanguages']) {
+  for (const name of ['listPluginInstances', 'listTranslationEngines', 'getModelSettings', 'getRuntimeReadiness', 'listVideoLanguages', 'listTargetLanguages']) {
     stub(name, async () => { unexpected++; throw new Error(`Unexpected legacy API: ${name}`); });
   }
   stub('createUploadTask', async (payload) => { calls.push(['upload', payload]); return { id: 'upload-id', status: 'SUCCESS' }; });
@@ -332,8 +332,8 @@ test('main desktop boot skips legacy settings and Drive initialization, while se
     context.document = doc; context.window = win;
     context.initRouter = () => { doc.body.dataset.route = 'tasks'; };
     vm.runInNewContext(executable, context);
-    for (const name of ['initAdvancedSettings', 'initModelSettings', 'initDrive', 'initTranslationSettings',
-      'initAudioSettings', 'initLocalModels', 'initProbe', 'initSupportedSitesView']) {
+    for (const name of ['initAdvancedSettings', 'initModelSettings', 'initPluginSettings', 'initWorkbench',
+      'initDrive', 'initTranslationSettings', 'initAudioSettings', 'initLocalModels', 'initProbe', 'initSupportedSitesView']) {
       assert.equal(calls.includes(name), !desktop, name);
     }
     assert.equal(calls.includes('desktop.start'), desktop);

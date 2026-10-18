@@ -8,6 +8,7 @@ import { toast } from "./toast.js";
 import { Api } from "./api.js";
 import { LANG_LABEL } from "./constants.js";
 import { resolveTaskWhisperState } from "./task-whisper.js";
+import { collectTaskPluginInstances, createTaskPluginController } from "./task-plugins.js";
 
 const CFG = window.APP_CONFIG;
 const FALLBACK_LANGUAGES = [
@@ -37,6 +38,7 @@ const LOCAL_ENGINE_FALLBACK = {
   hasApiKey: false,
 };
 let engineLanguageController = null;
+let taskPluginController = null;
 let taskWhisperState = null;
 let whisperRefreshSeq = 0;
 let lastWhisperSelection = "";
@@ -127,6 +129,7 @@ export function collectTaskPayload(form) {
     ttsEnabled: form.elements.ttsEnabled.checked,
     ttsVoice: form.elements.ttsVoice.value,
     originalVoiceMode: form.elements.originalVoiceMode.value,
+    pluginInstances: collectTaskPluginInstances(form),
   };
 }
 
@@ -167,6 +170,8 @@ async function loadEngines() {
     initEngines();
     engineLanguageController?.setEngines([LOCAL_ENGINE_FALLBACK]);
   }
+  taskPluginController?.applyControls();
+  engineLanguageController?.sync();
 }
 
 function option(value, label = value) {
@@ -285,6 +290,7 @@ function renderModelWeights(state) {
     hint.classList.toggle("is-error", !renderedState?.ok);
   }
   taskWhisperState = renderedState;
+  taskPluginController?.applyControls();
   taskSubmitSync();
 }
 
@@ -393,7 +399,7 @@ export function initConsole({ desktop = null } = {}) {
   let submitting = false;
   let selectedFile = null;
   let dragDepth = 0;
-  const probeState = { status: "idle", url: "", result: null };
+  const probeState = { status: "idle", url: "", key: "", result: null };
 
   function syncSubmitDisabled() {
     // 有字幕时必须确认最新 Whisper 模型状态后才允许提交。
@@ -401,7 +407,10 @@ export function initConsole({ desktop = null } = {}) {
     submitBtn.disabled = submitting
       || probeState.status === "checking"
       || probeState.status === "failed"
-      || (desktop ? !desktop.snapshot.ready : (needsSubtitle && !taskWhisperState?.ok));
+      || (desktop ? !desktop.snapshot.ready : (
+        (taskPluginController && !taskPluginController.isReady())
+        || (needsSubtitle && !(taskPluginController ? taskPluginController.whisperReady() : taskWhisperState?.ok))
+      ));
   }
   taskSubmitSync = syncSubmitDisabled;
   syncSubmitDisabled();
@@ -433,6 +442,7 @@ export function initConsole({ desktop = null } = {}) {
     probeSeq += 1;
     probeState.status = "idle";
     probeState.url = "";
+    probeState.key = "";
     probeState.result = null;
     setUrlHint(message, false);
     syncSubmitDisabled();
@@ -444,6 +454,7 @@ export function initConsole({ desktop = null } = {}) {
     fileInput.value = "";
     urlInput.dataset.sourceType = "url";
     urlInput.placeholder = "粘贴视频页面地址，或拖入本地视频";
+    taskPluginController?.sync();
   }
 
   function setSelectedFile(file) {
@@ -453,22 +464,38 @@ export function initConsole({ desktop = null } = {}) {
     probeSeq += 1;
     probeState.status = "idle";
     probeState.url = "";
+    probeState.key = "";
     probeState.result = null;
     urlInput.dataset.sourceType = "upload";
     urlInput.value = file.name;
     urlInput.placeholder = "已选择本地视频";
+    taskPluginController?.sync();
     setUrlHint(`已选择本地视频：${file.name}，会跳过在线下载并按当前参数继续处理`, false);
     syncSubmitDisabled();
   }
 
-  async function runProbe(url) {
-    // 对当前 URL 执行一次后端探针校验，并忽略过期返回。
+  function currentProbeOptions() {
+    const download = collectTaskPluginInstances(form).download;
+    return {
+      ...(download ? { pluginInstances: { download } } : {}),
+      quality: $("#quality").value || "480p",
+    };
+  }
+
+  function currentProbeKey(options = currentProbeOptions()) {
+    return JSON.stringify([options, taskPluginController?.downloadFingerprint?.() || ""]);
+  }
+
+  async function runProbe(url, options = currentProbeOptions()) {
+    // 对当前 URL 和下载配置执行探测，并忽略过期返回。
     const seq = ++probeSeq;
+    const key = currentProbeKey(options);
     probeState.url = url;
+    probeState.key = key;
     setProbeState("checking", "正在检查链接是否可下载...");
     try {
-      const result = await Api.probeVideo(url);
-      if (seq !== probeSeq) return { ok: false, stale: true };
+      const result = await Api.probeVideo(url, options);
+      if (seq !== probeSeq || key !== currentProbeKey()) return { ok: false, stale: true };
       probeState.url = url;
       if (result.ok) {
         setProbeState("ok", probeOkMessage(result), false, result);
@@ -477,7 +504,7 @@ export function initConsole({ desktop = null } = {}) {
       }
       return result;
     } catch (err) {
-      if (seq !== probeSeq) return { ok: false, stale: true };
+      if (seq !== probeSeq || key !== currentProbeKey()) return { ok: false, stale: true };
       const result = {
         ok: false,
         reason: err.message || "链接校验失败",
@@ -494,6 +521,7 @@ export function initConsole({ desktop = null } = {}) {
       probeSeq += 1;
       probeState.status = "idle";
       probeState.url = "";
+      probeState.key = "";
       probeState.result = null;
       setUrlHint(`已选择本地视频：${currentVideoFile().name}，会跳过在线下载并按当前参数继续处理`, false);
       syncSubmitDisabled();
@@ -501,6 +529,8 @@ export function initConsole({ desktop = null } = {}) {
     }
     const url = urlInput.value.trim();
     clearProbeTimer();
+    probeSeq += 1;
+    probeState.key = currentProbeKey();
     if (!url) {
       resetProbeState();
       return;
@@ -519,7 +549,7 @@ export function initConsole({ desktop = null } = {}) {
   async function ensureProbeOk(url) {
     // 提交前确保当前 URL 已通过探针，防止绕过自动校验。
     clearProbeTimer();
-    if (probeState.url === url && probeState.status === "ok" && probeState.result?.ok) {
+    if (probeState.url === url && probeState.key === currentProbeKey() && probeState.status === "ok" && probeState.result?.ok) {
       return probeState.result;
     }
     return runProbe(url);
@@ -547,6 +577,7 @@ export function initConsole({ desktop = null } = {}) {
   }
 
   urlInput.addEventListener("input", scheduleProbe);
+  $("#quality").addEventListener("change", scheduleProbe);
   uploadBtn.addEventListener("keydown", (e) => {
     if (e.key !== "Enter" && e.key !== " ") return;
     e.preventDefault();
@@ -608,6 +639,7 @@ export function initConsole({ desktop = null } = {}) {
           || (engineLanguageController?.isLocked() && ["sourceLang", "targetLang"].includes(c.id));
       });
     });
+    taskPluginController?.applyControls();
   }
   const ttsEnabledInput = form.elements.ttsEnabled;
   const ttsHint = $("#ttsHint");
@@ -630,6 +662,18 @@ export function initConsole({ desktop = null } = {}) {
     syncTtsHint();
   });
   syncSubtitleParams();
+  taskPluginController = desktop ? null : createTaskPluginController({
+    root: $("#taskPluginOptions"), form,
+    getWhisperState: () => taskWhisperState,
+    onChange: () => {
+      engineLanguageController.sync();
+      syncSubtitleParams();
+      syncTtsHint();
+      if (probeState.key && probeState.key !== currentProbeKey()) scheduleProbe();
+      syncSubmitDisabled();
+    },
+  });
+  taskPluginController?.refresh();
   $("#model").addEventListener("change", () => {
     lastWhisperSelection = $("#model").value;
     syncSubmitDisabled();
@@ -659,11 +703,19 @@ export function initConsole({ desktop = null } = {}) {
           return;
         }
       }
+      if (!desktop && taskPluginController) {
+        await taskPluginController.refresh({ force: true });
+        if (!taskPluginController.isReady()) {
+          toast(taskPluginController.error() || "请先修复插件选择", "ph-warning-circle");
+          return;
+        }
+      }
       const videoFile = currentVideoFile();
       const url = urlInput.value.trim();
       const selectedEngine = engineLanguageController.selectedEngine();
 
-      if (!desktop && form.elements.needSubtitle.value === "on") {
+      if (!desktop && form.elements.needSubtitle.value === "on"
+          && (!taskPluginController || taskPluginController.requiresWhisperInventory())) {
         const whisperState = await refreshTaskWhisperState({ force: true });
         if (!whisperState?.ok) {
           toast(whisperState?.message || "无法确认 Whisper 模型状态，请稍后重试。", "ph-warning-circle");
@@ -676,7 +728,8 @@ export function initConsole({ desktop = null } = {}) {
         }
       }
 
-      if (requiresReadyLocalTranslation(selectedEngine, form.elements.needSubtitle.value === "on")) {
+      if (!desktop && !taskPluginController?.llmBound()
+          && requiresReadyLocalTranslation(selectedEngine, form.elements.needSubtitle.value === "on")) {
         toast("本地模型尚未就绪，请先下载并转换模型", "ph-warning-circle");
         return;
       }
@@ -700,8 +753,9 @@ export function initConsole({ desktop = null } = {}) {
         }
       }
 
+      const collectedPayload = collectTaskPayload(form);
       let payload = {
-        ...collectTaskPayload(form),
+        ...(!desktop && taskPluginController ? taskPluginController.applyPayload(collectedPayload) : collectedPayload),
         ...(videoFile ? { file: videoFile } : { url }),
       };
 

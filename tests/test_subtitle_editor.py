@@ -1,9 +1,11 @@
 """字幕编辑路由（parse / save / re-burn）单测。
 
-不真跑 ffmpeg：re-burn 通过 monkeypatch 替换 burn_subtitles。
+不真跑 ffmpeg：re-burn 仅替换核心 FFmpeg 调用，仍经真实 PluginManager 校验。
 """
 
 from __future__ import annotations
+
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -22,6 +24,11 @@ def client(tmp_path, monkeypatch):
     app.dependency_overrides[get_store] = lambda: store
     # 把 task_dir 指向临时根，避免污染真实 data/
     monkeypatch.setattr(editor_routes, "task_dir", lambda tid: tmp_path / tid)
+    from src.service import asset_resolver, subtitle_reburn
+    from src.core import subtitle_burner
+    monkeypatch.setattr(asset_resolver, "task_dir", lambda tid: tmp_path / tid)
+    monkeypatch.setattr(subtitle_reburn, "task_dir", lambda tid: tmp_path / tid)
+    monkeypatch.setattr(subtitle_burner, "ensure_task_dir", lambda tid: tmp_path / tid)
 
     # 创建一条带字幕的任务
     cid = store.create(
@@ -33,6 +40,7 @@ def client(tmp_path, monkeypatch):
         model="small",
         engine="deepseek",
     ).id
+    store.update(cid, status="SUCCESS", progress=100)
     d = tmp_path / cid
     d.mkdir(parents=True, exist_ok=True)
     (d / "original.srt").write_text(
@@ -270,24 +278,82 @@ def test_save_subtitles_releases_lock_on_disk_error(client, monkeypatch):
     assert client._tid not in _write_locks
 
 
+@pytest.mark.parametrize("status", ["PENDING", "TRANSLATING", "BURNING", "DUBBING"])
+def test_save_subtitles_rejects_active_tasks(client, status):
+    client._store.update(client._tid, status=status)
+    target = client._tmp / client._tid / "translated.srt"
+    before = target.read_bytes()
+    response = client.put(f"/api/tasks/{client._tid}/subtitles", json={
+        "locale": "translated",
+        "entries": [{"index": 1, "start": 0, "end": 1, "text": "blocked"}],
+    })
+    assert response.status_code == 409
+    assert target.read_bytes() == before
+    assert client._store.get(client._tid).status == status
+
+
+def test_save_subtitles_rechecks_status_after_lock_acquisition(client, monkeypatch):
+    from contextlib import contextmanager
+
+    original_lock = editor_routes.task_write_lock
+    target = client._tmp / client._tid / "translated.srt"
+    before = target.read_bytes()
+
+    @contextmanager
+    def lock_then_transition(task_id):
+        with original_lock(task_id):
+            client._store.update(task_id, status="PENDING")
+            yield
+
+    monkeypatch.setattr(editor_routes, "task_write_lock", lock_then_transition)
+    response = client.put(f"/api/tasks/{client._tid}/subtitles", json={
+        "locale": "translated", "entries": [{"index": 1, "start": 0, "end": 1, "text": "x"}],
+    })
+    assert response.status_code == 409
+    assert target.read_bytes() == before
+
+
+def test_save_subtitles_rolls_back_file_when_db_finish_fails(client, monkeypatch):
+    target = client._tmp / client._tid / "translated.srt"
+    before = target.read_bytes()
+    original_finish = client._store.finish_operation
+    calls = []
+
+    def finish(task_id, token, **fields):
+        calls.append(token)
+        if len(calls) == 1:
+            raise OSError("database full")
+        return original_finish(task_id, token, **fields)
+
+    monkeypatch.setattr(client._store, "finish_operation", finish)
+    with pytest.raises(OSError, match="database full"):
+        client.put(f"/api/tasks/{client._tid}/subtitles", json={
+            "locale": "translated", "entries": [{"index": 1, "start": 0, "end": 1, "text": "x"}],
+        })
+    assert target.read_bytes() == before
+    assert client._store.get(client._tid).status == "SUCCESS"
+    assert not list(target.parent.glob(".subtitle-edit-*"))
+    assert not list(target.parent.glob(".reburn-backup-*"))
+
+
 # ---------- POST /api/tasks/{id}/subtitles/burn ----------
 
 def test_reburn_calls_burn_subtitles(client, tmp_path, monkeypatch):
     """re-burn 应基于 translated.srt + source.* 调用 burn_subtitles。"""
     called = {}
 
-    def fake_burn(video, srt, task_id, on_progress=None, *, mode="hard"):
+    def fake_burn(video, srt, task_id, on_progress=None, *, mode="hard", output_path=None):
         called["video"] = str(video)
         called["srt"] = str(srt)
         called["task_id"] = task_id
         called["mode"] = mode
-        # 模拟生成产物
-        out = tmp_path / task_id / "output.mp4"
-        out.write_bytes(b"NEW-VIDEO")
+        out = Path(output_path)
+        assert out.name.startswith(".reburn-")
+        out.write_bytes(b"\x00\x00\x00\x18ftypisomNEW-VIDEO")
         from src.core.subtitle_burner import BurnResult
         return BurnResult(output_path=out, mode=mode, filesize=out.stat().st_size)
 
-    monkeypatch.setattr(editor_routes, "burn_subtitles", fake_burn)
+    monkeypatch.setattr("src.core.subtitle_burner.burn_subtitles", fake_burn)
 
     # 准备 source.mp4，否则路由会 409
     (tmp_path / client._tid / "source.mp4").write_bytes(b"OLD")
@@ -296,7 +362,7 @@ def test_reburn_calls_burn_subtitles(client, tmp_path, monkeypatch):
     assert r.status_code == 200
     data = r.json()
     assert data["ok"] is True
-    assert data["outputPath"] == "output.mp4"
+    assert data["outputPath"] == "output_hard.mp4"
     assert called["video"].endswith("source.mp4")
     assert called["srt"].endswith("translated.srt")
     # 不传 mode 时按任务的 burn 设置（默认 hard）
@@ -305,21 +371,21 @@ def test_reburn_calls_burn_subtitles(client, tmp_path, monkeypatch):
     # DB 里 output_video 字段也被刷新
     rec = client._store.get(client._tid)
     assert rec.output_video is not None
-    assert rec.output_video.endswith("output.mp4")
+    assert rec.output_video.endswith("output_hard.mp4")
 
 
 def test_reburn_accepts_mode_override(client, tmp_path, monkeypatch):
     """请求体里的 mode 覆盖任务默认 burn 设置。"""
     called = {}
 
-    def fake_burn(video, srt, task_id, on_progress=None, *, mode="hard"):
+    def fake_burn(video, srt, task_id, on_progress=None, *, mode="hard", output_path=None):
         called["mode"] = mode
         from src.core.subtitle_burner import BurnResult
-        out = tmp_path / task_id / "output.mp4"
-        out.write_bytes(b"x")
-        return BurnResult(output_path=out, mode=mode, filesize=1)
+        out = Path(output_path)
+        out.write_bytes(b"\x00\x00\x00\x18ftypisom")
+        return BurnResult(output_path=out, mode=mode, filesize=out.stat().st_size)
 
-    monkeypatch.setattr(editor_routes, "burn_subtitles", fake_burn)
+    monkeypatch.setattr("src.core.subtitle_burner.burn_subtitles", fake_burn)
     (tmp_path / client._tid / "source.mp4").write_bytes(b"OLD")
 
     r = client.post(f"/api/tasks/{client._tid}/subtitles/burn", json={"mode": "soft"})
@@ -343,10 +409,10 @@ def test_reburn_400_on_burn_error(client, tmp_path, monkeypatch):
     """burn_subtitles 抛 BurnError 时路由应返回 400。"""
     from src.core.subtitle_burner import BurnError
 
-    def fake_burn(video, srt, task_id, on_progress=None, *, mode="hard"):
+    def fake_burn(video, srt, task_id, on_progress=None, *, mode="hard", output_path=None):
         raise BurnError("测试失败")
 
-    monkeypatch.setattr(editor_routes, "burn_subtitles", fake_burn)
+    monkeypatch.setattr("src.core.subtitle_burner.burn_subtitles", fake_burn)
     (tmp_path / client._tid / "source.mp4").write_bytes(b"OLD")
 
     r = client.post(f"/api/tasks/{client._tid}/subtitles/burn", json={})

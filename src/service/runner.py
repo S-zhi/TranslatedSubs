@@ -336,7 +336,10 @@ def _upgrade_legacy_snapshot(snapshot: dict, rec, config_bundle, plugin_plan=Non
     if not isinstance(routes.get("engine"), dict):
         translate = ((plugin_plan or {}).get("slots") or {}).get("translate")
         translate_config = translate.get("config") if isinstance(translate, dict) else None
-        if isinstance(translate_config, dict) and translate_config.get("engine_id"):
+        if (isinstance(translate, dict)
+                and translate.get("plugin_id") == "builtin.translation_engine"
+                and isinstance(translate_config, dict)
+                and translate_config.get("engine_id")):
             api_type = str(translate_config.get("api_type") or "openai_compatible")
             provider = (
                 "local" if api_type == "local_ct2"
@@ -586,6 +589,34 @@ def recover_interrupted_tasks() -> list[str]:
     recovered: list[str] = []
     for rec in _store.list():
         if rec.status not in _RECOVERABLE_STATUSES:
+            if rec.status in {"SUCCESS", "FAILED", "CANCELLED"}:
+                from src.service.subtitle_reburn import discard_subtitle_publication
+                try:
+                    discard_subtitle_publication(rec.id)
+                except Exception:
+                    logger.warning("字幕已提交日志无法清理，保留备份: task=%s", rec.id, exc_info=True)
+            continue
+        if str(rec.current_step or "").startswith(("reburn:", "subtitle_edit:")):
+            from src.service.subtitle_reburn import recover_subtitle_publication
+            try:
+                publication = recover_subtitle_publication(rec.id, expected_token=rec.current_step)
+                if publication is not None:
+                    previous = publication["previous"]
+                    _store.finish_operation(
+                        rec.id, rec.current_step, status=previous["status"],
+                        progress=previous["progress"], current_step=previous["current_step"],
+                    )
+                else:
+                    _store.finish_operation(
+                        rec.id, rec.current_step, status="FAILED", current_step=None,
+                        error="字幕操作因服务重启中断，请重新保存或烧录字幕",
+                        error_code="subtitle_operation_interrupted",
+                    )
+            except Exception:
+                # Keep the claim while recovery is incomplete. Turning it into
+                # a terminal row could make the next startup discard its backups.
+                logger.exception("字幕操作发布日志恢复失败，保留占用令牌、日志与备份: task=%s", rec.id)
+            logger.warning("已处理重启中断的字幕操作，不重投完整流水线: task=%s", rec.id)
             continue
         if str(rec.model or "").partition(":")[0].strip().lower() == "replicate":
             _store.update(
@@ -778,7 +809,7 @@ def _run(task_id: str) -> None:
         source_lang=rec.source_lang,
         target_lang=rec.target_lang,
         mode=rec.mode,
-        burn=rec.burn,
+        burn=str(plugin_plan["slots"].get("render.subtitle", {}).get("config", {}).get("mode") or rec.burn),
         model=selected_whisper,
         engine=rec.engine,
         source_type=rec.source_type,
@@ -846,6 +877,19 @@ def _run(task_id: str) -> None:
             last_state["progress"] = ev.progress
 
     def resolve_credential(ref: str) -> str:
+        allowed_refs = {
+            value for slot in plugin_plan["slots"].values()
+            for key, value in slot["config"].items()
+            if key in {"credential_ref", "cookies_ref"} and isinstance(value, str)
+        }
+        if ref not in allowed_refs:
+            raise PluginError("credential_missing", "translate", "host", "credential is not authorized by this task plan")
+        if isinstance(ref, str) and ref.startswith("model_card:"):
+            from src.service.plugin_selection import resolve_model_credential
+            try:
+                return resolve_model_credential(ref, config_bundle)
+            except ValueError as exc:
+                raise PluginError("credential_missing", "translate", "host", str(exc), exc) from exc
         if ref == "settings:transcriber_api_key":
             value = getattr(settings, "transcriber_api_key", None)
             if isinstance(value, str) and value:
@@ -864,7 +908,8 @@ def _run(task_id: str) -> None:
             engine_id = ref[len(prefix):-len(suffix)]
             if engine_id:
                 if (
-                    runtime_snapshot
+                    engine_config is not None
+                    and runtime_snapshot
                     and runtime_snapshot.get("engine", {}).get("id") == engine_id
                     and not (runtime_snapshot_missing and not legacy_cache)
                 ):
@@ -879,17 +924,25 @@ def _run(task_id: str) -> None:
 
     # Routing fields are immutable in new task snapshots. Credentials are
     # deliberately read from the current Redis entry addressed by the saved ID.
-    engine_config = _snapshot_engine_config(
-        runtime_snapshot.get("engine") or {}, engine_store=snapshot_engine_store,
-        model_store=model_snapshot_store,
+    translate_slot = plugin_plan["slots"].get("translate")
+    requires_builtin_engine = (
+        translate_slot is not None
+        and translate_slot["plugin_id"] == "builtin.translation_engine"
     )
+    engine_config = None
+    instance_plan = plugin_plan.get("schema_version") == 2
+    if requires_builtin_engine and not instance_plan:
+        engine_config = _snapshot_engine_config(
+            runtime_snapshot.get("engine") or {}, engine_store=snapshot_engine_store,
+            model_store=model_snapshot_store,
+        )
     pipeline_parameters = inspect.signature(run_pipeline).parameters
     supports_plugin_plan = "plugin_plan" in pipeline_parameters or any(
         parameter.kind is inspect.Parameter.VAR_KEYWORD
         for parameter in pipeline_parameters.values()
     )
     authoritative_plan_over_legacy_snapshot = runtime_snapshot_missing and not legacy_cache
-    if engine_config is None and not authoritative_plan_over_legacy_snapshot:
+    if requires_builtin_engine and not instance_plan and engine_config is None and not authoritative_plan_over_legacy_snapshot:
         _store.update(
             task_id, status="FAILED", error="翻译引擎配置不存在、已停用或缺少对应 API Key",
             error_code="engine_credentials_missing",

@@ -10,6 +10,7 @@
 .desktop-mode .view[data-view="other-settings"],
 .desktop-mode .supported-sites,
 .desktop-mode #taskForm .params,
+.desktop-mode #taskPluginOptions,
 .desktop-mode [data-track="dubbed"],
 .desktop-mode [data-track="source"],
 .desktop-mode #taskList button:has(.ph-folder-open),

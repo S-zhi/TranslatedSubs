@@ -18,6 +18,7 @@ from src.plugin_system import (
 )
 from src.plugin_system.contracts import PluginConfig
 from src.plugin_system.errors import sanitize_message
+from src.plugins.builtin.configuration import BuiltinFactory
 from src.store.translation_engine_store import LOCAL_TRANSLATION_MODEL
 
 
@@ -45,7 +46,7 @@ class _EngineSnapshot:
     timeout: int
 
 
-class TranslatorEngineFactory:
+class TranslatorEngineFactory(BuiltinFactory):
     """Lightweight factory; it does not load a model or resolve credentials."""
 
     stage = "translate"
@@ -217,7 +218,10 @@ class TranslatorEngineSession:
         if api_type == "local_ct2":
             if credential_ref is not None:
                 raise ValueError("local translation must not declare a credential")
-        elif credential_ref != expected_ref:
+        elif credential_ref != expected_ref and not (
+            isinstance(credential_ref, str)
+            and re.fullmatch(r"model_card:llm:[A-Za-z0-9_.-]{1,160}:api_key", credential_ref)
+        ):
             raise ValueError("translation credential reference does not match engine id")
 
     def _resolve_engine_snapshot(self) -> _EngineSnapshot:

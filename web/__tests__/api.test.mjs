@@ -62,6 +62,18 @@ test("Api.probeVideo drops an invalid browser cookie source", async () => {
   assert.deepEqual(requestBody, { url: "https://example.com/video" });
 });
 
+test("Api.probeVideo sends selected downloader and quality without unrelated stages", async () => {
+  let requestBody;
+  mockFetchHandler = async (_url, options) => {
+    requestBody = JSON.parse(options.body);
+    return { ok: true, json: async () => ({ ok: true }) };
+  };
+  await Api.probeVideo("https://example.com/video", {
+    pluginInstances: { download: "alternate", transcribe: "unused" }, quality: "720p",
+  });
+  assert.deepEqual(requestBody, { url: "https://example.com/video", pluginInstances: { download: "alternate" }, quality: "720p" });
+});
+
 test("Api.getProbeStartupStatus reads the shared startup batch endpoint", async () => {
   let requestedUrl = "";
   mockFetchHandler = async (url) => {
