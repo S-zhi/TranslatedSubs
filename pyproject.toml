@@ -40,6 +40,9 @@ tts = [
 include = ["src*"]
 
 [dependency-groups]
+desktop-build = [
+    "pyinstaller>=6.22.0,<7",
+]
 dev = [
     "pytest>=9.1.1",
 ]
@@ -47,3 +50,9 @@ dev = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.translatedsubs.desktop]
+app-name = "TranslateSub"
+bundle-id = "com.translatedsubs.desktop"
+minimum-macos = "14.0"
+swift-product = "TranslateSub"

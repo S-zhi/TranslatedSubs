@@ -1,0 +1,55 @@
+/* Desktop is opt-in: the server workbench retains all of its controls. */
+.desktop-only { display: none; }
+.desktop-mode .desktop-only:not([hidden]) { display: block; }
+.desktop-mode [hidden] { display: none !important; }
+.desktop-mode .nav__item[data-view="mcp"],
+.desktop-mode .nav__item[data-view="model-settings"],
+.desktop-mode .nav__item[data-view="other-settings"],
+.desktop-mode #view-mcp,
+.desktop-mode #view-model-settings,
+.desktop-mode .view[data-view="other-settings"],
+.desktop-mode .supported-sites,
+.desktop-mode #taskForm .params,
+.desktop-mode [data-track="dubbed"],
+.desktop-mode [data-track="source"],
+.desktop-mode #taskList button:has(.ph-folder-open),
+.desktop-mode #taskList button:has(.ph-speaker-high),
+.desktop-mode #storageDriveUpload,
+.desktop-mode #storageDriveSync,
+.desktop-mode .stage__actions > button:first-child { display: none; }
+
+.desktop-status, .desktop-update {
+  padding: 18px 20px;
+  margin-bottom: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-panel);
+  box-shadow: var(--shadow-1);
+}
+.desktop-status h2 { font-size: 15px; margin: 0 0 8px; }
+.desktop-status__message, .desktop-notice, .desktop-update__notes {
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1.65;
+  margin: 0 0 12px;
+  overflow-wrap: anywhere;
+}
+.desktop-status.is-ready { border-color: var(--ok); }
+.desktop-status.is-ready .desktop-models { display: none; }
+.desktop-status.is-error { border-color: var(--danger); }
+.desktop-models { display: grid; gap: 10px; margin: 12px 0; }
+.desktop-model {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 12px;
+  font-size: 12px;
+  padding: 12px;
+  background: var(--surface-2);
+  border-radius: var(--r-control);
+}
+.desktop-model strong { overflow-wrap: anywhere; }
+.desktop-model__size { font-variant-numeric: tabular-nums; color: var(--text-2); }
+.desktop-model__progress { width: 100%; grid-column: 1 / -1; accent-color: var(--accent); height: 6px; }
+.desktop-model__error { color: var(--danger-text); grid-column: 1 / -1; overflow-wrap: anywhere; margin: 0; }
+.desktop-update strong { font-size: 13px; }
+.desktop-update__notes { white-space: pre-wrap; max-height: 10em; overflow-y: auto; margin-top: 6px; }

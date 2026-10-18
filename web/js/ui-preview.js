@@ -1,3 +1,4 @@
+import { exportDesktopArtifact } from "./desktop-bridge.js";
 /* 视频审片室：剧院感舞台 + 已完成清单。仅在选中变化时重建播放器，避免打断播放。 */
 
 import { LANG_LABEL } from "./constants.js";
@@ -199,6 +200,12 @@ function showStageVideoMissing(screen, dlVideo, trackLabel) {
 function open(sel, kind) {
   if (USE_MOCK) {
     toast("示例模式：下载占位");
+    return;
+  }
+  try {
+    if (exportDesktopArtifact(sel.id, kind)) return;
+  } catch (_) {
+    toast("无法打开保存对话框，请重试。", "ph-warning-circle");
     return;
   }
   window.open(Api.downloadUrl(sel.id, kind), "_blank");

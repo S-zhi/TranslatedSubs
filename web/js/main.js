@@ -1,5 +1,9 @@
 /* 入口：装配各模块并加载数据 */
 
+import { isDesktop } from "./desktop.js";
+import { mountDesktop } from "./desktop-ui.js";
+import { bindDesktopQueue } from "./desktop-bridge.js";
+import { toast } from "./toast.js";
 import { initTheme } from "./theme.js";
 import { initI18n } from "./i18n.js";
 import { initShell } from "./ui-shell.js";
@@ -22,23 +26,40 @@ import { initSupportedSitesView } from "./supported-sites.js";
 
 initI18n();
 initTheme();
-initAdvancedSettings();
-initModelSettings();
+const desktopMode = isDesktop();
+const desktop = desktopMode ? mountDesktop() : null;
+if (!desktopMode) {
+  initAdvancedSettings();
+  initModelSettings();
+}
 initRouter();
-initDeveloperEntry();
+if (!desktopMode) initDeveloperEntry();
 initShell();
-initConsole();
+if (desktopMode) {
+  // Keep restored/deep-linked server settings out of the desktop primary path.
+  const ensureDesktopView = () => {
+    if (["mcp", "model-settings", "other-settings"].includes(document.body.dataset.route)) setView("tasks");
+  };
+  document.addEventListener("viewchange", ensureDesktopView);
+  ensureDesktopView();
+}
+initConsole({ desktop: desktop?.controller });
+if (desktop) bindDesktopQueue({ documentLike: document, windowLike: window,
+  controller: desktop.controller, notify: (message) => toast(message, "ph-warning-circle") });
 initQueue({ listSelector: "#taskList", origin: "web" });
-initQueue({ listSelector: "#mcpTaskList", origin: "mcp" });
+if (!desktopMode) initQueue({ listSelector: "#mcpTaskList", origin: "mcp" });
 initPreview();
 initEditor();
-initProbe();
 initStorage();
-initDrive();
-initTranslationSettings();
-initAudioSettings();
-initLocalModels();
-initSupportedSitesView();
+if (!desktopMode) {
+  initProbe();
+  initDrive();
+  initTranslationSettings();
+  initAudioSettings();
+  initLocalModels();
+  initSupportedSitesView();
+}
+desktop?.start();
 
 loadTasks();
 

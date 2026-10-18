@@ -1,0 +1,70 @@
+name: macOS desktop (manual only)
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [dev, release]
+        default: dev
+        required: true
+        description: Dev is ad-hoc only; release requires signing and notarization
+      assets_json:
+        type: string
+        required: true
+        description: Pinned FFmpeg and CJK fonts source/inventory JSON (see packaging README)
+      update_url:
+        type: string
+        description: Actual HTTPS update manifest URL (release required)
+      download_url:
+        type: string
+        description: Actual HTTPS final DMG URL (release required)
+      release_notes:
+        type: string
+        description: Release notes (release required)
+permissions:
+  contents: read
+concurrency:
+  group: macos-desktop-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    # Official ARM64 standard label; macos-15-intel is the Intel counterpart.
+    # https://github.com/actions/runner-images#available-images
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      DESKTOP_MODE: ${{ inputs.mode }}
+      DESKTOP_ASSETS_JSON: ${{ inputs.assets_json }}
+      DESKTOP_UPDATE_URL: ${{ inputs.update_url }}
+      DESKTOP_DOWNLOAD_URL: ${{ inputs.download_url }}
+      DESKTOP_RELEASE_NOTES: ${{ inputs.release_notes }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require Apple Silicon build host
+        run: test "$(uname -m)" = arm64
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+          enable-cache: true
+      - name: Install locked build and local translation dependencies
+        run: uv sync --frozen --group desktop-build --extra local-translation
+      - name: Validate packaging contracts
+        run: uv run --frozen --group desktop-build --extra local-translation pytest -q tests/test_desktop_packaging.py
+      - name: Build app and DMG; release signs and notarizes
+        env:
+          DESKTOP_CERTIFICATE_BASE64: ${{ secrets.DESKTOP_CERTIFICATE_BASE64 }}
+          DESKTOP_CERTIFICATE_PASSWORD: ${{ secrets.DESKTOP_CERTIFICATE_PASSWORD }}
+          DESKTOP_SIGNING_IDENTITY: ${{ secrets.DESKTOP_SIGNING_IDENTITY }}
+          DESKTOP_APPLE_ID: ${{ secrets.DESKTOP_APPLE_ID }}
+          DESKTOP_APPLE_PASSWORD: ${{ secrets.DESKTOP_APPLE_PASSWORD }}
+          DESKTOP_TEAM_ID: ${{ secrets.DESKTOP_TEAM_ID }}
+        run: uv run --frozen --group desktop-build --extra local-translation bash scripts/desktop/ci-build.sh
+      - name: Upload workflow artifacts only
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64-${{ inputs.mode }}
+          path: |
+            dist/desktop/*.dmg
+            dist/desktop/*.sha256
+            dist/desktop/update-manifest.json
+          if-no-files-found: error

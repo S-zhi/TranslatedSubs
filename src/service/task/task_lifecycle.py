@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, List, Literal, Optional
 
@@ -52,6 +54,41 @@ class UploadTaskError(RuntimeError):
 
 class LifecycleConflictError(RuntimeError):
     """Expected lifecycle state conflict suitable for HTTP 409."""
+
+
+@contextmanager
+def _desktop_task_admission():
+    """Serialize admission with model publication, only at the route boundary.
+
+    Keep validation, configuration snapshots, persistence and enqueue in one
+    critical section. Service callbacks must not acquire this non-reentrant
+    lock again; enqueue only submits background processing, never waits for it.
+    """
+    if os.environ.get("SUBTRANS_DESKTOP") != "1":
+        yield
+        return
+    from src.desktop.models import model_mutation_lock
+
+    with model_mutation_lock:
+        yield
+
+
+def _ensure_desktop_models_ready(need_subtitle: bool) -> None:
+    """Read the coordinator snapshot while the admission lock is held."""
+    if not need_subtitle or os.environ.get("SUBTRANS_DESKTOP") != "1":
+        return
+    from src.desktop.models import get_desktop_model_manager
+
+    snapshot = get_desktop_model_manager().status()
+    if not snapshot.get("ready", False):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "DESKTOP_MODELS_NOT_READY",
+                "message": "桌面模型尚未准备完成，请等待模型准备完成后重试。",
+                "state": snapshot.get("state", "not_started"),
+            },
+        )
 
 
 def _creation_runtime_inputs(engines: Any) -> tuple[Any, Any | None]:
@@ -546,28 +583,30 @@ def create_task_route(
 ) -> TaskOut:
     from src.handler import tasks as compat
 
-    rec, created = compat._task_lifecycle.create_url_task(
-        body=body,
-        store=store,
-        engines=engines,
-        ensure_supported_translation_languages=compat._ensure_supported_translation_languages,
-        ensure_local_model_ready=compat._ensure_local_model_ready,
-        ensure_translation_engine=compat._ensure_translation_engine,
-        resolve_runtime=compat.resolve_runtime,
-        task_origin=task_origin,
-        settings=compat.settings,
-    )
-    if not created:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "TASK_ALREADY_RUNNING",
-                "message": "该 URL 已有任务正在处理，请复用现有 task_id",
-                "taskId": rec.id,
-            },
+    with _desktop_task_admission():
+        _ensure_desktop_models_ready(body.needSubtitle)
+        rec, created = compat._task_lifecycle.create_url_task(
+            body=body,
+            store=store,
+            engines=engines,
+            ensure_supported_translation_languages=compat._ensure_supported_translation_languages,
+            ensure_local_model_ready=compat._ensure_local_model_ready,
+            ensure_translation_engine=compat._ensure_translation_engine,
+            resolve_runtime=compat.resolve_runtime,
+            task_origin=task_origin,
+            settings=compat.settings,
         )
-    compat.enqueue_pipeline(rec.id)
-    return compat.to_out(rec)
+        if not created:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "TASK_ALREADY_RUNNING",
+                    "message": "该 URL 已有任务正在处理，请复用现有 task_id",
+                    "taskId": rec.id,
+                },
+            )
+        compat.enqueue_pipeline(rec.id)
+        return compat.to_out(rec)
 
 
 @router.post("/upload", response_model=TaskOut, status_code=201, dependencies=[Depends(require_api_token)])
@@ -588,38 +627,40 @@ def create_upload_task_route(
 ) -> TaskOut:
     from src.handler import tasks as compat
 
-    try:
-        rec = compat._task_lifecycle.create_upload_task(
-            file=file,
-            source_lang=sourceLang,
-            target_lang=targetLang,
-            mode=mode,
-            burn=burn,
-            model=model,
-            engine=engine,
-            need_subtitle=needSubtitle,
-            tts_enabled=ttsEnabled,
-            tts_voice=ttsVoice,
-            original_voice_mode=originalVoiceMode,
-            store=store,
-            engines=engines,
-            settings=compat.settings,
-            task_dir=compat.task_dir,
-            probe_duration=compat.probe_duration,
-            enqueue_pipeline=compat.enqueue_pipeline,
-            release_lock=compat.release_lock,
-            ensure_supported_translation_languages=compat._ensure_supported_translation_languages,
-            ensure_local_model_ready=compat._ensure_local_model_ready,
-            ensure_translation_engine=compat._ensure_translation_engine,
-            upload_error=compat._upload_error,
-            resolve_runtime=compat.resolve_runtime,
-            http_exception_type=HTTPException,
-            source_video_stem=SOURCE_VIDEO_STEM,
-            upload_video_extensions=compat._UPLOAD_VIDEO_EXTS,
-        )
-    except compat._task_lifecycle.UploadTaskError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    return compat.to_out(rec)
+    with _desktop_task_admission():
+        _ensure_desktop_models_ready(needSubtitle)
+        try:
+            rec = compat._task_lifecycle.create_upload_task(
+                file=file,
+                source_lang=sourceLang,
+                target_lang=targetLang,
+                mode=mode,
+                burn=burn,
+                model=model,
+                engine=engine,
+                need_subtitle=needSubtitle,
+                tts_enabled=ttsEnabled,
+                tts_voice=ttsVoice,
+                original_voice_mode=originalVoiceMode,
+                store=store,
+                engines=engines,
+                settings=compat.settings,
+                task_dir=compat.task_dir,
+                probe_duration=compat.probe_duration,
+                enqueue_pipeline=compat.enqueue_pipeline,
+                release_lock=compat.release_lock,
+                ensure_supported_translation_languages=compat._ensure_supported_translation_languages,
+                ensure_local_model_ready=compat._ensure_local_model_ready,
+                ensure_translation_engine=compat._ensure_translation_engine,
+                upload_error=compat._upload_error,
+                resolve_runtime=compat.resolve_runtime,
+                http_exception_type=HTTPException,
+                source_video_stem=SOURCE_VIDEO_STEM,
+                upload_video_extensions=compat._UPLOAD_VIDEO_EXTS,
+            )
+        except compat._task_lifecycle.UploadTaskError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        return compat.to_out(rec)
 
 
 @router.get("", response_model=List[TaskOut], dependencies=[Depends(require_api_token)])
@@ -776,18 +817,20 @@ def retry_task_route(
 ) -> TaskOut:
     from src.handler import tasks as compat
 
-    rec = compat._task_lifecycle.require(store, task_id)
-    if str(rec.model or "").partition(":")[0].strip().lower() == "replicate":
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "REPLICATE_BACKEND_REMOVED",
-                "message": "该历史任务使用已移除的 Replicate 转写，请新建任务并选择本地 Whisper 模型",
-            },
+    with _desktop_task_admission():
+        rec = compat._task_lifecycle.require(store, task_id)
+        _ensure_desktop_models_ready(bool(rec.need_subtitle))
+        if str(rec.model or "").partition(":")[0].strip().lower() == "replicate":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "REPLICATE_BACKEND_REMOVED",
+                    "message": "该历史任务使用已移除的 Replicate 转写，请新建任务并选择本地 Whisper 模型",
+                },
+            )
+        return compat._task_lifecycle.retry_task(
+            store=store,
+            task_id=task_id,
+            enqueue_pipeline=compat.enqueue_pipeline,
+            to_out=compat.to_out,
         )
-    return compat._task_lifecycle.retry_task(
-        store=store,
-        task_id=task_id,
-        enqueue_pipeline=compat.enqueue_pipeline,
-        to_out=compat.to_out,
-    )

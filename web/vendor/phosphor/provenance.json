@@ -1,0 +1,50 @@
+{
+  "package": "@phosphor-icons/web",
+  "version": "2.1.1",
+  "repository": "https://github.com/phosphor-icons/web",
+  "package_url": "https://registry.npmjs.org/@phosphor-icons/web/-/web-2.1.1.tgz",
+  "integrity": "sha512-QjrfbItu5Rb2i37GzsKxmrRHfZPTVk3oXSPBnQ2+oACDbQRWGAeB0AsvZw263n1nFouQuff+khOCtRbrc6+k+A==",
+  "archive_sha256": "c74ab1decb33d7cefa22a7c412345e30d28ac39941b3be6837bc956cbef654d0",
+  "license": "MIT",
+  "license_source": "package/LICENSE",
+  "copyright": "Copyright (c) 2020-2021 Phosphor Icons",
+  "modifications": "None. Selected regular stylesheet, its four referenced fonts, and license are byte-for-byte upstream files.",
+  "files": [
+    {
+      "path": "LICENSE",
+      "archive_path": "package/LICENSE",
+      "bytes": 1097,
+      "sha256": "81bb1bfd8e3730c19a3895ff4a82839980933504725960c52b1c207b29398f07"
+    },
+    {
+      "path": "regular/style.css",
+      "archive_path": "package/src/regular/style.css",
+      "bytes": 78131,
+      "sha256": "873761b8711147dc516b6102936e9ad005f3a3015349efcde1a496f0326f1051"
+    },
+    {
+      "path": "regular/Phosphor.woff2",
+      "archive_path": "package/src/regular/Phosphor.woff2",
+      "bytes": 147380,
+      "sha256": "c2ea45ea05ff5c7df1936770c104725f2a68f43fd343f35f3da23a30b27de32a"
+    },
+    {
+      "path": "regular/Phosphor.woff",
+      "archive_path": "package/src/regular/Phosphor.woff",
+      "bytes": 488716,
+      "sha256": "396c5eae7f2dfb4d1f5432edd87109eda2f92a451b2167e43a26165b82770f75"
+    },
+    {
+      "path": "regular/Phosphor.ttf",
+      "archive_path": "package/src/regular/Phosphor.ttf",
+      "bytes": 488636,
+      "sha256": "06b91e022b7ee899a63efced879392a74f0bacbda54e4467e9f663220d173a10"
+    },
+    {
+      "path": "regular/Phosphor.svg",
+      "archive_path": "package/src/regular/Phosphor.svg",
+      "bytes": 2996371,
+      "sha256": "e874e712d3f1b7774b4cba7dafda1eecdb1f075cd5e2ec1109c0553421ecaed3"
+    }
+  ]
+}
