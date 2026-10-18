@@ -12,3 +12,5 @@
 - [机器引导配置模板](../config.example.json)：Redis 地址、数据路径、HTTP 与 MCP 监听默认值。
 
 已交付能力的定位和适用场景见[中文版 README](./zh/README.md)的“能力概览”。
+
+后续规划见 [macOS 桌面首版产品约定与交付计划](./macos-desktop-v1-product-brief.md)：记录已确认的零配置使用流程、验收标准、三天交付顺序与发行条件；其中目标不代表已交付能力。

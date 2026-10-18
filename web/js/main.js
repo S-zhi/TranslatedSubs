@@ -21,6 +21,7 @@ import { loadTasks, stopAll, setView, setFilter } from "./store.js";
 import { initDeveloperEntry } from "./developer-entry.js";
 import { initSupportedSitesView } from "./supported-sites.js";
 import { initApiConnection } from "./ui-api-connection.js";
+import { initWorkbench } from "./workbench.js";
 
 initApiConnection();
 initI18n();
@@ -43,6 +44,7 @@ initTranslationSettings();
 initAudioSettings();
 initLocalModels();
 initSupportedSitesView();
+initWorkbench();
 
 loadTasks();
 
