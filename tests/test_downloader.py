@@ -62,6 +62,35 @@ def task_path(tmp_path, monkeypatch):
 
 # ---------- download_video 主流程 ----------
 
+@pytest.mark.parametrize("operation", ["download", "probe"])
+def test_youtube_enables_node_and_preserves_warnings(
+    operation, task_path, monkeypatch, caplog,
+):
+    """下载与探测都启用 EJS 运行时，且不会丢弃 yt-dlp 的诊断警告。"""
+    warning = "[youtube] JavaScript challenge solving failed"
+
+    def on_extract(url, download, opts):
+        assert "deno" in opts["js_runtimes"]
+        assert "node" in opts["js_runtimes"]
+        assert opts["no_warnings"] is False
+        opts["logger"].warning(warning)
+        if download:
+            source = task_path / "source.mp4"
+            source.write_bytes(b"video")
+            return {"requested_downloads": [{"filepath": str(source)}]}
+        return {"title": "Video", "url": "https://example.test/media.mp4"}
+
+    monkeypatch.setattr(downloader, "YoutubeDL", make_fake_ydl(on_extract))
+    url = "https://www.youtube.com/watch?v=example"
+    with caplog.at_level("WARNING", logger=downloader.__name__):
+        if operation == "download":
+            download_video(url, "task1")
+        else:
+            assert probe_video(url, ttl_sec=0).ok is True
+
+    assert warning in caplog.text
+
+
 def test_download_success(task_path, monkeypatch):
     src = task_path / "source.mp4"
 

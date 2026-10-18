@@ -54,7 +54,7 @@ uv sync --extra local-translation
 
 打开“设置 → 翻译引擎”，点击“本地 CPU 英译中”的“下载并转换”。模型就绪前，任务会提示缺少条件，不会自动切换到云端引擎。
 
-Hugging Face Whisper 可选依赖为 `uv sync --extra hf-models`；Kokoro 配音使用 `uv sync --extra tts`，另外需要系统安装 `espeak-ng`。多个功能需要一起启用时，在同一次 `uv sync` 中列出所有 `--extra` 参数。Demucs 需单独安装，不属于 `pyproject.toml` extras；Google Drive sidecar 需要 Go 1.23 或更新版本。Node.js 仅用于运行前端测试。
+Hugging Face Whisper 可选依赖为 `uv sync --extra hf-models`；Kokoro 配音使用 `uv sync --extra tts`，另外需要系统安装 `espeak-ng`。多个功能需要一起启用时，在同一次 `uv sync` 中列出所有 `--extra` 参数。Demucs 需单独安装，不属于 `pyproject.toml` extras；Google Drive sidecar 需要 Go 1.23 或更新版本。Node.js 也用于运行前端测试。YouTube 下载还需要后端机器安装 Deno 或 Node.js 22 及以上版本，详见下方检查步骤。
 
 验证服务：
 
@@ -64,6 +64,32 @@ curl http://127.0.0.1:8000/api/health/ready
 ```
 
 然后访问 <http://127.0.0.1:8000/>。MCP 配置也保存在 `config.local.json`；参见 [MCP Server 文档](./mcp-server.md)。
+
+## YouTube 下载检查
+
+`uv sync` 安装 `yt-dlp[default]`，其中包含与下载器版本匹配的 `yt-dlp-ejs`。YouTube 的 JavaScript 校验还需要后端机器安装 Deno 或 Node.js 22 及以上版本，并让运行后端的进程能通过 `PATH` 找到它。下载和链接探测均启用 Deno、Node；只在浏览器所在电脑安装运行时无法帮助远程后端。
+
+macOS 已安装 Node.js 22 及以上版本时可直接使用；否则可以安装：
+
+```bash
+brew install node
+```
+
+确认 Python 组件和运行时可用：
+
+```bash
+uv run python -c "from importlib.metadata import version; print('yt-dlp:', version('yt-dlp')); print('yt-dlp-ejs:', version('yt-dlp-ejs'))"
+```
+
+```bash
+node --version
+```
+
+使用 Deno 时改为运行 `deno --version`。Linux/systemd 和 Docker 部署也需要在实际服务环境中提供上述运行时；当前 Docker 镜像不会自动安装 Node 或 Deno。安装依赖或调整服务 `PATH` 后重启后端。
+
+遇到 `HTTP Error 403: Forbidden` 时，网页能打开或探测成功只说明能解析视频信息，不能保证所选媒体流可下载。先确认上述依赖和服务日志中的 yt-dlp 警告，再检查下载代理是否能访问媒体域名、解析与下载是否使用同一出口。只有明确提示登录、年龄或私有视频限制时，再在设置中配置 cookies 文件；浏览器 cookies 的单次探测不会自动把登录态带入下载任务。不要把 cookies 内容或带凭据的代理地址贴到日志或提交到仓库。
+
+升级下载器后，用 `uv sync` 同步仓库锁定版本；维护者更新下载器使用 `uv lock --upgrade-package yt-dlp` 并提交对应锁文件。完整下载验证应使用自己的失败链接，避免把探测成功当成下载通过。
 
 ## 可选：Google Drive sidecar
 
