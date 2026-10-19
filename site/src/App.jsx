@@ -2,13 +2,16 @@ import { useEffect, useState } from 'react';
 import {
   ArrowRightIcon,
   ArrowUpRightIcon,
+  FileVideoIcon,
   GithubLogoIcon,
   MoonIcon,
-  PauseIcon,
-  PlayIcon,
   SunIcon,
+  TiktokLogoIcon,
+  XLogoIcon,
+  YoutubeLogoIcon,
 } from '@phosphor-icons/react';
 import BackgroundStage from './components/BackgroundStage.jsx';
+import HeroPreview from './components/HeroPreview.jsx';
 import VideoSection from './components/VideoSection.jsx';
 import AdvantagesSection from './components/AdvantagesSection.jsx';
 import GetStartedSection from './components/GetStartedSection.jsx';
@@ -34,11 +37,8 @@ export default function App() {
   const reducedMotion = useMediaQuery('(prefers-reduced-motion: reduce)');
   const compact = useMediaQuery('(max-width: 767px)');
   const [themeOverride, setThemeOverride] = useState(null);
-  const [paused, setPaused] = useState(false);
   const [videoPlaying, setVideoPlaying] = useState(false);
   const dark = themeOverride === null ? systemDark : themeOverride === 'dark';
-  const motionPaused = paused || reducedMotion;
-  const toggleMotion = () => setPaused(value => !value);
 
   useEffect(() => {
     document.documentElement.dataset.theme = dark ? 'dark' : 'light';
@@ -47,7 +47,7 @@ export default function App() {
 
   return (
     <div className="product-page">
-      <BackgroundStage dark={dark} compact={compact} reducedMotion={reducedMotion} paused={motionPaused || videoPlaying} />
+      <BackgroundStage dark={dark} compact={compact} reducedMotion={reducedMotion} paused={reducedMotion || videoPlaying} />
 
       <div className="landing" id="overview">
         <a className="skip-link" href="#main">跳到主要内容</a>
@@ -79,7 +79,7 @@ export default function App() {
 
         <main className="hero" id="main" tabIndex={-1} aria-label="产品介绍">
           <div className="hero__content">
-            <p className="hero__eyebrow">开源视频字幕工作台</p>
+            <p className="hero__eyebrow">TranslatedSubs视频字幕工作台</p>
             <h1>
               <span>让好内容，</span>
               <span className="hero__accent">跨越语言。</span>
@@ -97,31 +97,35 @@ export default function App() {
               </a>
             </div>
           </div>
+          <HeroPreview reducedMotion={reducedMotion} paused={videoPlaying} />
         </main>
 
-        <div className="scene-controls">
-          <button
-            className="motion-toggle"
-            type="button"
-            onClick={toggleMotion}
-            aria-label={motionPaused ? '播放背景动效' : '暂停背景动效'}
-            aria-pressed={motionPaused}
-            disabled={reducedMotion}
-            title={reducedMotion ? '已跟随系统减少动态效果设置' : undefined}
-          >
-            {motionPaused ? <PlayIcon size={13} weight="fill" aria-hidden="true" /> : <PauseIcon size={13} weight="fill" aria-hidden="true" />}
-            <span>{motionPaused ? '动效已暂停' : '暂停动效'}</span>
-          </button>
+        <div className="hero-info">
+          <div className="hero-info__sources">
+            <p className="hero-info__label">从你常看的平台开始</p>
+            <ul className="hero-info__platforms" aria-label="支持的内容来源示例">
+              <li><YoutubeLogoIcon size={23} weight="fill" aria-hidden="true" /><span>YouTube</span></li>
+              <li><TiktokLogoIcon size={21} weight="fill" aria-hidden="true" /><span>TikTok</span></li>
+              <li><XLogoIcon size={19} aria-hidden="true" /><span>X / Twitter</span></li>
+              <li><FileVideoIcon size={22} aria-hidden="true" /><span>本地视频</span></li>
+            </ul>
+          </div>
+          <div className="hero-info__workflow">
+            <p className="hero-info__label">一段视频，一条完整流程</p>
+            <ol className="hero-info__steps" aria-label="字幕处理流程">
+              <li>导入</li>
+              <li>转写</li>
+              <li>翻译</li>
+              <li>校对</li>
+              <li>导出</li>
+            </ol>
+            <p className="hero-info__note">本地模型与云端服务，按需组合。</p>
+          </div>
         </div>
       </div>
 
-      <VideoSection
-        reducedMotion={reducedMotion}
-        motionPaused={motionPaused}
-        onToggleMotion={toggleMotion}
-        onPlaybackChange={setVideoPlaying}
-      />
-      <AdvantagesSection reducedMotion={reducedMotion} motionPaused={motionPaused} />
+      <VideoSection reducedMotion={reducedMotion} onPlaybackChange={setVideoPlaying} />
+      <AdvantagesSection reducedMotion={reducedMotion} motionPaused={reducedMotion} />
       <GetStartedSection />
       <SiteFooter />
     </div>

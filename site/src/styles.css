@@ -62,7 +62,7 @@
     position: relative;
     isolation: isolate;
     display: grid;
-    grid-template-rows: 80px 1fr;
+    grid-template-rows: 80px 1fr auto;
     min-height: 100dvh;
     background: transparent;
   }
@@ -112,11 +112,13 @@
     position: relative;
     z-index: var(--layer-content);
     display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     align-items: center;
+    gap: clamp(36px, 5vw, 80px);
     width: 100%;
     max-width: 1600px;
     margin-inline: auto;
-    padding: 54px var(--page-gutter) 126px;
+    padding: 32px var(--page-gutter) 46px;
     pointer-events: none;
   }
 
@@ -131,12 +133,32 @@
     margin-top: 37px;
   }
 
-  .scene-controls {
-    position: absolute;
+  .hero-info {
+    position: relative;
     z-index: var(--layer-content);
-    right: var(--page-gutter);
-    bottom: 30px;
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+    align-items: start;
+    gap: 40px;
+    width: calc(100% - var(--page-gutter) * 2);
+    max-width: calc(1600px - var(--page-gutter) * 2);
+    padding: 24px 0 30px;
+    margin-inline: auto;
+    border-top: 1px solid var(--border);
   }
+
+  .hero-info__platforms, .hero-info__steps {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+
+  .hero-info__platforms { gap: 18px 26px; }
+  .hero-info__workflow { justify-self: end; }
+  .hero-info__steps { gap: 8px 0; }
 }
 
 @layer components {
@@ -259,23 +281,44 @@
   .button--secondary:hover { background: var(--hover); border-color: var(--accent); }
   .button:active, .icon-button:active { transform: scale(0.98); }
 
-  .motion-toggle {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    min-height: 44px;
-    padding: 0 14px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--secondary);
+  .hero-info__label {
+    margin: 0 0 15px;
     color: var(--muted);
     font-size: 11px;
-    letter-spacing: 0.015em;
-    transition: color 160ms ease, border-color 160ms ease;
+    line-height: 1.6;
+    letter-spacing: 0.07em;
   }
-  .motion-toggle:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
-  .motion-toggle:disabled { cursor: default; }
+
+  .hero-info__platforms li {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 550;
+    white-space: nowrap;
+  }
+  .hero-info__platforms svg { flex-shrink: 0; color: var(--muted); }
+
+  .hero-info__steps li {
+    display: inline-flex;
+    align-items: center;
+    color: var(--text);
+    font-size: 13px;
+    line-height: 23px;
+    white-space: nowrap;
+  }
+  .hero-info__steps li + li::before {
+    content: '→';
+    margin-inline: 11px;
+    color: var(--accent);
+  }
+  .hero-info__note {
+    margin: 12px 0 0;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.7;
+  }
 
   @media (prefers-reduced-motion: no-preference) {
     .hero__content > * { animation: enter 900ms cubic-bezier(0.2, 0.7, 0.2, 1) both; }
@@ -298,8 +341,16 @@
   @media (max-width: 1023px) {
     .site-header { gap: 24px; }
     .site-nav { gap: 24px; }
+    .hero { gap: 26px; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); }
+    .hero__eyebrow { font-size: 11px; letter-spacing: 0.04em; gap: 9px; }
+    .hero__eyebrow::before { width: 18px; flex-shrink: 0; }
+    .hero__actions { gap: 10px; }
+    .hero__actions .button { padding-inline: 18px; font-size: 13px; }
+    .hero-info { gap: 32px; grid-template-columns: minmax(0, 1fr) auto; }
+    .hero-info__platforms { gap: 14px 20px; }
+    .hero-info__steps li + li::before { margin-inline: 8px; }
     .fiber-scene { inset: 6% -35% -10% 7%; }
-    h1 { font-size: clamp(56px, 7.3vw, 72px); }
+    h1 { font-size: clamp(48px, 6.1vw, 63px); }
     .hero-scrim {
       background: linear-gradient(90deg, rgb(var(--scrim)) 0%, rgb(var(--scrim) / 87%) 28%, rgb(var(--scrim) / 25%) 72%);
     }
@@ -307,13 +358,13 @@
 
   @media (max-width: 767px) {
     :root { --page-gutter: 26px; }
-    .landing { grid-template-rows: 72px 1fr; }
+    .landing { grid-template-rows: 72px 1fr auto; }
     .site-header { gap: 12px; }
     .brand { font-size: 17px; gap: 8px; letter-spacing: -0.6px; }
     .brand img { width: 30px; height: 30px; }
     .site-nav { display: none; }
     .theme-toggle { margin-left: auto; flex-basis: 40px; width: 40px; height: 40px; }
-    .hero { align-items: start; padding-top: clamp(32px, 7vh, 66px); padding-bottom: 260px; }
+    .hero { grid-template-columns: 1fr; align-items: center; gap: 42px; padding-top: clamp(32px, 5vh, 48px); padding-bottom: 34px; }
     .hero__content { max-width: 100%; }
     .hero__eyebrow { font-size: 11px; margin-bottom: 24px; }
     h1 { font-size: clamp(49px, 11.7vw, 78px); line-height: 1.23; }
@@ -327,17 +378,22 @@
         rgb(var(--scrim)) 0%, rgb(var(--scrim) / 96%) 20%,
         rgb(var(--scrim) / 73%) 40%, rgb(var(--scrim) / 0%) 67%, rgb(var(--scrim) / 15%) 100%);
     }
-    .scene-controls { bottom: 18px; }
-    .motion-toggle { background: var(--surface); }
+    .hero-info { grid-template-columns: 1fr; gap: 24px; padding: 22px 0 26px; }
+    .hero-info__workflow { justify-self: start; }
+    .hero-info__platforms { display: grid; grid-template-columns: repeat(2, max-content); gap: 16px 30px; }
+    .hero-info__platforms li { font-size: 12px; gap: 8px; }
+    .hero-info__label { margin-bottom: 12px; font-size: 10px; }
+    .hero-info__steps li { font-size: 12px; }
+    .hero-info__note { margin-top: 9px; font-size: 10px; }
   }
 
   @media (max-height: 650px) and (min-width: 768px) {
-    .hero { padding-top: 24px; padding-bottom: 68px; }
+    .hero { padding-top: 24px; padding-bottom: 32px; }
     h1 { font-size: 62px; }
     .hero__eyebrow { margin-bottom: 16px; }
     .hero__description { margin-top: 18px; }
     .hero__actions { margin-top: 24px; }
-    .scene-controls { bottom: 18px; }
+    .hero-info { padding-top: 18px; padding-bottom: 20px; }
   }
 
   @media (prefers-reduced-motion: reduce) {

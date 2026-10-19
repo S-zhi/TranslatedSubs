@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowCounterClockwiseIcon, PauseIcon, PlayIcon } from '@phosphor-icons/react';
+import { ArrowCounterClockwiseIcon, PlayIcon } from '@phosphor-icons/react';
 import SplitText from './SplitText.jsx';
 import './VideoSection.css';
 const VIDEO = {
@@ -7,12 +7,11 @@ const VIDEO = {
   poster: `${import.meta.env.BASE_URL}media/promo-placeholder.jpg`,
 };
 
-export default function VideoSection({ reducedMotion, motionPaused, onToggleMotion, onPlaybackChange }) {
+export default function VideoSection({ reducedMotion, onPlaybackChange }) {
   const videoRef = useRef(null);
   const [playback, setPlayback] = useState('idle');
   const [error, setError] = useState('');
   const watching = playback === 'playing' || playback === 'loading';
-  const backgroundPaused = motionPaused || watching;
 
   useEffect(() => {
     onPlaybackChange(watching);
@@ -140,23 +139,6 @@ export default function VideoSection({ reducedMotion, motionPaused, onToggleMoti
             <span>当前为占位素材，正式宣传片即将替换。</span>
           </figcaption>
         </figure>
-      </div>
-
-      <div className="scene-controls video-section__controls">
-        <button
-          className="motion-toggle"
-          type="button"
-          onClick={onToggleMotion}
-          aria-label={backgroundPaused ? '播放粒子背景动效' : '暂停粒子背景动效'}
-          aria-pressed={backgroundPaused}
-          disabled={reducedMotion || watching}
-          title={watching ? '播放视频时背景自动暂停' : reducedMotion ? '已跟随系统减少动态效果设置' : undefined}
-        >
-          {backgroundPaused
-            ? <PlayIcon size={13} weight="fill" aria-hidden="true" />
-            : <PauseIcon size={13} weight="fill" aria-hidden="true" />}
-          <span>{backgroundPaused ? '背景已暂停' : '暂停动效'}</span>
-        </button>
       </div>
     </section>
   );
