@@ -1,15 +1,18 @@
 import { ArrowUpRightIcon, CheckIcon } from '@phosphor-icons/react';
 import { CONTACT_URL, REPOSITORY_URL } from '../content/site-links.js';
+import CloudQuickStart from './CloudQuickStart.jsx';
 import './GetStartedSection.css';
 
-export default function GetStartedSection() {
+export default function GetStartedSection({ trial, onStartTrial }) {
   return (
     <section className="get-started" id="get-started" aria-labelledby="get-started-title">
       <div className="get-started__inner">
         <header className="get-started__heading">
           <h2 id="get-started-title">选择你的开始方式。</h2>
-          <p>自行部署，或和我们聊聊你的使用场景。</p>
+          <p>先在云端体验，再选择自己的部署方式。</p>
         </header>
+
+        <CloudQuickStart trial={trial} onStart={onStartTrial} />
 
         <div className="get-started__options">
           <article className="start-option">

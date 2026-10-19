@@ -280,6 +280,20 @@
   }
   .button--secondary:hover { background: var(--hover); border-color: var(--accent); }
   .button:active, .icon-button:active { transform: scale(0.98); }
+  .button:disabled { cursor: wait; opacity: 0.6; }
+  .button:disabled:hover { background: var(--button); color: var(--button-text); }
+  .button:disabled:active { transform: none; }
+
+  .hero__cloud-guide {
+    display: inline-flex;
+    align-items: center;
+    min-height: 32px;
+    margin-top: 12px;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.8;
+  }
+  .hero__cloud-guide:hover { color: var(--accent); }
 
   .hero-info__label {
     margin: 0 0 15px;

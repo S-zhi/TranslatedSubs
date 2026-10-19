@@ -6,6 +6,7 @@ export const FOOTER_GROUPS = [
   {
     title: '开始部署',
     links: [
+      { label: '云端试用', href: '#cloud-start' },
       { label: '本地快速启动', href: GUIDE_URL },
       { label: 'Linux 部署', href: `${REPOSITORY_URL}/blob/main/docs/quick-start-linux.md` },
       { label: 'Docker 部署', href: `${REPOSITORY_URL}/blob/main/README.md#docker-quick-start` },
