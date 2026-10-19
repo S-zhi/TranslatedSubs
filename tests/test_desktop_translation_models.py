@@ -420,6 +420,33 @@ def test_desktop_retry_repairs_unknown_old_or_changed_assets(manager_factory, mo
     assert list(manager.model_dir.parent.glob('.opus-mt-en-zh-*/previous/model.bin'))
 
 
+@pytest.mark.parametrize("payload_measured", [False, True])
+def test_status_tolerates_working_directory_removal_during_traversal(
+    manager_factory, monkeypatch, payload_measured,
+):
+    manager = manager_factory()
+    work_dir = manager.model_dir.parent / "staging"
+    work_dir.mkdir(parents=True)
+    payload = work_dir / "model.bin"
+    payload.write_bytes(b"weights")
+    manager._working_dir = work_dir
+    manager._status = models.MODEL_STATUS_CHECKING
+
+    def removed_during_scan(path, pattern):
+        assert path == work_dir and pattern == "*"
+        if payload_measured:
+            yield payload
+        payload.unlink()
+        work_dir.rmdir()
+        raise FileNotFoundError(errno.ENOENT, "Staging directory was published", str(work_dir))
+
+    monkeypatch.setattr(Path, "rglob", removed_during_scan)
+    status = manager.status()
+    assert status["model_status"] == models.MODEL_STATUS_CHECKING
+    assert status["model_error"] is None
+    assert status["installed_bytes"] == (len(b"weights") if payload_measured else 0)
+
+
 def test_restart_status_reads_persisted_provenance_and_transfer_counts(manager_factory, mock_hub):
     manager = manager_factory()
     original = finish(manager)

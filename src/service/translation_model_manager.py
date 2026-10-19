@@ -74,13 +74,17 @@ def _directory_size(path: Path) -> int:
     if not path.exists():
         return 0
     total = 0
-    for item in path.rglob("*"):
-        try:
-            if item.is_file():
-                total += item.stat().st_size
-        except OSError:
-            # A downloader can replace a file between traversal and stat.
-            continue
+    try:
+        for item in path.rglob("*"):
+            try:
+                if item.is_file():
+                    total += item.stat().st_size
+            except OSError:
+                # A downloader can replace a file between traversal and stat.
+                continue
+    except FileNotFoundError:
+        # Publication or cleanup can remove a directory before rglob scans it.
+        pass
     return total
 
 
