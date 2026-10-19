@@ -194,6 +194,10 @@ The Docker image installs the base Python dependencies only. To use local transl
 
 Open <http://localhost:8000/>. Run `curl http://127.0.0.1:8000/api/health` to check that the API is running; a healthy response contains `"ok":true`. `/api/health/ready` also reports whether the translation key, FFmpeg, storage paths, and hard-subtitle filter are ready. See the [documentation index (Chinese)](./docs/README.md) for local development, Linux deployment, and extensions.
 
+## Optional one-click cloud trials
+
+The independent [product website](./site/README.md) can create short-lived workbenches using the maintainer's InstaBox account through `python -m src.instabox_launcher`. The control service holds the API key, reserves capacity, verifies per-instance authentication, and reclaims machines after expiry. Visitors need no InstaBox account or terminal commands. See the [deployment guide](./docs/instabox-quick-start.md) for same-origin routing, persistent SQLite, server secrets, and launch verification. A static-only deployment displays the trial as unavailable until the control service is configured. The base trial still requires model/engine preparation for subtitle processing; real-account provisioning must be verified before release.
+
 ## Capabilities
 
 - **Subtitle pipeline**: Download, transcribe, translate, and produce soft or hard subtitles for faster understanding and cross-language viewing.
