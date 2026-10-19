@@ -1,0 +1,36 @@
+@layer layout {
+  .product-page {
+    position: relative;
+    isolation: isolate;
+    background: var(--surface);
+  }
+
+  .ambient-stage {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+    background: radial-gradient(ellipse at 64% 53%, rgb(139 92 246 / 7%), transparent 65%), var(--surface);
+  }
+
+  .ambient-fibers, .ambient-particles {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  .ambient-particles { opacity: 0.08; }
+
+  .ambient-fibers .fiber-scene {
+    /* A soft canvas mask removes the rectangular edge even at wide/tall aspect ratios. */
+    -webkit-mask-image: linear-gradient(180deg, transparent, #111 12%, #111 78%, transparent);
+    mask-image: linear-gradient(180deg, transparent, #111 12%, #111 78%, transparent);
+  }
+
+  .landing, .video-section, .advantages {
+    position: relative;
+    z-index: 1;
+    background: transparent;
+  }
+}

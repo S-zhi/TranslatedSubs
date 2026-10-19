@@ -534,20 +534,24 @@ def test_real_managers_integrate_revalidation_and_retry_without_live_weights(tmp
     )
     try:
         coordinator.start_prepare()
-        assert finish(coordinator)['ready']
+        prepared = finish(coordinator)
+        assert prepared['ready'], prepared
         (whisper.root / 'base.en' / 'model.bin').write_bytes(b'!' * len(PAYLOADS['model.bin']))
         (translation.model_dir / translation_module._PROVENANCE).unlink()
         coordinator._checked_at = float('-inf')
         coordinator.status()
-        assert finish(coordinator)['state'] == 'failed'
+        invalidated = finish(coordinator)
+        assert invalidated['state'] == 'failed', invalidated
         assert [kind for kind, *_ in calls].count('snapshot') == 1
         coordinator.start_prepare()
-        assert finish(coordinator)['ready']
+        repaired = finish(coordinator)
+        assert repaired['ready'], repaired
         assert [kind for kind, *_ in calls].count('snapshot') == 2
         assert translation.status()['revision'] == translation_module.MODEL_REVISION
         # Already ready is revalidated, but no weights are fetched again.
         coordinator.start_prepare()
-        assert finish(coordinator)['ready']
+        revalidated = finish(coordinator)
+        assert revalidated['ready'], revalidated
         assert [kind for kind, *_ in calls].count('snapshot') == 2
     finally:
         whisper._executor.shutdown(wait=True)

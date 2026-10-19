@@ -1,0 +1,106 @@
+@layer layout {
+  .advantages {
+    padding: 48px var(--page-gutter) 80px;
+  }
+
+  .advantages__inner {
+    width: 100%;
+    max-width: 1180px;
+    margin: 0 auto;
+  }
+
+  .advantages__heading {
+    margin-bottom: 46px;
+  }
+
+  .advantages__heading h2 { margin: 0; }
+
+  .advantages__grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 64px;
+    row-gap: 38px;
+  }
+
+  .advantage {
+    position: relative;
+    min-width: 0;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+  }
+
+  .advantage__examples {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px 16px;
+    padding: 0;
+    margin: 18px 0 0;
+    list-style: none;
+  }
+}
+
+@layer components {
+  .advantages__heading > p {
+    margin: 24px 0 0;
+    color: var(--muted);
+    font-size: 15px;
+    line-height: 1.85;
+  }
+
+  .advantage h3 {
+    margin: 0 0 12px;
+    color: var(--text);
+    font-size: 24px;
+    line-height: 1.4;
+    letter-spacing: -0.035em;
+    font-weight: 550;
+  }
+
+  .advantage h3 strong {
+    color: var(--accent);
+    font-weight: inherit;
+  }
+
+  .advantage p {
+    margin: 0;
+    max-width: 510px;
+    color: var(--muted);
+    font-size: 15px;
+    line-height: 1.95;
+    text-wrap: pretty;
+  }
+
+  .advantage__examples li {
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.8;
+  }
+
+  .advantage__note {
+    margin-top: 10px !important;
+    font-size: 12px !important;
+    line-height: 1.7 !important;
+  }
+}
+
+@layer responsive {
+  @media (max-width: 1023px) {
+    .advantages { padding-top: 38px; padding-bottom: 64px; }
+    .advantages__grid { column-gap: 34px; row-gap: 30px; }
+    .advantage h3 { font-size: 22px; }
+    .advantage p { font-size: 14px; }
+  }
+
+  @media (max-width: 767px) {
+    .advantages { padding: 36px 24px 56px; }
+    .advantages__heading { margin-bottom: 30px; }
+    .advantages__heading > p { margin-top: 20px; font-size: 13px; max-width: 320px; }
+    .advantages__grid { grid-template-columns: 1fr; row-gap: 26px; }
+    .advantage { padding-top: 22px; }
+    .advantage h3 { font-size: 22px; margin-bottom: 10px; }
+    .advantage p { font-size: 14px; line-height: 1.9; }
+    .advantage__examples { margin-top: 14px; gap: 5px 14px; }
+    .advantage__examples li { font-size: 11px; }
+  }
+}

@@ -194,6 +194,10 @@ The Docker image installs the base Python dependencies only. To use local transl
 
 Open <http://localhost:8000/>. Run `curl http://127.0.0.1:8000/api/health` to check that the API is running; a healthy response contains `"ok":true`. `/api/health/ready` also reports whether the translation key, FFmpeg, storage paths, and hard-subtitle filter are ready. See the [documentation index (Chinese)](./docs/README.md) for local development, Linux deployment, and extensions.
 
+## Optional one-click cloud trials
+
+The independent [product website](./site/README.md) can create short-lived workbenches using the maintainer's InstaBox account through `python -m src.instabox_launcher`. The control service holds the API key, reserves capacity, verifies per-instance authentication, and reclaims machines after expiry. Visitors need no InstaBox account or terminal commands. See the [deployment guide](./docs/instabox-quick-start.md) for same-origin routing, persistent SQLite, server secrets, and launch verification. A static-only deployment displays the trial as unavailable until the control service is configured. The base trial still requires model/engine preparation for subtitle processing; real-account provisioning must be verified before release.
+
 ## Capabilities
 
 - **Subtitle pipeline**: Download, transcribe, translate, and produce soft or hard subtitles for faster understanding and cross-language viewing.
@@ -246,6 +250,8 @@ Most detailed guides below are in Chinese; the transcriber protocol is in Englis
 ## Development
 
 The project uses Python 3.10–3.12, FastAPI, FFmpeg, and vanilla JavaScript. For local development, run `uv sync` and then `uv run python -m src.cli`; the same service hosts the frontend. Run backend tests with `uv run pytest -q` and frontend tests with `npm test` from `web/`. Tests that use real cloud services and downloads require explicit opt-in; see [AGENTS.md (Chinese)](./AGENTS.md).
+
+The independent product landing page lives in [`site/`](./site/README.md). It uses React and Vite, with a GhostFibers hero blending into a shared Particles background for the video and product advantages. The video heading uses React Bits SplitText with GSAP. The video is currently a locally hosted CC0 placeholder. Run `npm ci --prefix site` and `npm --prefix site run dev` to open it at <http://127.0.0.1:5173/>; verify the static build with `npm --prefix site run build`. This page needs Node.js 20.19+ or 22.12+ and does not require the Python API or Redis.
 
 `src/handler/` serves the HTTP API; `src/core/` handles downloads, transcription, and subtitles; `src/service/` and `src/store/` manage jobs and persistence; `src/mcp_server/` provides MCP; and `web/` is the browser workbench. See [CONTRIBUTING.md (Chinese)](.github/CONTRIBUTING.md) for development guidelines. Report security issues privately through [SECURITY.md](.github/SECURITY.md), not a public issue.
 

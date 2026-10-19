@@ -1,0 +1,124 @@
+@layer layout {
+  .get-started {
+    position: relative;
+    z-index: 1;
+    padding: 66px var(--page-gutter) 78px;
+    background: linear-gradient(180deg, transparent, rgb(var(--scrim) / 84%) 32%, var(--surface));
+  }
+
+  .get-started__inner {
+    width: 100%;
+    max-width: 1180px;
+    margin-inline: auto;
+  }
+
+  .get-started__heading {
+    text-align: center;
+    margin-bottom: 36px;
+  }
+
+  .get-started__options {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 24px;
+  }
+
+  .start-option {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    min-height: 350px;
+    padding: 34px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: rgb(var(--scrim) / 75%);
+  }
+
+  .start-option__action { margin-top: auto; }
+}
+
+@layer components {
+  .get-started h2 {
+    margin: 0;
+    font-size: clamp(32px, 3.2vw, 46px);
+    line-height: 1.3;
+    font-weight: 550;
+    letter-spacing: -0.045em;
+  }
+
+  .get-started__heading p {
+    margin: 14px 0 0;
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.8;
+  }
+
+  .start-option h3 {
+    margin: 0 0 14px;
+    color: var(--text);
+    font-size: 24px;
+    line-height: 1.4;
+    font-weight: 550;
+    letter-spacing: -0.035em;
+  }
+
+  .start-option > p {
+    margin: 0;
+    max-width: 440px;
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.9;
+  }
+
+  .start-option ul {
+    display: grid;
+    gap: 14px;
+    margin: 26px 0 34px;
+    padding: 0;
+    list-style: none;
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.65;
+  }
+
+  .start-option li {
+    display: flex;
+    align-items: flex-start;
+    gap: 11px;
+  }
+
+  .start-option li svg {
+    flex-shrink: 0;
+    margin-top: 2px;
+    color: var(--accent);
+  }
+
+  .start-option__action {
+    min-height: 46px;
+    padding-inline: 21px;
+    border-radius: 999px;
+    font-size: 13px;
+    gap: 9px;
+  }
+}
+
+@layer responsive {
+  @media (max-width: 1023px) {
+    .get-started { padding-top: 48px; padding-bottom: 64px; }
+    .get-started__options { gap: 18px; }
+    .start-option { padding: 28px; }
+    .start-option h3 { font-size: 21px; }
+  }
+
+  @media (max-width: 767px) {
+    .get-started { padding: 42px 24px 54px; }
+    .get-started__heading { text-align: left; margin-bottom: 26px; }
+    .get-started h2 { font-size: 30px; }
+    .get-started__heading p { font-size: 13px; }
+    .get-started__options { grid-template-columns: 1fr; gap: 16px; }
+    .start-option { min-height: auto; padding: 26px; }
+    .start-option h3 { font-size: 21px; }
+    .start-option > p, .start-option ul { font-size: 13px; }
+    .start-option ul { gap: 12px; margin: 22px 0 28px; }
+  }
+}
