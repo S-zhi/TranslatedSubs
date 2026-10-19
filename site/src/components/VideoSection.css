@@ -1,0 +1,163 @@
+@layer layout {
+  .video-section {
+    position: relative;
+    isolation: isolate;
+    display: grid;
+    place-items: center;
+    padding: 42px var(--page-gutter) 76px;
+    background: transparent;
+  }
+
+  .video-section__inner {
+    position: relative;
+    z-index: var(--layer-content);
+    width: 100%;
+    max-width: 1100px;
+    text-align: center;
+  }
+
+  .video-section__heading { margin-bottom: 26px; }
+
+  .film {
+    width: min(100%, 960px);
+    margin: 0 auto;
+  }
+
+  .film__screen {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: #131019;
+    box-shadow: 0 22px 100px rgb(77 43 123 / 12%);
+  }
+
+  .film video {
+    display: block;
+    width: 100%;
+    height: 100%;
+    aspect-ratio: 16 / 9;
+    object-fit: contain;
+  }
+
+  .film__caption {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    margin-top: 18px;
+    text-align: left;
+  }
+}
+
+@layer components {
+  .video-section h2 {
+    margin: 0;
+    font-size: clamp(28px, 3.2vw, 46px);
+    font-weight: 550;
+    line-height: 1.3;
+    letter-spacing: -0.045em;
+  }
+
+  .video-section__heading p {
+    margin: 16px auto 0;
+    max-width: 540px;
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.9;
+    text-wrap: balance;
+  }
+
+  .film__play {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    border: 0;
+    padding: 24px;
+    color: #f7f3ff;
+    background: rgb(15 10 23 / 32%);
+    font-size: 13px;
+    font-weight: 550;
+    letter-spacing: 0.03em;
+    transition: background 180ms ease;
+  }
+
+  .film__play-icon {
+    display: grid;
+    place-items: center;
+    width: 76px;
+    height: 76px;
+    border: 1px solid rgb(237 225 254 / 42%);
+    border-radius: 50%;
+    background: rgb(19 13 30 / 72%);
+    transition: transform 180ms ease, background 180ms ease;
+  }
+
+  .film__play:hover { background: rgb(15 10 23 / 24%); }
+  .film__play:hover .film__play-icon { transform: scale(1.06); background: #60428c; }
+  .film__play:active .film__play-icon { transform: scale(0.98); }
+  .film__play:focus-visible { outline-offset: -6px; }
+  .film__play > span:last-child { text-shadow: 0 1px 5px #100a19; }
+
+  .film__caption { font-size: 12px; line-height: 1.8; color: var(--muted); }
+  .film__caption > :first-child { color: var(--text); font-weight: 550; white-space: nowrap; }
+
+  .film__loading {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    margin: 0;
+    color: #f4f0fa;
+    background: rgb(15 10 23 / 65%);
+    font-size: 14px;
+    pointer-events: none;
+  }
+
+  .film__error {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    padding: 24px;
+    background: var(--surface);
+  }
+  .film__error p { margin: 0; color: var(--muted); font-size: 14px; }
+
+  .video-section__controls { bottom: 24px; }
+}
+
+@layer responsive {
+  @media (min-width: 1024px) and (max-height: 850px) {
+    .video-section { padding-top: 36px; padding-bottom: 70px; }
+    .video-section__heading { margin-bottom: 26px; }
+    .film { max-width: min(960px, calc((100svh - 306px) * 16 / 9)); }
+  }
+
+  @media (max-width: 767px) {
+    .video-section { padding: 34px 20px 78px; }
+    .video-section__heading { margin-bottom: 24px; }
+    .video-section h2 { font-size: clamp(26px, 6.5vw, 36px); }
+    .video-section__heading p { margin-top: 14px; max-width: 310px; font-size: 13px; }
+    .film__screen { border-radius: 8px; }
+    .film__play { gap: 10px; font-size: 12px; }
+    .film__play-icon { width: 58px; height: 58px; }
+    .film__play-icon svg { width: 23px; height: 23px; }
+    .film__caption { flex-direction: column; gap: 4px; margin-top: 14px; font-size: 11px; }
+    .film__error { gap: 12px; padding: 16px; }
+    .film__error p { font-size: 12px; }
+    .video-section__controls { bottom: 24px; right: 20px; }
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    html { scroll-behavior: smooth; }
+  }
+}

@@ -2,6 +2,7 @@
 
 根目录 [README（英文）](../README.md) 包含产品概览、快速启动、基本使用和关键配置；[中文版 README](./zh/README.md) 提供相同内容。更详细的说明请按使用场景阅读以下文档：
 
+- [产品宣传页开发](../site/README.md)：独立 React 宣传页、连续背景、视频与核心优势、本地预览及静态构建。
 - [本地快速启动](./local-quick-start.md)：macOS/Linux 本地运行、Redis/bootstrap 配置和 Google Drive sidecar。
 - [Linux 部署](./quick-start-linux.md)：Ubuntu/Debian 一键安装、systemd、反向代理、更新和排障。
 - [MCP Server](./mcp-server.md)：启动 MCP、stdio/Streamable HTTP 配置和工具列表。
