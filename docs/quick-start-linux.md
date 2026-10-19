@@ -36,6 +36,7 @@ curl http://127.0.0.1:8000/api/health
 - `uv`
 - 正在运行的 Redis 服务。Python 依赖 `redis>=5` 只是客户端库，不会安装或启动 Redis。
 - FFmpeg、FFprobe；硬字幕还要求 FFmpeg 含 `subtitles`/libass 滤镜
+- 下载 YouTube 还需要后端服务的 `PATH` 中有 Deno 或 Node.js 22 及以上版本；`uv sync` 安装配套 EJS Python 组件，但不会安装 JavaScript 运行时，见[下载检查](./local-quick-start.md#youtube-下载检查)
 - 首次下载本地翻译/识别模型时需要网络；服务启动本身不需要云端 API Key
 - 建议至少 2 核 CPU、4 GB 内存，并为视频产物预留足够磁盘空间
 
@@ -245,7 +246,7 @@ sudo systemctl start subtitles-ai
 | readiness 提示缺密钥 | 在 Web 工作台设置页或配置 API 检查对应模型/业务设置；保存后无需重启 |
 | `data_directory`/`database_directory` 不可写 | 检查 `/var/lib/subtitles-ai` 的属主和权限 |
 | 硬字幕不可用 | 运行 `ffmpeg -hide_banner -filters \| grep ' subtitles '`，或任务改选软字幕 |
-| 视频 URL 下载失败 | 更新依赖中的 yt-dlp，必要时在设置页配置 cookies 文件或浏览器 cookies 权限 |
+| 视频 URL 下载失败或 YouTube 返回 403 | 先按[本地快速启动的下载检查](./local-quick-start.md#youtube-下载检查)核对 yt-dlp、EJS 和 Deno/Node.js，再检查代理出口及登录权限；浏览器 cookies 探测不会自动为后续下载提供 cookies |
 | 浏览器无法访问 | 检查 `systemctl status`、监听地址、安全组和防火墙 |
 | 接口返回 401 | 检查 Redis 业务设置中的 API Token，以及客户端是否发送 Bearer Header、`X-API-Token` Header 或 `?token=`/`?api_token=` URL 参数 |
 

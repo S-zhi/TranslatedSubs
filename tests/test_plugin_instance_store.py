@@ -223,7 +223,7 @@ def test_catalog_and_instance_operations_do_not_create_plugin_sessions(monkeypat
     for registered in manager._registry.entries():
         monkeypatch.setattr(registered.factory, "create_session", fail_session)
     store = PluginInstanceStore(provider=MemoryConfigProvider(), manager=manager)
-    assert len(manager.catalog()) == 7
+    assert len(manager.catalog()) == 8
     item, saved = _create(store)
     assert store.resolve({"download": item["id"]})["download"]["id"] == item["id"]
     store.update(item["id"], {"config": {"retries": 4}}, expected_revision=saved.revision)

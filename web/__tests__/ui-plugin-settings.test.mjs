@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPluginSettingsController, pluginConfigFields, pluginInstanceCard } from "../js/ui-plugin-settings.js";
 import { pluginBindingOptions, parsePluginConfig, refsForBinding, pluginErrorMessage } from "../js/plugin-settings.js";
+import { createMockPluginApi } from "../js/mock-plugins.js";
 
 class NodeMock {
   constructor() { this.dataset = {}; this.handlers = {}; this.value = ""; this.checked = false; this.disabled = false; this.hidden = false; this.textContent = ""; this.innerHTML = ""; this.classList = { toggle() {} }; }
@@ -55,6 +56,51 @@ test("scalar schema fields preserve false/zero, reject ranges, omit credentials 
   assert.equal(candidates.length, 2);
   assert.deepEqual(refsForBinding("llm:card:stable"), { model_ref: { kind: "llm", card_id: "card:stable" }, engine_ref: null });
   assert.deepEqual(refsForBinding(""), { model_ref: null, engine_ref: null });
+});
+
+test("cobalt metadata renders and parses all scalar fields while keeping secret filters", async () => {
+  const { plugins } = await createMockPluginApi({ storage: () => null }).getPluginCatalog();
+  const { config_schema: schema } = plugins.find((item) => item.plugin_id === "builtin.cobalt");
+  assert.deepEqual(Object.keys(schema), ["endpoint", "socket_timeout", "access_mode", "fallback_policy", "filename_style", "audio_format"]);
+  const config = { endpoint: "http://127.0.0.1:9000/", socket_timeout: 45, access_mode: "api_key", fallback_policy: "ytdlp", filename_style: "pretty", audio_format: "opus" };
+  const fields = { ...schema, api_key: { type: "string" }, use_api_key: { type: "boolean" }, credential_ref: { type: "string" } };
+  const html = pluginConfigFields(fields, { ...config, api_key: "never-copy-this", credential_ref: "settings:cobalt_api_key" });
+  for (const key of Object.keys(schema)) assert.match(html, new RegExp(`data-plugin-config="${key}"`));
+  assert.match(html, /data-plugin-config="endpoint"[^>]*type="text"[^>]*value="http:\/\/127\.0\.0\.1:9000\/"/);
+  assert.match(html, /data-plugin-config="socket_timeout"[^>]*type="number"[^>]*min="1"[^>]*max="300"/);
+  assert.match(html, /value="&quot;api_key&quot;" selected/);
+  assert.match(html, /value="&quot;ytdlp&quot;" selected/);
+  assert.doesNotMatch(html, /data-plugin-config="(?:api_key|use_api_key|credential_ref)"|never-copy-this|settings:cobalt_api_key/);
+  const values = { ...config, endpoint: `  ${config.endpoint}  `, socket_timeout: "45", access_mode: '"api_key"', fallback_policy: '"ytdlp"', filename_style: '"pretty"', audio_format: '"opus"', api_key: "never-copy-this" };
+  assert.deepEqual(parsePluginConfig(fields, values), { config, errors: {} });
+  assert.match(parsePluginConfig(schema, {}).errors.endpoint, /不能为空/);
+  assert.match(parsePluginConfig(schema, { endpoint: config.endpoint, socket_timeout: "0" }).errors.socket_timeout, /1 至 300/);
+  assert.match(parsePluginConfig(schema, { endpoint: config.endpoint, access_mode: '"bearer"' }).errors.access_mode, /有效选项/);
+});
+
+test("cobalt selection uses the existing instance editor and saves auth mode through CAS", async () => {
+  const { controller, api, nodes, form, writes } = fixture();
+  const catalog = await createMockPluginApi({ storage: () => null }).getPluginCatalog();
+  const cobalt = catalog.plugins.find((item) => item.plugin_id === "builtin.cobalt");
+  api.getPluginCatalog = async () => catalog;
+  await controller.refresh();
+  controller.openDraft(null, "download");
+  assert.match(form.elements.plugin.innerHTML, /Cobalt 下载/);
+  form.elements.plugin.value = JSON.stringify([cobalt.plugin_id, "1"]);
+  form.elements.plugin.handlers.change();
+  assert.equal(nodes.get("#pluginBinding").disabled, true);
+  assert.match(nodes.get("#pluginConfigFields").innerHTML, /data-plugin-config="access_mode"/);
+  const values = { endpoint: "http://127.0.0.1:9000/", socket_timeout: "45", access_mode: '"api_key"', fallback_policy: '"none"', filename_style: '"basic"', audio_format: '"best"' };
+  const controls = Object.entries(values).map(([key, value]) => { const node = new NodeMock(); node.dataset.pluginConfig = key; node.value = value; return node; });
+  nodes.get("#pluginConfigFields").querySelectorAll = (selector) => selector === "[data-plugin-config]" ? controls : [];
+  form.elements.id.value = "cobalt-local";
+  form.elements.name.value = "本机 cobalt";
+  assert.equal(await controller.save(), true);
+  assert.equal(writes[0].revision, 7);
+  assert.equal(writes[0].record.plugin_id, "builtin.cobalt");
+  assert.deepEqual(writes[0].record.config, { endpoint: values.endpoint, socket_timeout: 45, access_mode: "api_key", fallback_policy: "none", filename_style: "basic", audio_format: "best" });
+  assert.equal(writes[0].record.model_ref, null);
+  assert.equal(writes[0].record.engine_ref, null);
 });
 
 test("catalog renders all seven stages and protected defaults explain their disabled actions", async () => {

@@ -50,7 +50,7 @@ def test_preflight_rejects_wrong_stage_missing_identity_and_legacy_hook():
 
 def test_builtin_catalog_declares_only_non_sensitive_editable_fields():
     catalog = get_plugin_manager().catalog()
-    assert len(catalog) == 7
+    assert len(catalog) == 8
     fields = {item["stage"]: item["config_schema"] for item in catalog}
     assert "api_key" not in fields["translate"]
     assert "engine_id" not in fields["translate"]

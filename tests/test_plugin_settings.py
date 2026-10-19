@@ -63,7 +63,7 @@ def test_catalog_and_crud_defaults_return_global_revision(plugin_client, monkeyp
         monkeypatch.setattr(registered.factory, "create_session", fail_session)
     catalog = client.get(f"{BASE}/catalog")
     assert catalog.status_code == 200
-    assert len(catalog.json()["plugins"]) == 7
+    assert len(catalog.json()["plugins"]) == 8
     assert all("config_schema" in item and "bindings" in item for item in catalog.json()["plugins"])
     initial = client.get(f"{BASE}/instances").json()
     assert initial["revision"] == provider.read().revision

@@ -35,6 +35,7 @@ BUSINESS_DEFAULTS: dict[str, Any] = {
     "transcriber_url": None,
     "transcriber_timeout": 1800,
     "transcriber_api_key": None,
+    "cobalt_api_key": None,
     "api_token": None,
     "cookies_file": None,
     "download_proxy": None,
@@ -78,7 +79,7 @@ BUSINESS_DEFAULTS: dict[str, Any] = {
     "target_languages": ["zh-CN", "zh-TW", "en", "ja", "ko", "es", "fr", "de", "ru", "it", "pt", "vi", "th", "ar", "id", "hi", "nl", "pl", "tr", "sv", "uk", "cs", "da", "fi", "el", "he", "hu", "no", "ro", "sk", "af", "ca", "bg", "hr", "ms", "fa", "ta", "sw"],
 }
 
-SECRET_KEYS = frozenset({"api_token", "transcriber_api_key", "cookies_file", "download_proxy"})
+SECRET_KEYS = frozenset({"api_token", "transcriber_api_key", "cobalt_api_key", "cookies_file", "download_proxy"})
 
 BUSINESS_MINIMUMS = {
     "pipeline_workers": 1, "download_workers": 1,
