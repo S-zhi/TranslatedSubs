@@ -26,7 +26,10 @@ import { initDeveloperEntry } from "./developer-entry.js";
 import { initSupportedSitesView } from "./supported-sites.js";
 import { initApiConnection } from "./ui-api-connection.js";
 import { initWorkbench } from "./workbench.js";
+import { Api } from "./api.js";
+import { consumeTrialTokenFragment } from "./api-auth.js";
 
+consumeTrialTokenFragment(Api.base);
 initApiConnection();
 initI18n();
 initTheme();
