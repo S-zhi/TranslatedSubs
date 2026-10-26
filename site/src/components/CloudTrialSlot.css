@@ -1,0 +1,14 @@
+@layer layout {
+  /* 官网首屏“查看试用状态”链接。 */
+  .hero__cloud-guide {
+    display: inline-flex;
+    align-items: center;
+    min-height: 32px;
+    margin-top: 12px;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1.8;
+  }
+
+  .hero__cloud-guide:hover { color: var(--accent); }
+}

@@ -1,12 +1,20 @@
+import { CLOUD_TRIAL_ENABLED } from '../lib/build-flags.js';
+
 export const REPOSITORY_URL = 'https://github.com/S-zhi/TranslatedSubs';
 export const GUIDE_URL = `${REPOSITORY_URL}/blob/main/docs/local-quick-start.md`;
 export const CONTACT_URL = `${REPOSITORY_URL}/discussions`;
+
+// 云端试用只服务官网部署。自托管构建（SUBTRANS_ENABLE_CLOUD_TRIAL=0）里
+// #cloud-start 锚点不存在，页脚保留它就是一个死链，因此按构建开关过滤。
+const cloudTrialLinks = CLOUD_TRIAL_ENABLED
+  ? [{ label: '云端试用', href: '#cloud-start' }]
+  : [];
 
 export const FOOTER_GROUPS = [
   {
     title: '开始部署',
     links: [
-      { label: '云端试用', href: '#cloud-start' },
+      ...cloudTrialLinks,
       { label: '本地快速启动', href: GUIDE_URL },
       { label: 'Linux 部署', href: `${REPOSITORY_URL}/blob/main/docs/quick-start-linux.md` },
       { label: 'Docker 部署', href: `${REPOSITORY_URL}/blob/main/README.md#docker-quick-start` },

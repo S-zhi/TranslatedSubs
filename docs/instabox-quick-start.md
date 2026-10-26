@@ -2,7 +2,9 @@
 
 宣传页的“快速使用”通过维护方的 **InstaBox 账号**创建一台短期独立云机器，自动启动 TranslatedSubs，再提供带本次实例访问权限的工作台入口。访客无需 InstaBox 账号或终端命令。创建只发生在点击按钮后；页面初始化和刷新只查询状态。
 
-这项功能需要部署一个小型控制服务 `src.instabox_launcher`。宣传页仍可作为静态资源发布，视频任务在 InstaBox 云机器内处理。仅上传 `site/dist` 不能创建机器；控制服务未配置时，页面会显示在线体验暂未开放。
+**适用范围：仅官网部署。** 云端试用由构建开关控制，默认开启；自托管宣传页用 `npm --prefix site run build:no-trial` 构建即可完全去掉试用 UI 与 `/api/trials` 请求，无需部署控制服务。
+
+这项功能需要部署一个小型控制服务 `src.instabox_launcher`。宣传页仍可作为静态资源发布，视频任务在 InstaBox 云机器内处理。仅上传 `site/dist` 不能创建机器；**仅在开启试用的构建中**控制服务未配置时，页面会显示在线体验暂未开放；关闭试用的构建不含任何试用入口。
 
 ## 部署结构
 
@@ -80,13 +82,31 @@ curl --fail --silent http://127.0.0.1:8001/api/trials/current
 
 完整配置时响应 `configured:true,status:"idle"`；缺必要配置时是 `configured:false,status:"unavailable"`。不输出密钥。实际无效 API Key、账户额度或模板问题会在创建时被检测。
 
+### 用一键安装器部署控制服务（可选）
+
+官网服务器可以使用仓库的一键安装器附带部署控制服务：
+
+```bash
+sudo bash install.sh --with-cloud-trial
+```
+
+它会创建 `${SERVICE_NAME}-cloud-trial.service`、权限 `0700` 的 SQLite 数据目录，并从 `/etc/<服务名>/launcher.env`（权限 0600、属主 root）读取密钥。**安装器不收集、不写入 `INSTABOX_API_KEY` 或 `SUBTRANS_LAUNCHER_SECRET`**；请先自行创建该环境文件。安装器只 `enable` 不 `start` 该服务，也不会为它跑健康检查——没有密钥它无法验证，因此不会报告虚假成功。环境文件就绪后执行：
+
+```bash
+sudo systemctl start <服务名>-cloud-trial
+```
+
+控制服务默认只监听 `127.0.0.1:8001`，公网必须按下文的同源反代暴露。未通过 `--with-cloud-trial` 或 `SUBTRANS_ENABLE_CLOUD_TRIAL=1` 显式启用时，安装器不会创建第二个单元、目录或任何试用相关配置。
+
 ## 3. 同源转发和宣传页
 
-构建宣传页：
+构建官网宣传页（默认即开启试用）：
 
 ```bash
 npm --prefix site run build
 ```
+
+自托管宣传页若不需要试用，改用 `npm --prefix site run build:no-trial`：产物没有试用按钮、`#cloud-start` 锚点或页脚入口，也不会请求 `/api/trials`。开关是 `SUBTRANS_ENABLE_CLOUD_TRIAL`，默认开启，只有字面量 `0` 关闭；关闭时 Vite 的 `define` 把开关内联成 `false`，Rollup 随之摇掉试用模块，构建产物中不含试用代码。
 
 生产必须让浏览器通过宣传页 **同一 origin**访问 `/api/trials`，将这个前缀转发到控制服务，然后才应用静态页面 fallback。无需开放跨域 CORS。
 
@@ -171,6 +191,6 @@ node --test web/__tests__/trial-token.test.mjs web/__tests__/api-auth.test.mjs w
 
 测试覆盖提供方契约、真实配置初始化语义、会话隔离、事务名额/预算、重复点击、未知结果、回收重试、首次请求鉴权和旧地址覆盖。浏览器验证可使用临时本地 mock provider；生产代码没有模拟开机开关或访客自定义 API 目标。
 
-**真实 InstaBox 开机验收尚需执行。** 发布包含令牌接收代码的固定 SHA，安全配置服务器环境后，用维护方账号实际验收一次创建、Docker 构建、自动登录、到期失效和删除。没有完成这些步骤前，不把云端冷构建、公开端口可达性或真实账号回收标为已实测。
+**真实 InstaBox 完整开机验收尚未通过。** 2026-10-22 的真实账号测试确认创建与删除操作均为 `succeeded`，但远程启动返回 `exec_failed`，尚未完成 Docker 构建、公开端口和工作台自动登录验收。现有日志不足以确认具体失败命令；不能仅凭模板能力列表断定缺少 Docker。发布包含令牌接收代码的固定 SHA，安全配置服务器环境后，仍需定位远程执行错误并验收自动登录、到期失效和回收。Linux/systemd 安装器新增选项目前通过了语法及参数校验测试，尚未在真实 Linux 主机上完整安装验收。
 
 提供方契约核对日期：2026-10-19。参考[集成文档](https://instabox.sh/docs/integrate)、[公开端口](https://instabox.sh/docs/ports)和 [OpenAPI](https://api.instabox.sh/v1/openapi.json)。

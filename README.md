@@ -196,7 +196,9 @@ Open <http://localhost:8000/>. Run `curl http://127.0.0.1:8000/api/health` to ch
 
 ## Optional one-click cloud trials
 
-The independent [product website](./site/README.md) can create short-lived workbenches using the maintainer's InstaBox account through `python -m src.instabox_launcher`. The control service holds the API key, reserves capacity, verifies per-instance authentication, and reclaims machines after expiry. Visitors need no InstaBox account or terminal commands. See the [deployment guide](./docs/instabox-quick-start.md) for same-origin routing, persistent SQLite, server secrets, and launch verification. A static-only deployment displays the trial as unavailable until the control service is configured. The base trial still requires model/engine preparation for subtitle processing; real-account provisioning must be verified before release.
+**Official-site-only capability.** The product site builds with the trial entry point by default, but self-hosted marketing pages should use `npm --prefix site run build:no-trial` (`SUBTRANS_ENABLE_CLOUD_TRIAL=0`), which removes the trial UI, the `#cloud-start` anchor, and every `/api/trials` request from the artifact. The control service is likewise opt-in at install time: `sudo bash install.sh --with-cloud-trial`.
+
+The independent [product website](./site/README.md) can create short-lived workbenches using the maintainer's InstaBox account through `python -m src.instabox_launcher`. The control service holds the API key, reserves capacity, verifies per-instance authentication, and reclaims machines after expiry. Visitors need no InstaBox account or terminal commands. See the [deployment guide](./docs/instabox-quick-start.md) for same-origin routing, persistent SQLite, server secrets, and launch verification. A `build:no-trial` deployment shows no trial UI at all; only the trial-enabled build displays the trial as unavailable until the control service is configured. The base trial still requires model/engine preparation for subtitle processing; real-account provisioning must be verified before release.
 
 ## Capabilities
 
