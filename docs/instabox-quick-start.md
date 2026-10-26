@@ -26,11 +26,13 @@
 
 | 变量 | 用途 |
 | --- | --- |
-| `INSTABOX_API_KEY` | 维护方 API Key；需要读取、创建、执行命令、发布端口和删除机器权限 |
+| `INSTABOX_API_KEY` | 维护方 API Key；独立模式需要读取、创建、执行命令、发布端口和删除机器权限，固定模式只需读取与启动权限 |
 | `SUBTRANS_LAUNCHER_SECRET` | 至少 32 字符的高强度随机密钥，用于会话归属和独立实例令牌派生；建议随机生成 32 字节以上 |
 | `SUBTRANS_LAUNCHER_ORIGIN` | 宣传页的精确 HTTPS origin，例如 `https://subs.example.com`；不含路径 |
-| `SUBTRANS_LAUNCHER_SOURCE_REVISION` | 已发布到官方仓库的完整 40 位小写提交 SHA，必须包含本次工作台令牌接收实现 |
-| `SUBTRANS_LAUNCHER_DB_PATH` | 私有持久目录中的 SQLite 路径，例如 `/var/lib/translatedsubs-launcher/trials.sqlite3` |
+| `SUBTRANS_LAUNCHER_SOURCE_REVISION` | 独立试用模式必需：已发布到官方仓库的完整 40 位小写提交 SHA，包含工作台令牌接收实现；固定模式可省略 |
+| `SUBTRANS_LAUNCHER_MODE` | `isolated`（默认）创建独立试用机；`fixed` 启动一台预先配置的现有机器 |
+| `SUBTRANS_LAUNCHER_MACHINE_ID` | `fixed` 模式必填的 InstaBox 机器 ID；不会创建或删除该机器 |
+| `SUBTRANS_LAUNCHER_DB_PATH` | 私有持久目录中的状态路径，例如 `/var/lib/translatedsubs-launcher/trials.sqlite3`；固定模式不创建 SQLite 文件，但会在旁边持久化锁与启动操作状态 |
 
 可选配置：
 
@@ -45,6 +47,15 @@
 | `SUBTRANS_LAUNCHER_BOOTSTRAP_SECONDS` | `1200`；启动时限，超过后回收，且不能超过试用期限 |
 
 密钥和 origin 必须在控制服务重启后保持不变，否则无法恢复原会话/实例令牌。数据库保存 launcher 身份，错误变更会拒绝启动；有未回收资源时不要直接删除数据库或改密钥。API Key 可在同一 InstaBox 账号内轮换。数据库及其 `-wal`、`-shm` 和 `.lock` 放在持久私有目录，保持运行账号独占。
+
+若仅启动预先配置的现有工作台，可设置 `SUBTRANS_LAUNCHER_MODE=fixed` 和 `SUBTRANS_LAUNCHER_MACHINE_ID`。此模式只需要 API Key、Secret、官网 Origin 与机器 ID，不要求 `SOURCE_REVISION`、SQLite 试用记录或启动脚本；`GET` 只读取机器、8000 端口和健康状态，只有页面点击后发出的 `POST` 才会对 stopped/paused 机器调用带持久幂等键的 `start`。Ready 链接必须与机器 ID 对应的 InstaBox 端口主机一致，并通过未鉴权 `/api/health` 检查。此模式不执行 `exec`、创建新机或删除机器，`DELETE` 返回 405；多个访客会使用同一工作台及其现有数据。将 `SUBTRANS_LAUNCHER_MODE=fixed` 和真实的 `SUBTRANS_LAUNCHER_MACHINE_ID` 写入受限环境文件，再从仓库根目录启动：
+
+```bash
+set -a
+source data/instabox-launcher/launcher.env
+set +a
+.venv/bin/python -m src.instabox_launcher --host 127.0.0.1 --port 8001
+```
 
 源码版本必须先发布。若固定 SHA 不含 `web/config.js` 的试用地址保护、`consumeTrialToken` 和主入口消费调用，启动脚本会拒绝发布工作台。不能用不含这些改动的旧 `main` 验收自动登录。
 
@@ -141,9 +152,9 @@ location / {
 
 | 接口 | 行为 |
 | --- | --- |
-| `GET /api/trials/current` | 建立匿名 cookie；恢复当前会话的进度和就绪入口；不分配机器 |
-| `POST /api/trials`，JSON `{}` | 为当前会话预留并创建试用，已有试用时复用 |
-| `DELETE /api/trials/current`，JSON `{}` | 结束试用，撤回入口并请求删除机器与数据 |
+| `GET /api/trials/current` | 建立匿名 cookie；恢复当前会话的进度和就绪入口；不分配机器。固定模式只读机器/端口/健康状态 |
+| `POST /api/trials`，JSON `{}` | 独立模式为当前会话预留并创建试用；固定模式启动配置的 stopped/paused 机器 |
+| `DELETE /api/trials/current`，JSON `{}` | 独立模式结束试用并请求删除机器；固定模式返回 405，不会删除机器 |
 
 POST/DELETE 要求有效会话、精确 Origin 和 JSON；访客不能指定命令、仓库、模板、快照或 API 地址。试用 ID 不是访问授权。响应禁用缓存和 referrer，原始提供方错误及命令日志不会回传浏览器。
 

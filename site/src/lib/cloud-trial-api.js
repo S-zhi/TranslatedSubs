@@ -26,17 +26,22 @@ export class CloudTrialError extends Error {
   }
 }
 
-export function validateWorkbenchUrl(value) {
+export function validateWorkbenchUrl(value, { mode = 'isolated', machineId = null } = {}) {
   if (typeof value !== 'string' || /[\s\\\u0000-\u001f\u007f]/.test(value)) return null;
   try {
     const url = new URL(value);
     const authority = value.match(/^https:\/\/([^/?#]+)/i)?.[1];
+    const tokenOkay = mode === 'fixed'
+      ? /^$/.test(url.hash) && typeof machineId === 'string' &&
+        /^m_[a-z2-7]{26}$/.test(machineId) &&
+        url.hostname === `8000-${machineId.slice(2)}.instabox.tech`
+      : /^#trial_token=[a-f\d]{64}$/.test(url.hash);
     if (
       url.protocol !== 'https:' || url.username || url.password || url.port ||
       !authority || authority.includes('@') || authority.includes(':') ||
       url.pathname !== '/' || url.search || value.includes('?') ||
       !WORKBENCH_DOMAINS.some((suffix) => url.hostname.endsWith(suffix)) ||
-      !/^#trial_token=[a-f\d]{64}$/.test(url.hash)
+      !tokenOkay
     ) return null;
     return url.href;
   } catch {
@@ -48,8 +53,12 @@ export function normalizeCloudTrial(value) {
   if (!value || typeof value.configured !== 'boolean' || !STATUSES.has(value.status)) {
     throw new CloudTrialError('invalid_response');
   }
-  const { trialId = null, expiresAt = null, message = null } = value;
+  const { trialId = null, expiresAt = null, message = null,
+    mode = 'isolated', machineId = null } = value;
   if (
+    !['isolated', 'fixed'].includes(mode) ||
+    (machineId !== null && (typeof machineId !== 'string' || !/^m_[a-z2-7]{26}$/.test(machineId))) ||
+    (mode === 'fixed' && machineId === null) ||
     (trialId !== null && typeof trialId !== 'string') ||
     (message !== null && typeof message !== 'string') ||
     (expiresAt !== null && (
@@ -59,11 +68,13 @@ export function normalizeCloudTrial(value) {
     ))
   ) throw new CloudTrialError('invalid_response');
 
-  const url = value.status === 'ready' ? validateWorkbenchUrl(value.url) : null;
-  if (value.status === 'ready' && (!value.configured || !url || !trialId)) {
+  const url = value.status === 'ready' ? validateWorkbenchUrl(value.url, { mode, machineId }) : null;
+  if (value.status === 'ready' && (!value.configured || !url || !trialId ||
+      (mode === 'fixed' && trialId !== machineId))) {
     throw new CloudTrialError('unsafe_url');
   }
-  return { configured: value.configured, status: value.status, trialId, expiresAt, url, message };
+  return { configured: value.configured, mode, machineId, status: value.status,
+    trialId, expiresAt, url, message };
 }
 
 export function createCloudTrialApi({ fetchImpl = globalThis.fetch } = {}) {

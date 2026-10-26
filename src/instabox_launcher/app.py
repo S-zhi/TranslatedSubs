@@ -14,8 +14,9 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from .config import LauncherConfig
-from .provider import InstaBoxClient
+from .provider import InstaBoxClient, ProviderError
 from .service import MESSAGES, TrialService
+from .fixed_machine import FixedMachineService
 from .store import ProcessLock, ReservationDenied, TrialStore
 
 
@@ -43,6 +44,7 @@ def create_app(config: LauncherConfig | None = None, *,
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.service = None
+        app.state.fixed_service = None
         if not config.configured:
             yield
             return
@@ -50,15 +52,23 @@ def create_app(config: LauncherConfig | None = None, *,
         lock.acquire()
         provider = None
         service = None
+        fixed_service = None
         try:
-            store = TrialStore(config.db_path, config.launcher_id)
-            provider = InstaBoxClient(config.api_key, transport=transport)
-            service = TrialService(config, store, provider, clock=clock)
-            app.state.service = service
-            if run_workers:
-                await service.start()
+            provider = InstaBoxClient(config.api_key, transport=transport,
+                                      request_timeout=5 if config.mode == "fixed" else 40)
+            if config.mode == "fixed":
+                fixed_service = FixedMachineService(config, provider, transport=transport)
+                app.state.fixed_service = fixed_service
+            else:
+                store = TrialStore(config.db_path, config.launcher_id)
+                service = TrialService(config, store, provider, clock=clock)
+                app.state.service = service
+                if run_workers:
+                    await service.start()
             yield
         finally:
+            if fixed_service:
+                await fixed_service.close()
             if service:
                 await service.close()
             if provider:
@@ -68,6 +78,7 @@ def create_app(config: LauncherConfig | None = None, *,
     app = FastAPI(title="TranslatedSubs trial launcher", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.state.service = None
+    app.state.fixed_service = None
 
     @app.middleware("http")
     async def private_response(request: Request, call_next):
@@ -114,6 +125,9 @@ def create_app(config: LauncherConfig | None = None, *,
         return key
 
     def public(trial: dict | None) -> dict:
+        fixed_service = app.state.fixed_service
+        if fixed_service:
+            return fixed_service._public("idle") if trial is None else trial
         service = app.state.service
         if service:
             return service.public(trial)
@@ -134,12 +148,27 @@ def create_app(config: LauncherConfig | None = None, *,
                 samesite="strict", path="/", max_age=86400,
             )
             key = config.digest("session-owner", session)
+        fixed_service = app.state.fixed_service
+        if config.mode == "fixed":
+            if fixed_service:
+                return await fixed_service.current()
+            return {"configured": False, "mode": "fixed", "machineId": config.machine_id,
+                    "status": "unavailable", "trialId": config.machine_id or None,
+                    "expiresAt": None, "url": None, "message": MESSAGES["unavailable"]}
         service = app.state.service
         return public(service.store.current(key) if service else None)
 
     @app.post("/api/trials", status_code=202)
     async def launch(request: Request):
         key = await mutation(request)
+        fixed_service = app.state.fixed_service
+        if config.mode == "fixed":
+            if fixed_service is None:
+                raise _error("unavailable")
+            try:
+                return await fixed_service.start()
+            except ProviderError:
+                raise _error("unavailable") from None
         service = app.state.service
         if service is None:
             raise _error("unavailable")
@@ -153,6 +182,9 @@ def create_app(config: LauncherConfig | None = None, *,
 
     @app.delete("/api/trials/current", status_code=202)
     async def end(request: Request):
+        if config.mode == "fixed":
+            raise HTTPException(status_code=405, detail={"code": "unavailable",
+                                                        "message": "此工作台不支持结束操作。"})
         key = await mutation(request)
         service = app.state.service
         if service is None:

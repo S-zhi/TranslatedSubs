@@ -4,6 +4,8 @@ export const TRANSIENT_TRIAL_STATUSES = new Set(['creating', 'booting', 'checkin
 const EXPIRABLE_STATUSES = new Set(['creating', 'booting', 'checking', 'publishing', 'ready']);
 const INITIAL_STATE = {
   configured: null,
+  mode: 'isolated',
+  machineId: null,
   status: 'idle',
   trialId: null,
   expiresAt: null,
@@ -230,7 +232,7 @@ export function createCloudTrialController({
 
   function canOpen() {
     return !expireIfNeeded() && !state.needsRecheck && state.status === 'ready' &&
-      Boolean(validateWorkbenchUrl(state.url));
+      Boolean(validateWorkbenchUrl(state.url, { mode: state.mode, machineId: state.machineId }));
   }
 
   return {
@@ -251,7 +253,7 @@ export function createCloudTrialController({
 export function getCloudTrialAction(state) {
   if (state.pending || (state.configured === null && !state.error)) return 'wait';
   if (state.needsRecheck || state.configured !== true || state.status === 'unavailable') return 'recheck';
-  if (state.status === 'ready' && validateWorkbenchUrl(state.url)) return 'open';
+  if (state.status === 'ready' && validateWorkbenchUrl(state.url, { mode: state.mode, machineId: state.machineId })) return 'open';
   if (TRANSIENT_TRIAL_STATUSES.has(state.status)) return 'wait';
   return 'create';
 }
