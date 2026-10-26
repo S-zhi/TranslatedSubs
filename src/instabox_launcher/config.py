@@ -17,6 +17,8 @@ class LauncherConfig:
     api_key: str = field(default="", repr=False)
     secret: str = field(default="", repr=False)
     origin: str = ""
+    mode: str = "isolated"
+    machine_id: str = ""
     source_revision: str = ""
     db_path: Path = Path("data/instabox-launcher/trials.sqlite3")
     template_id: str = "universal"
@@ -30,6 +32,12 @@ class LauncherConfig:
     retry_seconds: float = 10.0
 
     def __post_init__(self) -> None:
+        if self.mode not in {"isolated", "fixed"}:
+            raise ValueError("SUBTRANS_LAUNCHER_MODE must be isolated or fixed")
+        if self.machine_id and not re.fullmatch(r"m_[a-z2-7]{26}", self.machine_id):
+            raise ValueError("SUBTRANS_LAUNCHER_MACHINE_ID must be an InstaBox machine ID")
+        if self.mode == "fixed" and not self.machine_id:
+            raise ValueError("SUBTRANS_LAUNCHER_MACHINE_ID is required in fixed mode")
         if self.origin:
             parsed = urlsplit(self.origin)
             local = parsed.hostname in {"localhost", "127.0.0.1", "::1"}
@@ -62,7 +70,8 @@ class LauncherConfig:
 
     @property
     def configured(self) -> bool:
-        return bool(self.api_key and self.secret and self.origin and self.source_revision)
+        common = bool(self.api_key and self.secret and self.origin)
+        return common and bool(self.machine_id) if self.mode == "fixed" else common and bool(self.source_revision)
 
     @property
     def secure_cookie(self) -> bool:
@@ -100,6 +109,8 @@ class LauncherConfig:
             api_key=values.get("INSTABOX_API_KEY", "").strip(),
             secret=values.get(prefix + "SECRET", "").strip(),
             origin=values.get(prefix + "ORIGIN", "").strip(),
+            mode=values.get(prefix + "MODE", "isolated").strip().lower(),
+            machine_id=values.get(prefix + "MACHINE_ID", "").strip(),
             source_revision=values.get(prefix + "SOURCE_REVISION", "").strip(),
             db_path=Path(values.get(prefix + "DB_PATH", "data/instabox-launcher/trials.sqlite3")),
             template_id=values.get(prefix + "TEMPLATE_ID", "universal"),

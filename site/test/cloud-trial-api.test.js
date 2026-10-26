@@ -9,7 +9,8 @@ import {
 
 const token = 'a'.repeat(64);
 const link = `https://8000-machine.instabox.tech/#trial_token=${token}`;
-const idle = { configured: true, status: 'idle', trialId: null, expiresAt: null, url: null, message: null };
+const idle = { configured: true, mode: 'isolated', machineId: null,
+  status: 'idle', trialId: null, expiresAt: null, url: null, message: null };
 
 function response(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => body };
@@ -63,6 +64,21 @@ test('safe root workbench links require approved domains and an exact lowercase 
     `https:\\machine.instabox.tech/#trial_token=${token}`,
     null,
   ]) assert.equal(validateWorkbenchUrl(invalid), null, String(invalid));
+});
+
+test('fixed workbench links must match the configured machine host and omit tokens', () => {
+  const machineId = 'm_agqu7uni5qvmvqtn3hufecdujm';
+  const fixedUrl = 'https://8000-agqu7uni5qvmvqtn3hufecdujm.instabox.tech';
+  assert.equal(validateWorkbenchUrl(fixedUrl, { mode: 'fixed', machineId }), `${fixedUrl}/`);
+  assert.equal(validateWorkbenchUrl(`${fixedUrl}/#trial_token=${token}`, { mode: 'fixed', machineId }), null);
+  assert.equal(validateWorkbenchUrl('https://8000-other.instabox.tech/', { mode: 'fixed', machineId }), null);
+  assert.equal(validateWorkbenchUrl(fixedUrl, { mode: 'fixed', machineId: null }), null);
+
+  const ready = normalizeCloudTrial({ ...idle, mode: 'fixed', machineId, trialId: machineId,
+    status: 'ready', url: fixedUrl });
+  assert.equal(ready.url, `${fixedUrl}/`);
+  assert.throws(() => normalizeCloudTrial({ ...idle, mode: 'fixed', machineId,
+    trialId: machineId, status: 'ready', url: `${fixedUrl}/#trial_token=${token}` }), CloudTrialError);
 });
 
 test('ready data never exposes an unvalidated URL and unneeded response fields are dropped', () => {

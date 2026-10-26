@@ -129,6 +129,25 @@ test('transient server stages poll with GET until ready and then stop', async ()
   f.controller.stop();
 });
 
+test('fixed mode starts once, polls without expiry, and opens only its machine URL', async () => {
+  const machineId = 'm_agqu7uni5qvmvqtn3hufecdujm';
+  const host = 'https://8000-agqu7uni5qvmvqtn3hufecdujm.instabox.tech';
+  const fixedIdle = { configured: true, mode: 'fixed', machineId, status: 'idle',
+    trialId: machineId, expiresAt: null, url: null, message: null };
+  const booting = { ...fixedIdle, status: 'booting' };
+  const fixedReady = { ...fixedIdle, status: 'ready', url: host };
+  const f = fixture([fixedIdle, booting, fixedReady]);
+  await f.controller.start();
+  assert.equal(await f.controller.create(), true);
+  await f.advance(100);
+  assert.equal(f.controller.getSnapshot().mode, 'fixed');
+  assert.equal(f.controller.getSnapshot().expiresAt, null);
+  assert.equal(f.controller.getSnapshot().url, `${host}/`);
+  assert.equal(f.controller.canOpen(), true);
+  assert.deepEqual(f.calls.map(({ method }) => method), ['GET', 'POST', 'GET']);
+  f.controller.stop();
+});
+
 test('ambiguous POST network failure recovers by GET and never auto-retries creation', async () => {
   const f = fixture([idle, new TypeError('connection lost after send'), trial('booting'), ready()]);
   await f.controller.start();

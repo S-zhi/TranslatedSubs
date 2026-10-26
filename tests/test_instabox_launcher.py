@@ -423,6 +423,176 @@ def test_unconfigured_service_is_honest_and_never_contacts_provider(tmp_path):
         assert not (tmp_path / "unused.sqlite3").exists()
 
 
+class FakeFixedCloud:
+    machine_id = "m_agqu7uni5qvmvqtn3hufecdujm"
+    host = "8000-agqu7uni5qvmvqtn3hufecdujm.instabox.tech"
+
+    def __init__(self, state="stopped"):
+        self.requests = []
+        self.machine_state = state
+        self.operation_states = {}
+        self.operation_ids = []
+        self.start_keys = []
+        self.health_status = 200
+
+    def __call__(self, request):
+        self.requests.append(request)
+        path = request.url.path
+        if request.url.host == self.host:
+            return httpx.Response(self.health_status, json={"ok": True})
+        if path == f"/v1/machines/{self.machine_id}/start" and request.method == "POST":
+            key = request.headers["idempotency-key"]
+            self.start_keys.append(key)
+            if key not in self.start_keys[:-1]:
+                operation_id = f"op_start_{len(self.start_keys)}"
+                self.operation_ids.append(operation_id)
+                self.operation_states[operation_id] = "running"
+            else:
+                operation_id = self.operation_ids[-1]
+            self.machine_state = "starting"
+            return httpx.Response(202, json={"id": operation_id,
+                                             "machineId": self.machine_id, "state": "running"})
+        if path.startswith("/v1/operations/"):
+            operation_id = path.rsplit("/", 1)[-1]
+            state = self.operation_states[operation_id]
+            if state == "succeeded":
+                self.machine_state = "running"
+            if state == "failed":
+                self.machine_state = "stopped"
+            return httpx.Response(200, json={"id": operation_id,
+                                             "machineId": self.machine_id, "state": state})
+        if path == f"/v1/machines/{self.machine_id}/ports":
+            return httpx.Response(200, json={"enabled": True, "ports": [{
+                "id": "verified-port", "machineId": self.machine_id, "port": 8000,
+                "url": f"https://{self.host}", "name": "TranslatedSubs",
+            }]})
+        if path == f"/v1/machines/{self.machine_id}" and request.method == "GET":
+            return httpx.Response(200, json={"id": self.machine_id, "state": self.machine_state})
+        if request.method == "DELETE":
+            return httpx.Response(204)
+        return httpx.Response(404)
+
+
+def fixed_config(config):
+    return replace(config, mode="fixed", machine_id=FakeFixedCloud.machine_id,
+                   source_revision="")
+
+
+@pytest.mark.parametrize("initial_state", ["stopped", "paused"])
+def test_fixed_mode_get_is_read_only_and_post_starts_reuses_pending_operation(config, initial_state):
+    fixed = fixed_config(config)
+    cloud = FakeFixedCloud(state=initial_state)
+    app = create_app(fixed, transport=httpx.MockTransport(cloud))
+    with TestClient(app, base_url=fixed.origin) as client:
+        initial = client.get("/api/trials/current").json()
+        assert initial["mode"] == "fixed" and initial["status"] == "idle"
+        assert not any(request.method == "POST" for request in cloud.requests)
+        headers = {"Origin": fixed.origin}
+        first = client.post("/api/trials", json={}, headers=headers)
+        second = client.post("/api/trials", json={}, headers=headers)
+        assert first.json()["status"] == second.json()["status"] == "booting"
+        assert len(cloud.start_keys) == 1
+        assert cloud.start_keys[0].startswith("fixed-start-")
+        assert client.get("/api/trials/current").json()["status"] == "booting"
+        cloud.operation_states[cloud.operation_ids[-1]] = "succeeded"
+        ready = client.get("/api/trials/current").json()
+        assert ready["status"] == "ready"
+        assert ready["url"] == f"https://{cloud.host}"
+        assert all(not request.url.path.endswith("/exec") for request in cloud.requests)
+        assert not any(request.method == "DELETE" for request in cloud.requests)
+
+
+def test_fixed_mode_failed_start_can_retry_and_delete_never_deletes_machine(config):
+    fixed = fixed_config(config)
+    cloud = FakeFixedCloud()
+    app = create_app(fixed, transport=httpx.MockTransport(cloud))
+    with TestClient(app, base_url=fixed.origin) as client:
+        client.get("/api/trials/current")
+        headers = {"Origin": fixed.origin}
+        assert client.post("/api/trials", json={}, headers=headers).json()["status"] == "booting"
+        cloud.operation_states[cloud.operation_ids[-1]] = "failed"
+        assert client.get("/api/trials/current").json()["status"] == "failed"
+        retried = client.post("/api/trials", json={}, headers=headers)
+        assert retried.status_code == 202 and retried.json()["status"] == "booting"
+        assert len(cloud.start_keys) == 2 and cloud.start_keys[0] != cloud.start_keys[1]
+        assert client.request("DELETE", "/api/trials/current", json={}, headers=headers).status_code == 405
+        assert not any(request.method == "DELETE" for request in cloud.requests)
+
+
+def test_fixed_running_machine_requires_health_check_before_ready_and_recovers_ambiguous_start(config):
+    fixed = fixed_config(config)
+    cloud = FakeFixedCloud(state="running")
+    cloud.health_status = 503
+    app = create_app(fixed, transport=httpx.MockTransport(cloud))
+    with TestClient(app, base_url=fixed.origin) as client:
+        assert client.get("/api/trials/current").json()["status"] == "checking"
+        cloud.health_status = 200
+        assert client.get("/api/trials/current").json()["status"] == "ready"
+        assert not cloud.start_keys
+
+    # An accepted start with a lost response is retried using its saved key.
+    class LostStart(FakeFixedCloud):
+        lose_next_start = True
+
+        def __call__(self, request):
+            response = super().__call__(request)
+            if request.url.path.endswith("/start") and self.lose_next_start:
+                self.lose_next_start = False
+                raise httpx.ReadTimeout("upstream detail", request=request)
+            return response
+
+    lost = LostStart()
+    app = create_app(fixed, transport=httpx.MockTransport(lost))
+    with TestClient(app, base_url=fixed.origin) as client:
+        client.get("/api/trials/current")
+        headers = {"Origin": fixed.origin}
+        client.post("/api/trials", json={}, headers=headers)
+        first_key = lost.start_keys[0]
+        lost.machine_state = "running"
+        # Reconciliation clears the unknown start key once the machine is running.
+        assert client.get("/api/trials/current").json()["status"] == "ready"
+        lost.machine_state = "stopped"
+        client.post("/api/trials", json={}, headers=headers)
+        assert len(lost.start_keys) == 2 and lost.start_keys[1] != first_key
+
+
+def test_fixed_pending_operation_persists_and_reuses_key_across_restart(config):
+    fixed = fixed_config(config)
+
+    class LostStart(FakeFixedCloud):
+        lose_next_start = True
+
+        def __call__(self, request):
+            response = super().__call__(request)
+            if request.url.path.endswith("/start") and self.lose_next_start:
+                self.lose_next_start = False
+                raise httpx.ReadTimeout("upstream detail", request=request)
+            return response
+
+    cloud = LostStart()
+    headers = {"Origin": fixed.origin}
+    first_app = create_app(fixed, transport=httpx.MockTransport(cloud))
+    with TestClient(first_app, base_url=fixed.origin) as client:
+        client.get("/api/trials/current")
+        assert client.post("/api/trials", json={}, headers=headers).json()["status"] == "booting"
+    first_key = cloud.start_keys[-1]
+
+    second_app = create_app(fixed, transport=httpx.MockTransport(cloud))
+    with TestClient(second_app, base_url=fixed.origin) as client:
+        client.get("/api/trials/current")
+        assert client.post("/api/trials", json={}, headers=headers).json()["status"] == "booting"
+        assert cloud.start_keys[-1] == first_key
+        cloud.operation_states[cloud.operation_ids[-1]] = "succeeded"
+        assert client.get("/api/trials/current").json()["status"] == "ready"
+
+    cloud.machine_state = "stopped"
+    third_app = create_app(fixed, transport=httpx.MockTransport(cloud))
+    with TestClient(third_app, base_url=fixed.origin) as client:
+        client.get("/api/trials/current")
+        client.post("/api/trials", json={}, headers=headers)
+        assert cloud.start_keys[-1] != first_key
+
+
 @pytest.mark.parametrize("kwargs", [{"origin": "http://product.example"}, {"source_revision": "main"},
                                     {"secret": "short"}, {"ttl_seconds": 86400}, {"max_active": 100}])
 def test_invalid_configuration_fails_without_network(kwargs):

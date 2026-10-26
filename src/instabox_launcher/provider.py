@@ -20,11 +20,12 @@ class ProviderError(Exception):
 
 
 class InstaBoxClient:
-    def __init__(self, api_key: str, *, transport: httpx.AsyncBaseTransport | None = None):
+    def __init__(self, api_key: str, *, transport: httpx.AsyncBaseTransport | None = None,
+                 request_timeout: float = 40):
         self.client = httpx.AsyncClient(
             base_url=API_ORIGIN,
             headers={"X-API-Key": api_key, "Accept": "application/json"},
-            timeout=httpx.Timeout(40, connect=10),
+            timeout=httpx.Timeout(request_timeout, connect=min(10, request_timeout)),
             follow_redirects=False, trust_env=False, transport=transport,
         )
 
@@ -65,9 +66,9 @@ class InstaBoxClient:
         data = await self._request("POST", "/v1/machines", json=payload, headers={"Idempotency-Key": key})
         return self._operation(data)
 
-    async def operation(self, operation_id: str) -> dict | None:
+    async def operation(self, operation_id: str, *, wait: str = "25s") -> dict | None:
         data = await self._request("GET", f"/v1/operations/{self.identifier(operation_id)}",
-                                   params={"wait": "25s"}, missing=True)
+                                   params={"wait": wait}, missing=True)
         return self._operation(data) if data else None
 
     async def machine(self, machine_id: str) -> dict | None:
@@ -75,6 +76,14 @@ class InstaBoxClient:
         if data and data.get("id") != machine_id:
             raise ProviderError("invalid_response", uncertain=True)
         return data
+
+    async def start_machine(self, machine_id: str, key: str) -> dict:
+        data = await self._request("POST", f"/v1/machines/{self.identifier(machine_id)}/start",
+                                   json={}, headers={"Idempotency-Key": key})
+        return self._operation(data)
+
+    async def ports(self, machine_id: str) -> dict:
+        return await self._request("GET", f"/v1/machines/{self.identifier(machine_id)}/ports")
 
     async def find_trial(self, launcher_id: str, trial_id: str) -> dict | None:
         cursor = None
