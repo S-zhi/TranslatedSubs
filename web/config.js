@@ -6,10 +6,17 @@ const _defaultApiBaseUrl =
   window.location.protocol === "file:" || _isLocalDevServer
     ? "http://localhost:8000"
     : window.location.origin;
+// Trial credentials must never follow a saved external API override, even if malformed.
+const _hasTrialTokenFragment = /trial_token/i.test(
+  String(window.location.hash || "").replace(
+    /%([0-9a-f]{2})/gi,
+    (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)),
+  ),
+);
 
 window.APP_CONFIG = {
   // FastAPI 后端地址（REST + SSE 同源）。云端默认跟随当前页面域名。
-  API_BASE_URL: _defaultApiBaseUrl,
+  API_BASE_URL: _hasTrialTokenFragment ? window.location.origin : _defaultApiBaseUrl,
 
   // true  = 纯前端 mock，自动模拟整条流水线进度，无需后端
   // false = 走真实 REST + SSE 接口
@@ -47,6 +54,10 @@ window.APP_CONFIG = {
 // 运行时覆盖 API 地址：localStorage.setItem('SUBTRANS_API_BASE_URL', 'http://...')
 const _override = (() => {
   try {
+    if (_hasTrialTokenFragment) {
+      localStorage.removeItem("SUBTRANS_API_BASE_URL");
+      return null;
+    }
     return localStorage.getItem("SUBTRANS_API_BASE_URL");
   } catch (e) {
     return null;

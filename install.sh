@@ -18,6 +18,13 @@ SERVICE_USER="${SUBTRANS_SERVICE_USER:-subtitles-ai}"
 API_BIND_HOST="${SUBTRANS_API_HOST:-0.0.0.0}"
 API_PORT="${SUBTRANS_API_PORT:-8000}"
 START_SERVICE=1
+# 云端试用只服务官网部署，默认不安装。--with-cloud-trial 或
+# SUBTRANS_ENABLE_CLOUD_TRIAL=1 才会写入第二个 systemd 单元。
+CLOUD_TRIAL_SERVICE="${SUBTRANS_ENABLE_CLOUD_TRIAL:-0}"
+LAUNCHER_BIND_HOST="${SUBTRANS_LAUNCHER_HOST:-127.0.0.1}"
+LAUNCHER_PORT="${SUBTRANS_LAUNCHER_PORT:-8001}"
+LAUNCHER_DATA_DIR="${SUBTRANS_LAUNCHER_DATA_DIR:-${DEFAULT_DATA_ROOT}/launcher}"
+LAUNCHER_ENV_FILE="${SUBTRANS_LAUNCHER_ENV_FILE:-/etc/${SERVICE_NAME}/launcher.env}"
 
 log() {
   printf '[TranslatedSubs] %s\n' "$*"
@@ -38,6 +45,7 @@ usage() {
 
 选项：
   --no-start         安装并创建 systemd 服务，但暂不启动
+  --with-cloud-trial 额外部署可选的 InstaBox 云端试用控制服务（仅官网部署需要）
   -h, --help         显示帮助
 
 可用环境变量：
@@ -50,6 +58,15 @@ usage() {
   SUBTRANS_SERVICE_NAME           systemd 服务名，默认 subtitles-ai
   SUBTRANS_REPOSITORY_URL         Git 仓库地址
   SUBTRANS_INSTALL_REF            Git 分支或 Tag；Release 资产默认使用对应版本 Tag
+  SUBTRANS_ENABLE_CLOUD_TRIAL     设为 1 等同于 --with-cloud-trial
+  SUBTRANS_LAUNCHER_HOST          试用控制服务监听地址，默认 127.0.0.1
+  SUBTRANS_LAUNCHER_PORT          试用控制服务端口，默认 8001
+  SUBTRANS_LAUNCHER_DATA_DIR      SQLite 数据目录，默认 /var/lib/subtitles-ai/launcher
+  SUBTRANS_LAUNCHER_ENV_FILE      密钥环境文件，默认 /etc/<服务名>/launcher.env
+
+安装器不收集、不写入 InstaBox API Key 或 SUBTRANS_LAUNCHER_SECRET。
+需要试用控制服务时，请先自行创建权限 0600、属主 root 的环境文件，
+配置方法见 docs/instabox-quick-start.md。
 EOF
 }
 
@@ -57,6 +74,9 @@ while (($#)); do
   case "$1" in
     --no-start)
       START_SERVICE=0
+      ;;
+    --with-cloud-trial)
+      CLOUD_TRIAL_SERVICE=1
       ;;
     -h|--help)
       usage
@@ -76,6 +96,9 @@ done
 [[ "${SERVICE_NAME}" =~ ^[A-Za-z0-9_.@-]+$ ]] || die "SUBTRANS_SERVICE_NAME 不是有效的 systemd 服务名"
 [[ "${API_BIND_HOST}" =~ ^[A-Za-z0-9._:-]+$ ]] || die "SUBTRANS_API_HOST 包含无效字符"
 
+if [[ "${CLOUD_TRIAL_SERVICE}" != "0" && "${CLOUD_TRIAL_SERVICE}" != "1" ]]; then
+  die "SUBTRANS_ENABLE_CLOUD_TRIAL 只能是 0 或 1"
+fi
 assert_safe_recursive_target() {
   local path="$1"
   [[ "${path}" =~ ^/[^/]+/[^/]+(/.*)?$ ]] || die "拒绝递归修改过于宽泛的目录：${path}"
@@ -90,6 +113,19 @@ assert_safe_managed_dir() {
   local path="$1"
   [[ "${path}" =~ ^/[^/]+/[^/]+/[^/]+(/.*)?$ ]] || die "数据目录层级过浅，拒绝修改其属主：${path}"
 }
+
+if [[ "${CLOUD_TRIAL_SERVICE}" == "1" ]]; then
+  [[ "${LAUNCHER_PORT}" =~ ^[0-9]+$ ]] || die "SUBTRANS_LAUNCHER_PORT 必须是数字"
+  ((LAUNCHER_PORT >= 1 && LAUNCHER_PORT <= 65535)) || die "SUBTRANS_LAUNCHER_PORT 必须在 1–65535 之间"
+  ((LAUNCHER_PORT != API_PORT)) || die "SUBTRANS_LAUNCHER_PORT 不能与 SUBTRANS_API_PORT 相同"
+  [[ "${LAUNCHER_BIND_HOST}" =~ ^[A-Za-z0-9._:-]+$ ]] || die "SUBTRANS_LAUNCHER_HOST 包含无效字符"
+  [[ "${LAUNCHER_DATA_DIR}" = /* ]] || die "SUBTRANS_LAUNCHER_DATA_DIR 必须是绝对路径"
+  [[ "${LAUNCHER_DATA_DIR}" != *[[:space:]]* ]] || die "SUBTRANS_LAUNCHER_DATA_DIR 不能包含空格"
+  [[ "${LAUNCHER_DATA_DIR}" =~ ^/[A-Za-z0-9._/-]+$ ]] || die "SUBTRANS_LAUNCHER_DATA_DIR 包含不支持的字符"
+  assert_safe_managed_dir "${LAUNCHER_DATA_DIR}"
+  [[ "${LAUNCHER_ENV_FILE}" = /* ]] || die "SUBTRANS_LAUNCHER_ENV_FILE 必须是绝对路径"
+  [[ "${LAUNCHER_ENV_FILE}" =~ ^/[A-Za-z0-9._/-]+$ ]] || die "SUBTRANS_LAUNCHER_ENV_FILE 包含不支持的字符"
+fi
 
 detect_project_dir() {
   local script_path candidate
@@ -153,6 +189,9 @@ if [[ ! -f "${PROJECT_DIR}/pyproject.toml" ]]; then
   git clone --branch "${REPOSITORY_REF}" --single-branch "${REPOSITORY_URL}" "${PROJECT_DIR}"
 fi
 [[ -f "${PROJECT_DIR}/src/handler/app.py" ]] || die "安装目录不是有效的 TranslatedSubs 仓库：${PROJECT_DIR}"
+if [[ "${CLOUD_TRIAL_SERVICE}" == "1" && ! -f "${PROJECT_DIR}/src/instabox_launcher/app.py" ]]; then
+  die "安装目录缺少 src/instabox_launcher；请使用包含云端试用控制服务的版本"
+fi
 
 DATA_DIR="${SUBTRANS_DATA_DIR:-${DEFAULT_DATA_ROOT}/data}"
 DB_PATH="${SUBTRANS_DB:-${DATA_DIR}/db/app.db}"
@@ -236,6 +275,43 @@ chmod 644 "${UNIT_FILE}"
 systemctl daemon-reload
 systemctl enable "${SERVICE_NAME}.service"
 
+if [[ "${CLOUD_TRIAL_SERVICE}" == "1" ]]; then
+  LAUNCHER_UNIT_FILE="/etc/systemd/system/${SERVICE_NAME}-cloud-trial.service"
+  log "写入云端试用控制服务 ${LAUNCHER_UNIT_FILE}"
+  install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" -m 0700 "${LAUNCHER_DATA_DIR}"
+  cat > "${LAUNCHER_UNIT_FILE}" <<EOF
+[Unit]
+Description=TranslatedSubs Optional InstaBox Trial Launcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${SERVICE_USER}
+Group=${SERVICE_USER}
+WorkingDirectory=${PROJECT_DIR}
+ExecStart=${PROJECT_DIR}/.venv/bin/python -m src.instabox_launcher --host ${LAUNCHER_BIND_HOST} --port ${LAUNCHER_PORT}
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+Environment=PYTHONUNBUFFERED=1
+Environment=SUBTRANS_LAUNCHER_DB_PATH=${LAUNCHER_DATA_DIR}/trials.sqlite3
+EnvironmentFile=-${LAUNCHER_ENV_FILE}
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  chmod 644 "${LAUNCHER_UNIT_FILE}"
+  systemctl daemon-reload
+  systemctl enable "${SERVICE_NAME}-cloud-trial.service"
+  if [[ -f "${LAUNCHER_ENV_FILE}" ]]; then
+    log "云端试用控制服务使用环境文件 ${LAUNCHER_ENV_FILE}"
+  else
+    warn "未找到 ${LAUNCHER_ENV_FILE}；安装器不收集任何密钥。请按 docs/instabox-quick-start.md 创建该文件（权限 0600、属主 root）后执行：systemctl start ${SERVICE_NAME}-cloud-trial"
+  fi
+fi
+
 if ((START_SERVICE)); then
   log "启动 ${SERVICE_NAME}"
   systemctl restart "${SERVICE_NAME}.service"
@@ -281,3 +357,11 @@ log "服务状态：systemctl status ${SERVICE_NAME} --no-pager"
 log "实时日志：journalctl -u ${SERVICE_NAME} -f"
 log "本机引导配置：${PROJECT_DIR}/config.local.json"
 log "业务模型/API 设置请在 Web 工作台或配置 API 中管理；保存后无需重启服务"
+
+if [[ "${CLOUD_TRIAL_SERVICE}" == "1" ]]; then
+  log "云端试用控制服务：systemctl status ${SERVICE_NAME}-cloud-trial --no-pager"
+  log "云端试用控制服务日志：journalctl -u ${SERVICE_NAME}-cloud-trial -f"
+  log "云端试用数据目录：${LAUNCHER_DATA_DIR}（SQLite 与锁文件，保持 0700）"
+  warn "控制服务默认只监听 ${LAUNCHER_BIND_HOST}:${LAUNCHER_PORT}；公网必须经反向代理按同源 /api/trials 转发并启用 TLS"
+  warn "官网宣传页需带 SUBTRANS_ENABLE_CLOUD_TRIAL 未设为 0 的构建（默认开启）；自托管宣传页用 npm --prefix site run build:no-trial 关闭试用入口"
+fi

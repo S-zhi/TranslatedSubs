@@ -30,6 +30,8 @@ journalctl -u subtitles-ai -f
 curl http://127.0.0.1:8000/api/health
 ```
 
+一键安装器**默认不安装、不配置**可选的 InstaBox 云端试用控制服务，也不会要求你提供 InstaBox API Key。只有官网部署需要额外加 `--with-cloud-trial`（或 `SUBTRANS_ENABLE_CLOUD_TRIAL=1`），并自行准备权限 0600 的密钥环境文件，见 [InstaBox 一键试用部署](./instabox-quick-start.md)。宣传页默认开启试用入口；自托管时用 `npm --prefix site run build:no-trial` 构建即可完全去掉。
+
 ## 1. 运行要求
 
 - Python 3.10–3.12（推荐 3.12）

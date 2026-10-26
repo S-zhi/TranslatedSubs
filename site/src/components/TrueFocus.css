@@ -1,0 +1,68 @@
+@layer components {
+  .true-focus {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 24px 42px;
+    width: fit-content;
+    max-width: 100%;
+    padding: 4px 0;
+    font-size: clamp(30px, 3.6vw, 52px);
+    font-weight: 550;
+    line-height: 1.25;
+    letter-spacing: -0.045em;
+  }
+
+  .true-focus__word {
+    display: inline-block;
+    justify-self: start;
+    white-space: nowrap;
+    color: var(--muted);
+    filter: blur(var(--focus-blur));
+    transition: filter var(--focus-duration) ease, color var(--focus-duration) ease;
+  }
+
+  .true-focus__word.is-focused {
+    filter: none;
+    color: var(--text);
+  }
+
+  .true-focus__corner {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 13px;
+    height: 13px;
+    border: 2px solid var(--accent);
+    border-radius: 2px;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .true-focus__corner--top-left { border-right: 0; border-bottom: 0; }
+  .true-focus__corner--top-right { border-left: 0; border-bottom: 0; }
+  .true-focus__corner--bottom-left { border-right: 0; border-top: 0; }
+  .true-focus__corner--bottom-right { border-left: 0; border-top: 0; }
+
+  .true-focus--still .true-focus__word { filter: none; color: var(--text); }
+  .true-focus--still .true-focus__corner { display: none; }
+  .true-focus--paused .true-focus__word { transition: none; }
+}
+
+@layer responsive {
+  @media (max-width: 1023px) {
+    .true-focus { gap: 24px 30px; font-size: clamp(28px, 3.7vw, 38px); }
+  }
+
+  @media (max-width: 767px) {
+    .true-focus {
+      display: grid;
+      grid-template-columns: max-content max-content;
+      justify-content: start;
+      column-gap: 34px;
+      row-gap: 24px;
+      font-size: clamp(24px, 6.8vw, 36px);
+    }
+  }
+}
