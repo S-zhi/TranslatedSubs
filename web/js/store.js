@@ -13,6 +13,7 @@ export const state = {
   previewId: null,
   loading: true,
   loadError: null,
+  loadErrorStatus: null,
 };
 
 const listeners = new Set();
@@ -71,6 +72,7 @@ export function setPreviewId(id) { state.previewId = id; emit({ type: "preview" 
 export async function loadTasks() {
   state.loading = true;
   state.loadError = null;
+  state.loadErrorStatus = null;
   emit({ type: "loading" });
   try {
     state.tasks = await Api.listTasks();
@@ -80,6 +82,7 @@ export async function loadTasks() {
   } catch (e) {
     state.loading = false;
     state.loadError = e.message || "无法连接后端";
+    state.loadErrorStatus = e.status || null;
     emit({ type: "loaderror" });
   }
 }

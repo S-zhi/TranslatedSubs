@@ -210,8 +210,8 @@ function isVideoFile(file) {
 function probeOkMessage(result) {
   // 根据探针成功结果生成控制台提示文案。
   return result.title
-    ? `链接可下载：${result.title}`
-    : "链接可下载，可以开始处理";
+    ? `已解析到媒体格式：${result.title}；正式下载时仍可能被站点拒绝`
+    : "已解析到媒体格式；正式下载时仍可能被站点拒绝";
 }
 
 function probeFailMessage(result) {

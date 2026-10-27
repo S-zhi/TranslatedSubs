@@ -22,6 +22,14 @@
 - `tests/test_live_pipeline.py` 涉及真实云服务和视频下载，只有配置好环境后才通过 `SUBTRANS_LIVE_TEST=1 uv run pytest tests/test_live_pipeline.py -v -s` 显式运行。
 - 本机 Redis 连接、数据路径和监听配置从 `config.example.json` 复制到未跟踪的 `config.local.json`；业务配置保存在 Redis 中。不要提交引导配置、API Key、OAuth 凭据、Cookie 或测试生成的媒体文件。
 
+## 云端试用与企业展示页
+
+- 云端试用属于独立的产品展示页能力，不是 8000 端口工作台本身。展示页源码在 `site/`，入口页面是 `http://127.0.0.1:5173/`；页面中的“检查云端试用状态”和“快速使用”通过同源 `/api/trials` 访问试用控制服务。
+- 本地服务分工固定为：`8000` 是字幕工作台 API/前端，`8001` 是 `src.instabox_launcher` 云端试用控制服务，`5173` 是 React/Vite 产品展示页。Vite 开发服务器把 `/api/trials` 代理到 `http://127.0.0.1:8001`。
+- `GET /api/trials/current` 只读检查当前会话状态；`POST /api/trials` 才会预留并创建云端试用实例。启动控制服务使用 `uv run python -m src.instabox_launcher --host 127.0.0.1 --port 8001`。
+- 用户已确认该能力此前配置过并验证可行。因此新进程返回 `configured:false` 时，优先检查启动进程是否继承了 `INSTABOX_API_KEY`、`SUBTRANS_LAUNCHER_SECRET`、`SUBTRANS_LAUNCHER_ORIGIN`、`SUBTRANS_LAUNCHER_SOURCE_REVISION` 等环境变量和对应的持久化 DB 配置；这不等同于功能本身不可用。不要把密钥写入仓库、`AGENTS.md` 或聊天记录。
+- 页面地址必须使用完整的 `http://127.0.0.1:5173/`。如果浏览器地址栏出现类似 `/%EF%BC%88HTTP` 的路径，是误把状态说明文字拼进 URL，应改回根路径。
+
 保持 Python 代码符合现有 PEP 8 风格；前端沿用原生 JS/ES Modules。行为变化应更新相关测试和文档。提交规范与 PR 要求见 `.github/CONTRIBUTING.md`。
 
 <!-- gitnexus:start -->
