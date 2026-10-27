@@ -652,18 +652,43 @@ def retry_task(
         rec = require(store, task_id)
         if rec.status not in {"FAILED", "CANCELLED"}:
             raise LifecycleConflictError("只有失败或已取消任务可以重试")
+        original_status = rec.status
+        original_progress = rec.progress
+        original_step = rec.current_step
+        original_error = rec.error
         # Leave NULL plans for Runner's first atomic legacy migration.
         if rec.plugin_plan_json is not None:
             parse_plugin_plan(rec.plugin_plan_json)
         fields = dict(status="PENDING", progress=0, current_step=None, error=None)
         conditional_update = getattr(store, "update_if_status", None)
         if callable(conditional_update):
-            updated = conditional_update(task_id, (rec.status,), **fields)
+            updated = conditional_update(task_id, (original_status,), **fields)
             if updated is None:
                 raise LifecycleConflictError("任务状态已变化，请稍后重试")
         else:
             updated = store.update(task_id, **fields)
-        enqueue_pipeline(task_id)
+        try:
+            enqueue_pipeline(task_id)
+        except Exception:
+            rollback_fields = dict(
+                status=original_status,
+                progress=original_progress,
+                current_step=original_step,
+                error=original_error,
+            )
+            try:
+                if callable(conditional_update):
+                    # Keep a worker that claimed the retry from being overwritten.
+                    conditional_update(task_id, ("PENDING",), **rollback_fields)
+                else:
+                    # Legacy stores have no CAS primitive; check before restoring.
+                    current = store.get(task_id)
+                    if current is not None and current.status == "PENDING":
+                        store.update(task_id, **rollback_fields)
+            except Exception:
+                # The enqueue error is the actionable failure and must be preserved.
+                pass
+            raise
         return to_out(updated)
 
 
