@@ -1,4 +1,4 @@
-/* 下载测试页：独立探测单个 URL 是否可解析、可下载。
+/* 下载测试页：独立探测单个 URL 是否可解析并列出媒体格式。
  *
  * 所有 probe 调用都会落库到 probe_records，本视图额外提供：
  * - 测试历史列表（按时间倒序，最近 50 条）
@@ -117,10 +117,10 @@ function renderResult(resultEl, result, url) {
   }
 
   const title = el("div", "probe-result__title");
-  title.textContent = result.ok ? "可以下载" : "暂时不可下载";
+  title.textContent = result.ok ? "已解析到媒体格式" : "链接解析失败";
   const desc = el("div", "probe-result__desc");
   desc.textContent = result.ok
-    ? (result.title || shortUrl(result.webpageUrl || url))
+    ? `${result.title || shortUrl(result.webpageUrl || url)} · 尚未验证媒体文件是否可下载`
     : (result.reason || result.detail || "yt-dlp 未能确认这个链接");
   body.append(title, desc);
 
@@ -215,7 +215,7 @@ async function runProbe(url, refs) {
     setHint(
       refs.bar,
       refs.hint,
-      result.ok ? "测试通过，可以加入任务队列" : "测试失败，请检查链接或 cookies",
+      result.ok ? "已解析到格式；媒体文件需在正式下载时验证" : "链接解析失败，请检查链接或 cookies",
       !result.ok,
     );
     renderResult(refs.result, result, url);
@@ -246,7 +246,7 @@ function renderHistoryItem(rec, refs) {
 
   const head = el("div", "probe-history__item-head");
   const badge = el("span", `probe-history__badge ${rec.ok ? "is-ok" : "is-fail"}`);
-  badge.textContent = rec.ok ? "可下载" : "不可用";
+  badge.textContent = rec.ok ? "已解析" : "解析失败";
   const time = el("span", "probe-history__time");
   time.textContent = formatTimestamp(rec.createdAt);
   head.append(badge, time);
@@ -279,7 +279,7 @@ function renderHistoryItem(rec, refs) {
   retry.addEventListener("click", () => {
     refs.input.value = rec.webpageUrl || rec.url;
     refs.input.focus();
-    setHint(refs.bar, refs.hint, "按开始测试确认可下载性");
+    setHint(refs.bar, refs.hint, "按开始测试解析链接与媒体格式");
   });
   const remove = el("button", "btn btn--ghost btn--sm probe-history__remove");
   remove.type = "button";
@@ -391,7 +391,7 @@ export function initProbe() {
     if (!input.value.trim()) {
       setHint(bar, hint, "等待输入链接");
     } else {
-      setHint(bar, hint, "按开始测试确认可下载性");
+      setHint(bar, hint, "按开始测试解析链接与媒体格式");
     }
   });
 }

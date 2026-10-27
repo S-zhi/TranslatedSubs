@@ -227,6 +227,8 @@ function errorHint(msg, code) {
     return `处理过程中发生内部错误，请检查任务日志并稍后重试`;
 
   const m = (msg || "").toLowerCase();
+  if (m.includes("403") && (m.includes("下载") || m.includes("download")))
+    return `站点拒绝了媒体文件请求（403）。链接解析成功不代表媒体可下载；请检查 yt-dlp 版本、站点要求的登录态或播放令牌后重试`;
   if (m.includes("模型") || m.includes("whisper"))
     return `请在本地模型设置中下载并检查 Whisper 模型`;
   if (m.includes("deepseek") || m.includes("api key"))
@@ -363,8 +365,24 @@ function emptyState() {
 }
 
 function loadErrorState() {
-  const base = window.APP_CONFIG.API_BASE_URL;
   const e = el("div", "state state--error");
+  if (state.loadErrorStatus === 401) {
+    e.innerHTML = `
+      <div class="state__icon"><i class="ph ph-lock" aria-hidden="true"></i></div>
+      <div class="state__title">需要 API Token</div>
+      <div class="state__desc">后端已运行，请在「其他设置 → 后端连接 · API Token」填写后保存。</div>`;
+    const btn = el("button", "btn btn--ghost btn--sm state__action");
+    btn.textContent = "前往设置";
+    btn.addEventListener("click", () => {
+      setView("other-settings");
+      const connection = document.querySelector("#apiConnection");
+      if (connection) connection.open = true;
+      document.querySelector("#apiConnectionToken")?.focus();
+    });
+    e.append(btn);
+    return e;
+  }
+  const base = window.APP_CONFIG.API_BASE_URL;
   e.innerHTML = `
     <div class="state__icon"><i class="ph ph-plugs" aria-hidden="true"></i></div>
     <div class="state__title">无法连接后端</div>
