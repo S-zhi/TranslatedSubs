@@ -220,16 +220,35 @@ def download_video(*, task_id: str, store: Any, resolve_video_fn: Callable[..., 
     raise RuntimeError("资源已删除")
 
 
-def download_dubbed(*, task_id: str, store: Any, task_dir: Callable[[str], Path], asset_resolver: Any = AssetResolver) -> Path:
+def download_dubbed(
+    *,
+    task_id: str,
+    store: Any,
+    task_dir: Callable[[str], Path],
+    mark_missing: Callable[..., None],
+    asset_resolver: Any = AssetResolver,
+    available_status: str,
+    missing_downgrade_reason: Any = None,
+) -> Path:
     rec = store.get(task_id)
     if rec is None:
         raise LookupError("任务不存在")
     if rec.status != "SUCCESS" or rec.tts_status != "SUCCESS":
         raise RuntimeError("配音视频尚未生成")
     path = task_dir(task_id) / (rec.output_dubbed_video or "output_dubbed.mp4")
-    if asset_resolver.check_file_state(path) != ResourceState.AVAILABLE:
+    state = asset_resolver.check_file_state(path)
+    if state == ResourceState.AVAILABLE:
+        return path
+    if rec.resource_status == available_status:
+        if state == ResourceState.UNREADABLE:
+            if missing_downgrade_reason is None:
+                mark_missing(store, task_id, "资源不可读")
+            else:
+                mark_missing(store, task_id, "资源不可读", missing_downgrade_reason)
+        else:
+            mark_missing(store, task_id, "资源已删除")
         raise RuntimeError("配音视频不可用")
-    return path
+    raise RuntimeError("配音视频不可用")
 
 
 def download_subtitle(*, task_id: str, store: Any, task_dir: Callable[[str], Path], mark_missing: Callable[..., None], asset_resolver: Any = AssetResolver, available_status: str, missing_downgrade_reason: Any = None) -> Path:
@@ -306,7 +325,14 @@ def check_dubbed_video_route(task_id: str, store: TaskStore = Depends(get_store)
 def download_dubbed_video_route(task_id: str, store: TaskStore = Depends(get_store)):
     from src.handler import tasks as compat
 
-    path = compat._task_artifacts.download_dubbed(task_id=task_id, store=store, task_dir=compat.task_dir)
+    path = compat._task_artifacts.download_dubbed(
+        task_id=task_id,
+        store=store,
+        task_dir=compat.task_dir,
+        mark_missing=compat._mark_resource_missing,
+        available_status=RESOURCE_STATUS_AVAILABLE,
+        missing_downgrade_reason=DOWNGRADE_REASON_DISK_FAILURE,
+    )
     return FileResponse(path, media_type="video/mp4", filename=path.name)
 
 

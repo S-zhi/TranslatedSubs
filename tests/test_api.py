@@ -1183,6 +1183,26 @@ def test_download_dubbed_video_reports_unavailable_artifact(client):
     assert response.status_code == 409
     assert response.json()["detail"] == "配音视频不可用"
     assert client.head(f"/api/tasks/{cid}/dubbed").status_code == 409
+    assert client._store.get(cid).resource_status == RESOURCE_STATUS_MISSING
+    assert client.get(f"/api/tasks/{cid}").json()["outputs"] is None
+
+
+def test_download_unreadable_dubbed_video_marks_resource_missing(client):
+    cid = client.post("/api/tasks", json=_payload(ttsEnabled=True)).json()["id"]
+    client._store.update(
+        cid, status="SUCCESS", progress=100, tts_status="SUCCESS",
+        output_dubbed_video="output_dubbed.mp4",
+    )
+    dubbed = client._tmp / cid / "output_dubbed.mp4"
+    dubbed.parent.mkdir(parents=True, exist_ok=True)
+    dubbed.touch()
+
+    response = client.get(f"/api/tasks/{cid}/dubbed")
+    assert response.status_code == 409
+    assert response.json()["detail"] == "配音视频不可用"
+    record = client._store.get(cid)
+    assert record.resource_status == RESOURCE_STATUS_MISSING
+    assert record.downgrade_reason == "DISK_FAILURE"
 
 
 def test_download_keeps_not_generated_message_for_running_task(client):
