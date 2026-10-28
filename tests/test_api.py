@@ -251,6 +251,40 @@ def test_create_missing_url_422(client):
     assert r.status_code == 422
 
 
+def test_create_url_enqueue_failure_removes_pending_task(client, monkeypatch):
+    url = "https://example.com/enqueue-failure"
+
+    def fail_enqueue(_task_id):
+        raise RuntimeError("queue unavailable")
+
+    monkeypatch.setattr(tasks_routes, "enqueue_pipeline", fail_enqueue)
+
+    with pytest.raises(RuntimeError, match="queue unavailable"):
+        client.post("/api/tasks", json=_payload(url=url))
+
+    assert client._store.list() == []
+
+    monkeypatch.setattr(tasks_routes, "enqueue_pipeline", lambda _task_id: None)
+    response = client.post("/api/tasks", json=_payload(url=url))
+
+    assert response.status_code == 201
+
+
+def test_create_url_enqueue_failure_keeps_claimed_task(client, monkeypatch):
+    def fail_after_claim(task_id):
+        client._store.update(task_id, status="DOWNLOADING", current_step="DOWNLOADING")
+        raise RuntimeError("queue unavailable")
+
+    monkeypatch.setattr(tasks_routes, "enqueue_pipeline", fail_after_claim)
+
+    with pytest.raises(RuntimeError, match="queue unavailable"):
+        client.post("/api/tasks", json=_payload(url="https://example.com/claimed"))
+
+    records = client._store.list()
+    assert len(records) == 1
+    assert records[0].status == "DOWNLOADING"
+
+
 def test_create_rejects_invalid_enum_params(client, monkeypatch):
     """非法枚举参数应在创建前返回 422，且不能入队。"""
     enqueued = []

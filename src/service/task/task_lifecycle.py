@@ -703,7 +703,15 @@ def create_task_route(
                     "taskId": rec.id,
                 },
             )
-        compat.enqueue_pipeline(rec.id)
+        try:
+            compat.enqueue_pipeline(rec.id)
+        except Exception:
+            try:
+                store.delete_if_status(rec.id, ("PENDING",))
+            except Exception:
+                # Preserve the enqueue failure if cleanup itself is unavailable.
+                pass
+            raise
         return compat.to_out(rec)
 
 
