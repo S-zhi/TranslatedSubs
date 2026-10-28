@@ -361,7 +361,7 @@ def create_url_task(
         quality=body.quality,
         task_origin="mcp" if task_origin.strip().lower() == "mcp" else "web",
         tts_enabled=body.ttsEnabled,
-        tts_voice=body.ttsVoice,
+        tts_voice=(runtime_snapshot or {}).get("tts", {}).get("voice") or effective_voice,
         original_voice_mode=body.originalVoiceMode,
         plugin_plan_json=plugin_plan_json,
         runtime_config_json=runtime_config_json,

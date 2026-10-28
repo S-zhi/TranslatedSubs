@@ -153,6 +153,42 @@ def test_real_create_custom_slots_skip_disabled_builtin_cards(
     assert queued == [record.id]
 
 
+def test_url_creation_persists_pinned_tts_voice(creation_client):
+    client, store, engine, queued = creation_client
+
+    def configure_pinned_voice(values):
+        values["models"]["tts"] = {
+            "enabled": True,
+            "models": [{
+                "id": "pinned-tts",
+                "provider": "kokoro",
+                "model": "kokoro-v1",
+                "voice": "zf_001",
+                "enabled": True,
+                "isCurrent": True,
+            }],
+        }
+        values["plugins"]["byId"]["default_tts"].update({
+            "plugin_id": "custom.tts",
+            "model_ref": {"kind": "tts", "card_id": "pinned-tts"},
+        })
+
+    get_config_provider().mutate(configure_pinned_voice)
+    response = _request(
+        client, "url", engine.id, ttsEnabled=True, ttsVoice="auto",
+    )
+    assert response.status_code == 201, response.text
+
+    record = store.get(response.json()["id"])
+    snapshot = json.loads(record.runtime_config_json)
+    plan = parse_plugin_plan(record.plugin_plan_json)
+    assert record.tts_voice == "zf_001"
+    assert response.json()["ttsVoice"] == "zf_001"
+    assert snapshot["tts"]["voice"] == "zf_001"
+    assert plan["slots"]["tts"]["config"]["voice"] == "zf_001"
+    assert queued == [record.id]
+
+
 @pytest.mark.parametrize("source_type", ["url", "upload"])
 def test_real_create_http_asr_ignores_disabled_whisper_card(
     creation_client, monkeypatch, memory_config_provider, source_type,
