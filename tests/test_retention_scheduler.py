@@ -8,10 +8,11 @@ import pytest
 
 from src.config import AUDIO_FILENAME, ORIGINAL_SRT, OUTPUT_VIDEO, SOURCE_VIDEO_STEM, TRANSLATED_SRT
 from src.handler import storage as storage_routes
+from src.service import retention_scheduler
 from src.service.retention_scheduler import (
     execute_retention_cleanup,
     start_retention_scheduler,
-    _scheduler_thread,
+    stop_retention_scheduler,
 )
 from src.store import ProbeStore, TaskStore
 
@@ -136,6 +137,11 @@ def test_retention_cleanup_preserves_probe_records(tmp_path, monkeypatch):
 
 def test_start_retention_scheduler(tmp_path):
     start_retention_scheduler(check_interval_sec=3600.0)
-    from src.service.retention_scheduler import _scheduler_thread
-    assert _scheduler_thread is not None
-    assert _scheduler_thread.is_alive()
+    assert retention_scheduler._scheduler_thread is not None
+    assert retention_scheduler._scheduler_thread.is_alive()
+    stop_retention_scheduler()
+    assert not retention_scheduler._scheduler_thread.is_alive()
+
+
+def test_stop_retention_scheduler_without_thread_is_safe():
+    stop_retention_scheduler()

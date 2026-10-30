@@ -54,7 +54,7 @@ from src.handler import (
 
 from src.handler.deps import get_probe_store, get_store
 
-from src.service.retention_scheduler import start_retention_scheduler
+from src.service.retention_scheduler import start_retention_scheduler, stop_retention_scheduler
 from src.service.probe_batch import start_startup_probe, stop_startup_probe
 from src.service.translation_model_manager import get_translation_model_manager
 
@@ -272,6 +272,7 @@ def create_app(debug: bool | None = None) -> FastAPI:
         stop_config_subscription()
         get_translation_model_manager().cancel_warmup()
         shutdown_executor(wait=False)
+        await asyncio.to_thread(stop_retention_scheduler)
 
     return app
 

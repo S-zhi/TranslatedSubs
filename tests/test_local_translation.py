@@ -348,6 +348,8 @@ def test_app_startup_submits_warmup_without_blocking_health(monkeypatch):
     monkeypatch.setattr(app_module.tasks, "scan_missing_terminal", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(app_module, "recover_interrupted_tasks", lambda: [])
     monkeypatch.setattr(app_module, "start_retention_scheduler", lambda: None)
+    stopped = []
+    monkeypatch.setattr(app_module, "stop_retention_scheduler", lambda: stopped.append(True))
     monkeypatch.setattr(app_module, "get_probe_store", lambda: object())
     monkeypatch.setattr(app_module, "start_startup_probe", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(app_module, "stop_startup_probe", lambda: None)
@@ -359,6 +361,7 @@ def test_app_startup_submits_warmup_without_blocking_health(monkeypatch):
         assert client.get("/api/health").status_code == 200
 
     assert calls == ["start", "cancel"]
+    assert stopped == [True]
 
 
 @pytest.mark.parametrize("debug_mode", [False, True])
