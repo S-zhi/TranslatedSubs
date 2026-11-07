@@ -27,14 +27,9 @@ def desktop_version() -> str:
 
 async def stop_desktop_retention() -> None:
     """Stop the scheduler owned by this process without blocking the ASGI loop."""
-    from src.service import retention_scheduler
+    from src.service.retention_scheduler import stop_retention_scheduler
 
-    # The existing scheduler has no public stop API. Reuse its own stop event;
-    # never touch another process or start a replacement scheduler during exit.
-    retention_scheduler._stop_event.set()
-    thread = retention_scheduler._scheduler_thread
-    if thread is not None:
-        await asyncio.to_thread(thread.join, timeout=2.0)
+    await asyncio.to_thread(stop_retention_scheduler)
 
 
 def configure_environment() -> Path:

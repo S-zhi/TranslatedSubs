@@ -83,6 +83,16 @@ def start_retention_scheduler(check_interval_sec: float = 3600.0) -> None:
     _scheduler_thread.start()
 
 
+def stop_retention_scheduler(timeout_sec: float = 2.0) -> None:
+    """请求调度线程退出，并在有限时间内等待其结束。"""
+    global _scheduler_thread
+    _stop_event.set()
+    thread = _scheduler_thread
+    if thread is None:
+        return
+    thread.join(timeout=timeout_sec)
+
+
 def trigger_retention_cleanup_async() -> None:
     """异步触发一次保留策略清理。"""
     threading.Thread(
