@@ -35,7 +35,7 @@ from src.plugin_system import (
     TranslateRequest,
     VocalSeparateRequest,
 )
-from src.plugin_system.context import PluginContext
+from src.plugin_system.context import PluginContext, PluginContextBase
 from src.service.asset_resolver import AssetResolver, ResourceError, ResourceState
 from src.store import DEFAULT_TRANSLATION_ENGINE_ID
 
@@ -211,7 +211,7 @@ def _purpose_band(purpose: str, params: PipelineParams) -> tuple[str, int, int]:
     return (status, *_BANDS[status])
 
 
-class _PipelinePluginContext:
+class _PipelinePluginContext(PluginContextBase):
     """Fresh host callback context for one Manager invocation."""
 
     def __init__(self, pipeline: "PipelineContext", purpose: str) -> None:
@@ -222,22 +222,6 @@ class _PipelinePluginContext:
         self._purpose = purpose
         self._active = True
         self._lock = threading.RLock()
-
-    @property
-    def task_id(self) -> str:
-        return self._task_id
-
-    @property
-    def invocation_id(self) -> str:
-        return self._invocation_id
-
-    @property
-    def task_dir(self) -> Path:
-        return self._task_dir
-
-    @property
-    def purpose(self) -> str:
-        return self._purpose
 
     def check_cancelled(self) -> None:
         if is_cancelled_signal(self._task_id):

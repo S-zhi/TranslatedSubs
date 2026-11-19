@@ -36,7 +36,38 @@ class PluginContext(Protocol):
     def resolve_credential(self, ref: str) -> str: ...
 
 
-class FakeContext:
+class PluginContextBase:
+    """Identity accessors shared by PluginContext implementations.
+
+    Subclasses set _task_id, _invocation_id, _task_dir and _purpose in
+    their own __init__. The behaviours (cancel, progress, processes,
+    credentials) stay in each subclass: the test fake and the production
+    context mean different things by them, so they are not merged.
+    """
+
+    _task_id: str
+    _invocation_id: str
+    _task_dir: Path
+    _purpose: str
+
+    @property
+    def task_id(self) -> str:
+        return self._task_id
+
+    @property
+    def invocation_id(self) -> str:
+        return self._invocation_id
+
+    @property
+    def task_dir(self) -> Path:
+        return self._task_dir
+
+    @property
+    def purpose(self) -> str:
+        return self._purpose
+
+
+class FakeContext(PluginContextBase):
     """Deterministic test context with read-only identity and in-memory callbacks."""
 
     def __init__(
@@ -58,22 +89,6 @@ class FakeContext:
         self.registered_processes: list[Any] = []
         self.unregistered_processes: list[Any] = []
         self._lock = threading.Lock()
-
-    @property
-    def task_id(self) -> str:
-        return self._task_id
-
-    @property
-    def invocation_id(self) -> str:
-        return self._invocation_id
-
-    @property
-    def task_dir(self) -> Path:
-        return self._task_dir
-
-    @property
-    def purpose(self) -> str:
-        return self._purpose
 
     def check_cancelled(self) -> None:
         if self.cancelled:
