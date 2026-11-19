@@ -12,57 +12,13 @@ from .bootstrap import load_bootstrap
 from .config_repository import read_config_snapshot, get_config_provider
 from .schema import (
     BUSINESS_DEFAULTS,
+    DEFAULT_LANG_NAMES,
     SECRET_KEYS,
     effective_business_values,
     validate_business_value,
 )
 
 _SETTINGS_SCOPE: ContextVar[dict[str, Any] | None] = ContextVar("settings_scope", default=None)
-
-DEFAULT_LANG_NAMES: dict[str, str] = {
-    "auto": "the source language",
-    "zh-CN": "Simplified Chinese (简体中文)",
-    "zh-TW": "Traditional Chinese (繁體中文)",
-    "zh": "Chinese (中文)",
-    "en": "English",
-    "ja": "Japanese (日本語)",
-    "ko": "Korean (한국어)",
-    "es": "Spanish (Español)",
-    "fr": "French (Français)",
-    "de": "German (Deutsch)",
-    "ru": "Russian (Русский)",
-    "it": "Italian (Italiano)",
-    "pt": "Portuguese (Português)",
-    "vi": "Vietnamese (Tiếng Việt)",
-    "th": "Thai (ไทย)",
-    "ar": "Arabic (العربية)",
-    "id": "Indonesian (Bahasa Indonesia)",
-    "hi": "Hindi (हिन्दी)",
-    "nl": "Dutch (Nederlands)",
-    "pl": "Polish (Polski)",
-    "tr": "Turkish (Türkçe)",
-    "sv": "Swedish (Svenska)",
-    "uk": "Ukrainian (Українська)",
-    "cs": "Czech (Čeština)",
-    "da": "Danish (Dansk)",
-    "fi": "Finnish (Suomi)",
-    "el": "Greek (Ελληνικά)",
-    "he": "Hebrew (עברית)",
-    "hu": "Hungarian (Magyar)",
-    "no": "Norwegian (Norsk)",
-    "ro": "Romanian (Română)",
-    "sk": "Slovak (Slovenčina)",
-    "af": "Afrikaans",
-    "ca": "Catalan (Català)",
-    "bg": "Bulgarian (Български)",
-    "hr": "Croatian (Hrvatski)",
-    "ms": "Malay (Bahasa Melayu)",
-    "fa": "Persian (فارسی)",
-    "ur": "Urdu (اردو)",
-    "bn": "Bengali (বাংলা)",
-    "ta": "Tamil (தமிழ்)",
-    "sw": "Swahili (Kiswahili)",
-}
 
 DISABLED_LANGUAGES = frozenset({"bn", "ur"})
 
