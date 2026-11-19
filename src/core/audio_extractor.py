@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from src.config import settings, ensure_task_dir, AUDIO_FILENAME
-from src.core.ffmpeg_utils import run_ffmpeg
+from src.core.ffmpeg_utils import probe_duration, run_ffmpeg
 from src.service.asset_resolver import AssetResolver, ResourceState
 
 logger = logging.getLogger(__name__)
@@ -230,23 +230,7 @@ def _has_audio_stream(video_path: Path) -> bool:
 
 def _probe_duration(video_path: Path) -> Optional[float]:
     """用 ffprobe 探测媒体总时长（秒）。失败返回 None（不影响提取，只是没法算百分比）。"""
-    cmd = [
-        settings.ffprobe_bin,
-        "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
-        str(video_path),
-    ]
-    try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return None
-    if out.returncode != 0:
-        return None
-    try:
-        return float(out.stdout.strip())
-    except (ValueError, AttributeError):
-        return None
+    return probe_duration(video_path, settings.ffprobe_bin)
 
 
 def _parse_us(value: str) -> Optional[float]:
