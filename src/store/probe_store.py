@@ -10,14 +10,18 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
-import time
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import List, Optional
+
+from .sqlite_base import (
+    SqliteStore,
+    calc_url_hash as _calc_url_hash,
+    now_ms as _now_ms,
+)
 
 
 @dataclass
@@ -73,29 +77,8 @@ class ProbeRecord:
 _COLUMNS = list(ProbeRecord.__dataclass_fields__.keys())
 
 
-def _now_ms() -> int:
-    return int(time.time() * 1000)
-
-
-def _calc_url_hash(url: str) -> str:
-    return hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
-
-
-class ProbeStore:
+class ProbeStore(SqliteStore):
     """probe_records 表的增删改查。每次操作短连接，SQLite 自带文件锁。"""
-
-    def __init__(self, db_path: Path | str):
-        self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_schema()
-
-    def _connect(self) -> sqlite3.Connection:
-        # 与 TaskStore 保持一致：WAL + busy_timeout，便于多进程并发。
-        conn = sqlite3.connect(self.db_path, timeout=10)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=5000")
-        return conn
 
     def _init_schema(self) -> None:
         with self._connect() as conn:
