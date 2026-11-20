@@ -16,6 +16,7 @@ from src.plugin_system import (
     TTSResult,
 )
 from src.plugin_system.contracts import PluginConfig
+from src.plugins.builtin._common import BuiltinSessionBase
 from src.plugins.builtin.configuration import BuiltinFactory
 
 
@@ -39,11 +40,9 @@ class KokoroFactory(BuiltinFactory):
         return KokoroSession(config, context)
 
 
-class KokoroSession:
-    def __init__(self, config: PluginConfig, context: PluginContext) -> None:
-        self._config = dict(config)
-        self._context = context
-        self._closed = False
+class KokoroSession(BuiltinSessionBase):
+    STAGE = "tts"
+    PLUGIN_ID = PLUGIN_ID
 
     def validate(self, request: TTSRequest) -> None:
         if self._closed:
@@ -164,9 +163,6 @@ class KokoroSession:
             duration_seconds=frame_count / sample_rate,
         )
 
-    def close(self) -> None:
-        self._closed = True
-
     def _resolve_voice(self, target_lang: str, voice: str) -> str:
         if voice != "auto":
             return voice
@@ -199,18 +195,6 @@ class KokoroSession:
             visited.add(id(current))
             current = current.__cause__ or current.__context__
         return False
-
-    def _discard_new_output(self, output_path: Path, output_existed: bool) -> None:
-        if not output_existed:
-            try:
-                output_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-
-    def _error(
-        self, code: str, message: str, cause: Exception | None = None
-    ) -> PluginError:
-        return PluginError(code, "tts", PLUGIN_ID, message, cause)
 
 
 factory = KokoroFactory()

@@ -24,6 +24,7 @@ from src.plugin_system import (
     ProbeResult,
 )
 from src.plugin_system.contracts import PluginConfig
+from src.plugins.builtin._common import BuiltinSessionBase
 from src.plugins.builtin.cobalt_client import CobaltClient, CobaltError
 from src.plugins.builtin.cobalt_configuration import (
     COBALT_CONFIG_SCHEMA,
@@ -100,7 +101,10 @@ class CobaltFactory:
         return CobaltSession(config, context)
 
 
-class CobaltSession:
+class CobaltSession(BuiltinSessionBase):
+    STAGE = "download"
+    PLUGIN_ID = PLUGIN_ID
+
     def __init__(self, config: PluginConfig, context: PluginContext) -> None:
         self._config = MappingProxyType(dict(config))
         self._context = context
@@ -183,7 +187,7 @@ class CobaltSession:
 
     def close(self) -> None:
         # Each run owns and closes its HTTP client/child session before returning.
-        self._closed = True
+        super().close()
 
     def _resolve_api_key(self) -> str | None:
         reference = self._config["credential_ref"]
@@ -318,10 +322,6 @@ class CobaltSession:
     def _on_progress(self, percent: float | None) -> None:
         self._context.check_cancelled()
         self._context.report_progress(percent)
-
-    @staticmethod
-    def _error(code: str, message: str, cause=None) -> PluginError:
-        return PluginError(code, "download", PLUGIN_ID, message, cause)
 
 
 factory = CobaltFactory()

@@ -8,12 +8,12 @@ from src.core import vocal_separator
 from src.plugin_system import (
     PluginCancelled,
     PluginContext,
-    PluginError,
     PluginManifest,
     VocalSeparateRequest,
     VocalSeparateResult,
 )
 from src.plugin_system.contracts import PluginConfig
+from src.plugins.builtin._common import BuiltinSessionBase
 from src.plugins.builtin.configuration import BuiltinFactory
 
 
@@ -34,11 +34,9 @@ class DemucsFactory(BuiltinFactory):
         return DemucsSession(config, context)
 
 
-class DemucsSession:
-    def __init__(self, config: PluginConfig, context: PluginContext) -> None:
-        self._config = dict(config)
-        self._context = context
-        self._closed = False
+class DemucsSession(BuiltinSessionBase):
+    STAGE = "vocal_separate"
+    PLUGIN_ID = PLUGIN_ID
 
     def validate(self, request: VocalSeparateRequest) -> None:
         if self._closed:
@@ -142,12 +140,6 @@ class DemucsSession:
             vocal_path=result.vocal_path,
             background_path=result.background_path,
         )
-
-    def close(self) -> None:
-        self._closed = True
-
-    def _error(self, code: str, message: str, cause: Exception | None = None) -> PluginError:
-        return PluginError(code, "vocal_separate", PLUGIN_ID, message, cause)
 
     @staticmethod
     def _caused_by_missing_dependency(error: BaseException) -> bool:

@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from src.core import audio_extractor
 from src.plugin_system import (
     AudioExtractRequest,
     AudioExtractResult,
     PluginCancelled,
     PluginContext,
-    PluginError,
     PluginManifest,
 )
 from src.plugin_system.contracts import PluginConfig
+from src.plugins.builtin._common import BuiltinSessionBase
 from src.plugins.builtin.configuration import BuiltinFactory
 
 
@@ -40,11 +38,9 @@ class AudioFFmpegFactory(BuiltinFactory):
         return AudioFFmpegSession(config, context)
 
 
-class AudioFFmpegSession:
-    def __init__(self, config: PluginConfig, context: PluginContext) -> None:
-        self._config = dict(config)
-        self._context = context
-        self._closed = False
+class AudioFFmpegSession(BuiltinSessionBase):
+    STAGE = "audio_extract"
+    PLUGIN_ID = PLUGIN_ID
 
     def validate(self, request: AudioExtractRequest) -> None:
         if self._closed:
@@ -137,21 +133,6 @@ class AudioFFmpegSession:
             channels=result.channels,
             duration_seconds=result.duration,
         )
-
-    def close(self) -> None:
-        self._closed = True
-
-    def _discard_new_output(self, output_path: Path, output_existed: bool) -> None:
-        if not output_existed:
-            try:
-                output_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-
-    def _error(
-        self, code: str, message: str, cause: Exception | None = None
-    ) -> PluginError:
-        return PluginError(code, "audio_extract", PLUGIN_ID, message, cause)
 
 
 factory = AudioFFmpegFactory()
