@@ -11,6 +11,7 @@ import os
 import shutil
 from collections.abc import Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, List, Literal, Optional
 
@@ -261,6 +262,135 @@ def _resolve_creation_plan(
     return serialize_plugin_plan(plan)
 
 
+@dataclass
+class _CreationPrep:
+    """create 前奏的中间结果：选实例、runtime 快照、plan JSON、生效的模型三元组。"""
+
+    plugin_plan_json: str
+    runtime_config_json: str | None
+    runtime_snapshot: dict[str, Any] | None
+    model: str
+    engine: str
+    tts_voice: str
+
+
+def _prepare_creation(
+    *,
+    source_type: str,
+    source_lang: str,
+    target_lang: str,
+    mode: str,
+    burn: str,
+    model: str,
+    engine: str,
+    need_subtitle: bool,
+    quality: str | None,
+    tts_enabled: bool,
+    tts_voice: str,
+    original_voice_mode: str,
+    plugin_instances: dict[str, str] | None,
+    engines: Any,
+    settings: Any,
+    plugin_defaults: Mapping[str, Mapping[str, str]] | None,
+    config_snapshot: Any,
+    plugin_manager: Any,
+    ensure_supported_translation_languages: Callable[..., None],
+    ensure_local_model_ready: Callable[..., None],
+    ensure_translation_engine: Callable[..., None],
+    resolve_runtime: Callable[..., Any] | None,
+    error_422: Callable[[Any], Exception],
+    pre_plan_check: Callable[[], None] | None = None,
+) -> _CreationPrep:
+    """URL / 上传建任务共用的前奏：选实例、解 runtime、解析 plan。
+
+    pre_plan_check 是调用方在解析 plan 之前必须跑的特有校验
+    （upload 的扩展名检查原来就夹在 runtime 和 plan 之间，顺序不能动）；
+    url 不传。
+    """
+    selected_plugins = resolve_plugin_defaults(plugin_defaults if plugin_defaults is not None else {})
+    runtime_snapshot = None
+    runtime_config_json = None
+    runtime_engines = engines
+    instance_selection = None
+    effective_model, effective_engine, effective_voice = model, engine, tts_voice
+    if resolve_runtime is not None and plugin_defaults is None:
+        from src.service.plugin_selection import prepare_instance_selection
+        from src.config.config_repository import get_config_provider
+        runtime_engines, config_snapshot = _creation_runtime_inputs(engines, config_snapshot)
+        config_snapshot = config_snapshot or get_config_provider().read()
+        try:
+            instance_selection = prepare_instance_selection(
+                config_snapshot, plugin_instances,
+                request_model=model, engine=engine, tts_voice=tts_voice,
+                source_type=source_type, need_subtitle=need_subtitle, tts_enabled=tts_enabled,
+                original_voice_mode=original_voice_mode, manager=plugin_manager,
+            )
+        except PluginError as exc:
+            raise error_422(exc.to_dict()) from exc
+        except ValueError as exc:
+            raise error_422(str(exc)) from exc
+        config_snapshot = instance_selection.config_snapshot
+        selected_plugins = instance_selection.plugin_defaults
+        effective_model, effective_engine, effective_voice = (
+            instance_selection.request_model, instance_selection.engine, instance_selection.tts_voice
+        )
+    if resolve_runtime is not None:
+        runtime_engines, config_snapshot = _creation_runtime_inputs(engines, config_snapshot)
+        runtime_kwargs = dict(
+            engine=effective_engine,
+            need_subtitle=need_subtitle,
+            request_model=effective_model,
+            source_lang=source_lang,
+            target_lang=target_lang,
+            tts_enabled=tts_enabled,
+            tts_voice=effective_voice,
+            engines=runtime_engines,
+            ensure_local_model_ready=ensure_local_model_ready,
+            plugin_defaults=selected_plugins,
+            compat_settings=settings or default_settings,
+        )
+        if config_snapshot is not None:
+            runtime_kwargs["config_snapshot"] = config_snapshot
+        runtime_snapshot = resolve_runtime(**runtime_kwargs).snapshot
+        runtime_config_json = json.dumps(runtime_snapshot, ensure_ascii=False, separators=(",", ":"))
+
+    if pre_plan_check is not None:
+        pre_plan_check()
+
+    plugin_plan_json = _resolve_creation_plan(
+        source_type=source_type,
+        source_lang=source_lang,
+        target_lang=target_lang,
+        mode=mode,
+        burn=burn,
+        model=(runtime_snapshot or {}).get("whisper", {}).get("model") or effective_model,
+        engine=effective_engine,
+        need_subtitle=need_subtitle,
+        quality=quality,
+        tts_enabled=tts_enabled,
+        tts_voice=(runtime_snapshot or {}).get("tts", {}).get("voice") or effective_voice,
+        original_voice_mode=original_voice_mode,
+        settings=settings,
+        engines=runtime_engines,
+        ensure_supported_translation_languages=ensure_supported_translation_languages,
+        ensure_local_model_ready=ensure_local_model_ready,
+        ensure_translation_engine=ensure_translation_engine,
+        runtime_snapshot=runtime_snapshot,
+        plugin_defaults=selected_plugins,
+        config_snapshot=config_snapshot,
+        plugin_manager=plugin_manager,
+        instance_selection=instance_selection,
+    )
+    return _CreationPrep(
+        plugin_plan_json=plugin_plan_json,
+        runtime_config_json=runtime_config_json,
+        runtime_snapshot=runtime_snapshot,
+        model=effective_model,
+        engine=effective_engine,
+        tts_voice=effective_voice,
+    )
+
+
 def create_url_task(
     *,
     body: Any,
@@ -278,76 +408,30 @@ def create_url_task(
 ) -> tuple[Any, bool]:
     """校验并创建 URL 任务；入队由 HTTP 门面在冲突检查后完成。"""
 
-    selected_plugins = resolve_plugin_defaults(plugin_defaults if plugin_defaults is not None else {})
-    runtime_snapshot = None
-    runtime_config_json = None
-    runtime_engines = engines
-    instance_selection = None
-    effective_model, effective_engine, effective_voice = body.model, body.engine, body.ttsVoice
-    if resolve_runtime is not None and plugin_defaults is None:
-        from src.service.plugin_selection import prepare_instance_selection
-        from src.config.config_repository import get_config_provider
-        runtime_engines, config_snapshot = _creation_runtime_inputs(engines, config_snapshot)
-        config_snapshot = config_snapshot or get_config_provider().read()
-        try:
-            instance_selection = prepare_instance_selection(
-                config_snapshot, getattr(body, "pluginInstances", None),
-                request_model=body.model, engine=body.engine, tts_voice=body.ttsVoice,
-                source_type="url", need_subtitle=body.needSubtitle, tts_enabled=body.ttsEnabled,
-                original_voice_mode=body.originalVoiceMode, manager=plugin_manager,
-            )
-        except PluginError as exc:
-            raise HTTPException(status_code=422, detail=exc.to_dict()) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        config_snapshot = instance_selection.config_snapshot
-        selected_plugins = instance_selection.plugin_defaults
-        effective_model, effective_engine, effective_voice = (
-            instance_selection.request_model, instance_selection.engine, instance_selection.tts_voice
-        )
-    if resolve_runtime is not None:
-        runtime_engines, config_snapshot = _creation_runtime_inputs(engines, config_snapshot)
-        runtime_kwargs = dict(
-            engine=effective_engine,
-            need_subtitle=body.needSubtitle,
-            request_model=effective_model,
-            source_lang=body.sourceLang,
-            target_lang=body.targetLang,
-            tts_enabled=body.ttsEnabled,
-            tts_voice=effective_voice,
-            engines=runtime_engines,
-            ensure_local_model_ready=ensure_local_model_ready,
-            plugin_defaults=selected_plugins,
-            compat_settings=settings or default_settings,
-        )
-        if config_snapshot is not None:
-            runtime_kwargs["config_snapshot"] = config_snapshot
-        runtime_snapshot = resolve_runtime(**runtime_kwargs).snapshot
-        runtime_config_json = json.dumps(runtime_snapshot, ensure_ascii=False, separators=(",", ":"))
-
-    plugin_plan_json = _resolve_creation_plan(
+    prep = _prepare_creation(
         source_type="url",
         source_lang=body.sourceLang,
         target_lang=body.targetLang,
         mode=body.mode,
         burn=body.burn,
-        model=(runtime_snapshot or {}).get("whisper", {}).get("model") or effective_model,
-        engine=effective_engine,
+        model=body.model,
+        engine=body.engine,
         need_subtitle=body.needSubtitle,
         quality=body.quality,
         tts_enabled=body.ttsEnabled,
-        tts_voice=(runtime_snapshot or {}).get("tts", {}).get("voice") or effective_voice,
+        tts_voice=body.ttsVoice,
         original_voice_mode=body.originalVoiceMode,
-        settings=settings or default_settings,
-        engines=runtime_engines,
+        plugin_instances=getattr(body, "pluginInstances", None),
+        engines=engines,
+        settings=settings,
+        plugin_defaults=plugin_defaults,
+        config_snapshot=config_snapshot,
+        plugin_manager=plugin_manager,
         ensure_supported_translation_languages=ensure_supported_translation_languages,
         ensure_local_model_ready=ensure_local_model_ready,
         ensure_translation_engine=ensure_translation_engine,
-        runtime_snapshot=runtime_snapshot,
-        plugin_defaults=selected_plugins,
-        config_snapshot=config_snapshot,
-        plugin_manager=plugin_manager,
-        instance_selection=instance_selection,
+        resolve_runtime=resolve_runtime,
+        error_422=lambda detail: HTTPException(status_code=422, detail=detail),
     )
     return store.create_if_no_recent_active(
         url=body.url,
@@ -355,16 +439,16 @@ def create_url_task(
         target_lang=body.targetLang,
         mode=body.mode,
         burn=body.burn,
-        model=effective_model,
-        engine=effective_engine,
+        model=prep.model,
+        engine=prep.engine,
         need_subtitle=body.needSubtitle,
         quality=body.quality,
         task_origin="mcp" if task_origin.strip().lower() == "mcp" else "web",
         tts_enabled=body.ttsEnabled,
-        tts_voice=(runtime_snapshot or {}).get("tts", {}).get("voice") or effective_voice,
+        tts_voice=(prep.runtime_snapshot or {}).get("tts", {}).get("voice") or prep.tts_voice,
         original_voice_mode=body.originalVoiceMode,
-        plugin_plan_json=plugin_plan_json,
-        runtime_config_json=runtime_config_json,
+        plugin_plan_json=prep.plugin_plan_json,
+        runtime_config_json=prep.runtime_config_json,
     )
 
 
@@ -405,86 +489,48 @@ def create_upload_task(
 
     if tts_enabled and not need_subtitle:
         raise UploadTaskError(422, "配音需要启用字幕翻译")
-    selected_plugins = resolve_plugin_defaults(plugin_defaults if plugin_defaults is not None else {})
     max_upload_bytes = settings.max_upload_mb * 1024 * 1024
     filename = (file.filename or "").strip()
-    runtime_snapshot = None
-    runtime_config_json = None
-    runtime_engines = engines
-    instance_selection = None
-    if resolve_runtime is not None and plugin_defaults is None:
-        from src.service.plugin_selection import prepare_instance_selection
-        from src.config.config_repository import get_config_provider
-        runtime_engines, config_snapshot = _creation_runtime_inputs(engines, config_snapshot)
-        config_snapshot = config_snapshot or get_config_provider().read()
-        try:
-            instance_selection = prepare_instance_selection(
-                config_snapshot, plugin_instances, request_model=model, engine=engine, tts_voice=tts_voice,
-                source_type="upload", need_subtitle=need_subtitle, tts_enabled=tts_enabled,
-                original_voice_mode=original_voice_mode, manager=plugin_manager,
-            )
-        except PluginError as exc:
-            raise UploadTaskError(422, exc.to_dict()) from exc
-        except ValueError as exc:
-            raise UploadTaskError(422, str(exc)) from exc
-        config_snapshot = instance_selection.config_snapshot
-        selected_plugins = instance_selection.plugin_defaults
-        model, engine, tts_voice = (instance_selection.request_model, instance_selection.engine,
-                                    instance_selection.tts_voice)
-    if resolve_runtime is not None:
-        runtime_engines, config_snapshot = _creation_runtime_inputs(engines, config_snapshot)
-        runtime_kwargs = dict(
-            engine=engine,
-            need_subtitle=need_subtitle,
-            request_model=model,
-            source_lang=source_lang,
-            target_lang=target_lang,
-            tts_enabled=tts_enabled,
-            tts_voice=tts_voice,
-            engines=runtime_engines,
-            ensure_local_model_ready=ensure_local_model_ready,
-            plugin_defaults=selected_plugins,
-            compat_settings=settings or default_settings,
-        )
-        if config_snapshot is not None:
-            runtime_kwargs["config_snapshot"] = config_snapshot
-        runtime_snapshot = resolve_runtime(**runtime_kwargs).snapshot
-        runtime_config_json = json.dumps(runtime_snapshot, ensure_ascii=False, separators=(",", ":"))
     ext = Path(filename).suffix.lower()
-    if ext not in upload_video_extensions:
-        supported_formats = sorted(upload_video_extensions)
-        raise upload_error(
-            400,
-            code="UNSUPPORTED_FORMAT",
-            message=f"不支持的视频格式：{ext or '未知'}（支持 {', '.join(supported_formats)}）",
-            limits={"supportedFormats": supported_formats},
-            suggestion="请将视频转换为受支持的格式后重新上传。",
-        )
 
-    plugin_plan_json = _resolve_creation_plan(
+    def _check_video_extension() -> None:
+        if ext not in upload_video_extensions:
+            supported_formats = sorted(upload_video_extensions)
+            raise upload_error(
+                400,
+                code="UNSUPPORTED_FORMAT",
+                message=f"不支持的视频格式：{ext or '未知'}（支持 {', '.join(supported_formats)}）",
+                limits={"supportedFormats": supported_formats},
+                suggestion="请将视频转换为受支持的格式后重新上传。",
+            )
+
+    prep = _prepare_creation(
         source_type="upload",
         source_lang=source_lang,
         target_lang=target_lang,
         mode=mode,
         burn=burn,
-        model=(runtime_snapshot or {}).get("whisper", {}).get("model") or model,
+        model=model,
         engine=engine,
         need_subtitle=need_subtitle,
         quality="480p",
         tts_enabled=tts_enabled,
-        tts_voice=(runtime_snapshot or {}).get("tts", {}).get("voice") or tts_voice,
+        tts_voice=tts_voice,
         original_voice_mode=original_voice_mode,
+        plugin_instances=plugin_instances,
+        engines=engines,
         settings=settings,
-        engines=runtime_engines,
+        plugin_defaults=plugin_defaults,
+        config_snapshot=config_snapshot,
+        plugin_manager=plugin_manager,
         ensure_supported_translation_languages=ensure_supported_translation_languages,
         ensure_local_model_ready=ensure_local_model_ready,
         ensure_translation_engine=ensure_translation_engine,
-        runtime_snapshot=runtime_snapshot,
-        plugin_defaults=selected_plugins,
-        config_snapshot=config_snapshot,
-        plugin_manager=plugin_manager,
-        instance_selection=instance_selection,
+        resolve_runtime=resolve_runtime,
+        error_422=lambda detail: UploadTaskError(422, detail),
+        pre_plan_check=_check_video_extension,
     )
+    model, engine, tts_voice = prep.model, prep.engine, prep.tts_voice
     rec = store.create(
         url=filename,
         source_lang=source_lang,
@@ -499,8 +545,8 @@ def create_upload_task(
         tts_enabled=tts_enabled,
         tts_voice=tts_voice,
         original_voice_mode=original_voice_mode,
-        plugin_plan_json=plugin_plan_json,
-        runtime_config_json=runtime_config_json,
+        plugin_plan_json=prep.plugin_plan_json,
+        runtime_config_json=prep.runtime_config_json,
     )
 
     directory = task_dir(rec.id)
