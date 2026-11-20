@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 from src.core.downloader import ProbeResult
 from src.plugin_system import PluginError
-from src.store import ProbeStore
+from src.store import ProbeRecord, ProbeStore
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +156,26 @@ def _result_payload(result: Optional[ProbeResult], created_at: Optional[int]) ->
     }
 
 
+def record_probe_result(probes: ProbeStore, url: str, result: ProbeResult) -> ProbeRecord:
+    """把一次探测的 14 个字段写进 ProbeStore。只包字段映射，不包错误处理。"""
+    return probes.record(
+        url=url,
+        ok=result.ok,
+        title=result.title,
+        extractor=result.extractor,
+        duration=result.duration,
+        formats_count=result.formats_count,
+        webpage_url=result.webpage_url,
+        reason=result.reason,
+        detail=result.detail,
+        language=result.language,
+        available_qualities=result.available_qualities,
+        formats=result.formats,
+        thumbnail=result.thumbnail,
+        uploader=result.uploader,
+    )
+
+
 class ProbeBatchManager:
     """管理一次启动批次，并接受开发者页的单站点结果覆盖。"""
 
@@ -270,22 +290,7 @@ class ProbeBatchManager:
             result = ProbeResult(ok=False, reason="启动探测失败")
 
         try:
-            record = probes.record(
-                url=site.url,
-                ok=result.ok,
-                title=result.title,
-                extractor=result.extractor,
-                duration=result.duration,
-                formats_count=result.formats_count,
-                webpage_url=result.webpage_url,
-                reason=result.reason,
-                detail=result.detail,
-                language=result.language,
-                available_qualities=result.available_qualities,
-                formats=result.formats,
-                thumbnail=result.thumbnail,
-                uploader=result.uploader,
-            )
+            record = record_probe_result(probes, site.url, result)
             created_at = record.created_at
         except Exception as exc:
             code = exc.code if isinstance(exc, PluginError) else "internal_error"

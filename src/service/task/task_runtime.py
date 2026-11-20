@@ -15,6 +15,7 @@ from fastapi.responses import StreamingResponse
 
 from src.handler.deps import get_store, require_api_token
 from src.service.asset_resolver import AssetResolver, ResourceState
+from src.service.probe_batch import record_probe_result
 from src.store import TaskStore
 from src.store import (
     DOWNGRADE_REASON_DISK_FAILURE,
@@ -166,22 +167,7 @@ def probe_and_record(
     if quality is not None:
         options["quality"] = quality
     result = probe_video(url, **options)
-    record = probes.record(
-        url=url,
-        ok=result.ok,
-        title=result.title,
-        extractor=result.extractor,
-        duration=result.duration,
-        formats_count=result.formats_count,
-        webpage_url=result.webpage_url,
-        reason=result.reason,
-        detail=result.detail,
-        language=result.language,
-        available_qualities=result.available_qualities,
-        formats=result.formats,
-        thumbnail=result.thumbnail,
-        uploader=result.uploader,
-    )
+    record = record_probe_result(probes, url, result)
     if not (plugin_instances or {}).get("download"):
         probe_batch_manager.record_manual_probe(url, result, record.created_at)
     return result, record
