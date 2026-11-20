@@ -6,13 +6,15 @@
 
 from __future__ import annotations
 
-import hashlib
 import sqlite3
-import time
 import uuid
 from dataclasses import asdict, dataclass
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import List, Optional
+
+from .sqlite_base import SqliteStore
+from .sqlite_base import calc_url_hash as _calc_url_hash
+from .sqlite_base import now_ms as _now_ms
 
 # 与流水线状态机一致
 STATUSES = (
@@ -99,14 +101,6 @@ class TaskRecord:
 _COLUMNS = list(TaskRecord.__dataclass_fields__.keys())
 
 
-def _now_ms() -> int:
-    return int(time.time() * 1000)
-
-
-def _calc_url_hash(url: str) -> str:
-    return hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
-
-
 def _portable_artifact_name(value: Optional[str], task_id: str) -> Optional[str]:
     """Persist only a task-local filename, regardless of the host OS."""
     if not value:
@@ -123,20 +117,8 @@ def _portable_artifact_name(value: Optional[str], task_id: str) -> Optional[str]
     return name
 
 
-class TaskStore:
+class TaskStore(SqliteStore):
     """任务表的增删改查。每次操作开一个短连接，交给 SQLite 处理文件锁。"""
-
-    def __init__(self, db_path: Path | str):
-        self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_schema()
-
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, timeout=10)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=5000")
-        return conn
 
     def _init_schema(self) -> None:
         with self._connect() as conn:
