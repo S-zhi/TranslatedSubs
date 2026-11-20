@@ -9,14 +9,12 @@ from __future__ import annotations
 import sqlite3
 import uuid
 from dataclasses import asdict, dataclass
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import List, Optional
 
-from .sqlite_base import (
-    SqliteStore,
-    calc_url_hash as _calc_url_hash,
-    now_ms as _now_ms,
-)
+from .sqlite_base import SqliteStore
+from .sqlite_base import calc_url_hash as _calc_url_hash
+from .sqlite_base import now_ms as _now_ms
 
 # 与流水线状态机一致
 STATUSES = (
