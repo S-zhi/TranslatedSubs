@@ -449,6 +449,30 @@ def separate_stems(
         _SEPARATION_SLOT.release()
 
 
+def _write_legacy_separation_metadata(
+    metadata_path: Path,
+    audio_path: Path | str,
+    config: Mapping[str, Any],
+    *,
+    ensure_ascii: bool,
+) -> None:
+    """Write the legacy vocal/background .meta.json cache marker.
+
+    Only the file name and ensure_ascii differ between the two callers,
+    so both keep their exact previous bytes.
+    """
+    source = Path(audio_path)
+    metadata_path.write_text(json.dumps({
+        "source": str(source.resolve()),
+        "source_size": source.stat().st_size,
+        "source_mtime_ns": source.stat().st_mtime_ns,
+        "backend": config["backend"],
+        "model": config["model"],
+        "threads": config["threads"],
+        "command": config["command"],
+    }, ensure_ascii=ensure_ascii, sort_keys=True), encoding="utf-8")
+
+
 def _separate_vocals_impl(
     audio_path: Path | str,
     task_id: str,
@@ -477,17 +501,9 @@ def _separate_vocals_impl(
         cancel_check=cancel_check,
     )
     if not keep_background and result.vocal_path is not None:
-        source = Path(audio_path)
-        metadata = task_dir / "vocal.meta.json"
-        metadata.write_text(json.dumps({
-            "source": str(source.resolve()),
-            "source_size": source.stat().st_size,
-            "source_mtime_ns": source.stat().st_mtime_ns,
-            "backend": config["backend"],
-            "model": config["model"],
-            "threads": config["threads"],
-            "command": config["command"],
-        }, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        _write_legacy_separation_metadata(
+            task_dir / "vocal.meta.json", audio_path, config, ensure_ascii=False,
+        )
         return result.vocal_path
     if result.vocal_path is not None:
         return result.vocal_path
@@ -532,12 +548,7 @@ def separate_background(
     if result.background_path is None:
         raise VocalSeparationError("Demucs 未生成背景音 stem")
     # Preserve the legacy cache marker for any caller still using the old helper.
-    source = Path(audio_path)
-    metadata = task_dir / "background.meta.json"
-    metadata.write_text(json.dumps({
-        "source": str(source.resolve()), "source_size": source.stat().st_size,
-        "source_mtime_ns": source.stat().st_mtime_ns,
-        "backend": config["backend"], "model": config["model"],
-        "threads": config["threads"], "command": config["command"],
-    }, sort_keys=True), encoding="utf-8")
+    _write_legacy_separation_metadata(
+        task_dir / "background.meta.json", audio_path, config, ensure_ascii=True,
+    )
     return result.background_path
