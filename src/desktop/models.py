@@ -18,7 +18,6 @@ import time
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from typing import Any
-from urllib.parse import urlsplit
 
 WHISPER_MODEL = "base.en"
 TRANSLATION_ENGINE = "local-opus-en-zh"
@@ -224,18 +223,11 @@ class DesktopModelManager:
         if endpoint is None:
             endpoint = os.environ.get("SUBTRANS_DESKTOP_MODEL_ENDPOINT") or None
         if endpoint:
-            try:
-                parsed = urlsplit(endpoint)
-                valid = (
-                    parsed.scheme == "https" and parsed.hostname and parsed.port != 0
-                    and not parsed.username and not parsed.password
-                    and not parsed.query and not parsed.fragment
-                    and not any(character.isspace() or ord(character) < 32 for character in endpoint)
-                    and "\\" not in endpoint
-                )
-            except ValueError:
-                valid = False
-            if not valid:
+            # 延迟导入：本模块导入时不得引入 src.config（见
+            # test_import_and_constructor_have_no_service_or_runtime_side_effects）。
+            from src.config.endpoint import is_valid_https_endpoint
+
+            if not is_valid_https_endpoint(endpoint, allow_path=True):
                 raise ValueError("Desktop model endpoint must be HTTPS without credentials, query or fragment")
             # Translation configures its endpoint on the existing singleton;
             # start_download deliberately retains its zero-argument API.

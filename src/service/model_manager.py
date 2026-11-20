@@ -16,9 +16,9 @@ from contextlib import contextmanager, nullcontext
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, BinaryIO
-from urllib.parse import urlsplit
 
 from src.config import settings
+from src.config.endpoint import is_valid_https_endpoint
 
 MODEL_CATALOG: tuple[dict[str, Any], ...] = (
     {"name": "tiny", "label": "Whisper Tiny", "size": "~75 MB"},
@@ -64,18 +64,7 @@ class ModelDependencyError(RuntimeError):
 def _model_endpoint(endpoint: str | None) -> str | None:
     if endpoint is None:
         return None
-    try:
-        url = urlsplit(endpoint)
-        valid = (
-            url.scheme == "https" and url.hostname and (url.port is None or url.port > 0)
-            and url.username is None and url.password is None and not url.query
-            and not url.fragment and url.path in ("", "/")
-            and not any(c.isspace() or ord(c) < 32 for c in endpoint)
-            and "\\" not in endpoint
-        )
-    except (ValueError, TypeError, AttributeError):
-        valid = False
-    if not valid:
+    if not is_valid_https_endpoint(endpoint, allow_path=False):
         raise ModelValidationError("模型源必须是无凭据、路径或查询参数的 HTTPS origin")
     return endpoint.rstrip("/")
 

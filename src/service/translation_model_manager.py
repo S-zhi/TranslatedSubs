@@ -16,9 +16,9 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Callable, Optional
-from urllib.parse import urlsplit
 
 from src.config import settings
+from src.config.endpoint import is_valid_https_endpoint
 
 
 MODEL_REPO = "Helsinki-NLP/opus-mt-en-zh"
@@ -503,17 +503,7 @@ class TranslationModelManager:
             endpoint = os.environ.get("SUBTRANS_DESKTOP_MODEL_ENDPOINT") or None
         if endpoint is None:
             return None
-        try:
-            parsed = urlsplit(endpoint)
-            valid = (
-                parsed.scheme == "https" and parsed.hostname and parsed.port != 0
-                and not parsed.username and not parsed.password
-                and not parsed.query and not parsed.fragment
-                and not any(character.isspace() for character in endpoint)
-            )
-        except ValueError:
-            valid = False
-        if not valid:
+        if not is_valid_https_endpoint(endpoint, allow_path=True):
             raise TranslationModelError("模型源必须是无凭据的 HTTPS 地址", code="invalid_endpoint")
         return endpoint.rstrip("/")
 
