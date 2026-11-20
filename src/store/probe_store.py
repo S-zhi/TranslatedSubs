@@ -164,8 +164,28 @@ class ProbeStore(SqliteStore):
                 (url_hash, start_of_hour),
             ).fetchone()
 
+            rec_id = row["id"] if row else "probe_" + uuid.uuid4().hex[:8]
+            rec = ProbeRecord(
+                id=rec_id,
+                url=url,
+                ok=ok_val,
+                title=title,
+                extractor=extractor,
+                duration=duration,
+                formats_count=formats_count,
+                webpage_url=webpage_url,
+                reason=reason,
+                detail=detail,
+                created_at=now,
+                url_hash=url_hash,
+                language=language,
+                formats_json=formats_json,
+                qualities=qualities_str,
+                thumbnail=thumbnail,
+                uploader=uploader,
+            )
+
             if row:
-                rec_id = row["id"]
                 conn.execute(
                     """
                     UPDATE probe_records
@@ -176,45 +196,25 @@ class ProbeStore(SqliteStore):
                     WHERE id = ?
                     """,
                     (
-                        url,
-                        ok_val,
-                        title,
-                        extractor,
-                        duration,
-                        formats_count,
-                        webpage_url,
-                        reason,
-                        detail,
-                        now,
-                        language,
-                        formats_json,
-                        qualities_str,
-                        thumbnail,
-                        uploader,
-                        rec_id,
+                        rec.url,
+                        rec.ok,
+                        rec.title,
+                        rec.extractor,
+                        rec.duration,
+                        rec.formats_count,
+                        rec.webpage_url,
+                        rec.reason,
+                        rec.detail,
+                        rec.created_at,
+                        rec.language,
+                        rec.formats_json,
+                        rec.qualities,
+                        rec.thumbnail,
+                        rec.uploader,
+                        rec.id,
                     ),
                 )
             else:
-                rec_id = "probe_" + uuid.uuid4().hex[:8]
-                rec = ProbeRecord(
-                    id=rec_id,
-                    url=url,
-                    ok=ok_val,
-                    title=title,
-                    extractor=extractor,
-                    duration=duration,
-                    formats_count=formats_count,
-                    webpage_url=webpage_url,
-                    reason=reason,
-                    detail=detail,
-                    created_at=now,
-                    url_hash=url_hash,
-                    language=language,
-                    formats_json=formats_json,
-                    qualities=qualities_str,
-                    thumbnail=thumbnail,
-                    uploader=uploader,
-                )
                 values = [getattr(rec, c) for c in _COLUMNS]
                 placeholders = ", ".join(["?"] * len(_COLUMNS))
                 conn.execute(
@@ -223,25 +223,7 @@ class ProbeStore(SqliteStore):
                     values,
                 )
 
-        return ProbeRecord(
-            id=rec_id,
-            url=url,
-            ok=ok_val,
-            title=title,
-            extractor=extractor,
-            duration=duration,
-            formats_count=formats_count,
-            webpage_url=webpage_url,
-            reason=reason,
-            detail=detail,
-            created_at=now,
-            url_hash=url_hash,
-            language=language,
-            formats_json=formats_json,
-            qualities=qualities_str,
-            thumbnail=thumbnail,
-            uploader=uploader,
-        )
+        return rec
 
     # ---------- 查 ----------
     def list(self, limit: int = 50) -> List[ProbeRecord]:
