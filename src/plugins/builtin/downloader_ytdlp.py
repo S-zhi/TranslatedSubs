@@ -20,6 +20,7 @@ from src.plugin_system import (
 )
 from src.plugin_system.contracts import PluginConfig
 from src.plugin_system.errors import sanitize_message
+from src.plugins.builtin._common import BuiltinSessionBase
 from src.plugins.builtin.configuration import BuiltinFactory
 
 
@@ -62,11 +63,12 @@ class YtDlpFactory(BuiltinFactory):
         return YtDlpSession(config, context)
 
 
-class YtDlpSession:
+class YtDlpSession(BuiltinSessionBase):
+    STAGE = "download"
+    PLUGIN_ID = PLUGIN_ID
+
     def __init__(self, config: PluginConfig, context: PluginContext) -> None:
-        self._config = dict(config)
-        self._context = context
-        self._closed = False
+        super().__init__(config, context)
         self._cookie_path: Path | None = None
 
     def validate(self, request) -> None:
@@ -130,7 +132,7 @@ class YtDlpSession:
 
     def close(self) -> None:
         self._cookie_path = None
-        self._closed = True
+        super().close()
 
     def _validate_config(self) -> None:
         if set(self._config) - _ALLOWED_CONFIG_KEYS:

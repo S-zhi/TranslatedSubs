@@ -17,6 +17,7 @@ from src.plugin_system import (
 )
 from src.plugin_system.contracts import PluginConfig
 from src.plugin_system.errors import sanitize_message
+from src.plugins.builtin._common import BuiltinSessionBase
 from src.plugins.builtin.configuration import BuiltinFactory
 
 
@@ -59,11 +60,12 @@ class WhisperFactory(BuiltinFactory):
         return WhisperSession(config, context)
 
 
-class WhisperSession:
+class WhisperSession(BuiltinSessionBase):
+    STAGE = "transcribe"
+    PLUGIN_ID = PLUGIN_ID
+
     def __init__(self, config: PluginConfig, context: PluginContext) -> None:
-        self._config = dict(config)
-        self._context = context
-        self._closed = False
+        super().__init__(config, context)
         self._secret: str | None = None
 
     def validate(self, request) -> None:
@@ -171,7 +173,7 @@ class WhisperSession:
 
     def close(self) -> None:
         self._secret = None
-        self._closed = True
+        super().close()
 
     def _validate_config(self) -> None:
         if set(self._config) - _ALLOWED_CONFIG_KEYS:

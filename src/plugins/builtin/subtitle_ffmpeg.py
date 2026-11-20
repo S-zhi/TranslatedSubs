@@ -19,6 +19,7 @@ from src.plugin_system import (
 )
 from src.plugin_system.contracts import PluginConfig
 from src.plugin_system.errors import sanitize_message
+from src.plugins.builtin._common import BuiltinSessionBase
 from src.plugins.builtin.configuration import BuiltinFactory
 
 
@@ -38,11 +39,9 @@ class FFmpegRenderFactory(BuiltinFactory):
         return FFmpegRenderSession(config, context)
 
 
-class FFmpegRenderSession:
-    def __init__(self, config: PluginConfig, context: PluginContext) -> None:
-        self._config = dict(config)
-        self._context = context
-        self._closed = False
+class FFmpegRenderSession(BuiltinSessionBase):
+    STAGE = "render"
+    PLUGIN_ID = PLUGIN_ID
 
     def validate(self, request) -> None:
         if self._closed:
@@ -145,9 +144,6 @@ class FFmpegRenderSession:
             code, message = self._failure_metadata(exc)
             raise self._error(code, message, exc) from exc
 
-    def close(self) -> None:
-        self._closed = True
-
     def _mix_audio(self, request: DubMuxRequest) -> Path:
         inputs: list[str] = []
         filters: list[str] = []
@@ -232,10 +228,6 @@ class FFmpegRenderSession:
                 "Hard subtitles require FFmpeg with libass support; install an FFmpeg build with the subtitles filter",
             )
         return "execution_error", sanitize_message(error)
-
-    @staticmethod
-    def _error(code: str, message: str, cause: Exception | None = None) -> PluginError:
-        return PluginError(code, "render", PLUGIN_ID, message, cause)
 
 
 factory = FFmpegRenderFactory()
