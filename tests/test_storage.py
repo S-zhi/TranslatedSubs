@@ -467,7 +467,8 @@ def test_retention_roundtrip(client):
     initial = client.get("/api/storage/retention").json()
     assert initial["days"] == 30
     assert initial["updatedAt"] > 0
-    assert initial["lastRunAt"] is None
+    # lastRunAt 不断言为 None：应用启动时保留调度器会立即跑一次，
+    # 是否已写回取决于调度线程时序，与 get/put 闭环无关。
 
     r = client.put("/api/storage/retention", json={"days": 7})
     assert r.status_code == 200
