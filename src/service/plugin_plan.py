@@ -5,14 +5,13 @@ from __future__ import annotations
 import json
 import math
 import os
-import re
 from collections.abc import Mapping
 from types import MappingProxyType
 from types import SimpleNamespace
 from typing import Any
-from urllib.parse import urlsplit
 
 from src.config import settings as default_settings
+from src.config.endpoint import url_contains_credentials
 from src.core.downloader import QUALITY_PRESETS
 
 PLUGIN_PLAN_SCHEMA_VERSION = 1
@@ -50,26 +49,8 @@ _SLOT_CONFIG_KEYS = {
     "render.subtitle": {"mode"},
     "render.dub_mux": {"original_voice_mode"},
 }
-_SENSITIVE_QUERY_KEYS = re.compile(r"(?i)(token|api[_-]?key|key|password|auth|authorization|cookie)")
-
-
 def _setting(settings: Any, name: str, default: Any = None) -> Any:
     return getattr(settings, name, default) if settings is not None else default
-
-
-def _url_has_credentials_or_secret_query(value: str | None) -> bool:
-    if not value:
-        return False
-    parsed = urlsplit(value)
-    if parsed.username is not None or parsed.password is not None:
-        return True
-    for pair in parsed.query.split("&"):
-        if not pair:
-            continue
-        key = pair.split("=", 1)[0]
-        if _SENSITIVE_QUERY_KEYS.search(key):
-            return True
-    return bool(parsed.fragment)
 
 
 def _validate_non_sensitive_url(value: Any, field_name: str) -> str | None:
@@ -77,7 +58,7 @@ def _validate_non_sensitive_url(value: Any, field_name: str) -> str | None:
         return None
     if not isinstance(value, str):
         raise ValueError(f"{field_name} must be a URL string")
-    if _url_has_credentials_or_secret_query(value):
+    if url_contains_credentials(value):
         raise ValueError(f"{field_name} contains credentials or a sensitive URL component")
     return value
 
@@ -135,7 +116,7 @@ def validate_plugin_plan(value: object) -> dict[str, Any]:
         if "cookies_ref" in config and config["cookies_ref"] not in {None, "settings:cookies_file"}:
             raise ValueError("invalid cookie reference in plugin plan")
         for key in ("base_url", "service_url", "proxy"):
-            if key in config and _url_has_credentials_or_secret_query(config[key]):
+            if key in config and url_contains_credentials(config[key]):
                 raise ValueError(f"plugin plan contains a sensitive {key} value")
         copied_slots[purpose] = {
             "plugin_id": plugin_id,
