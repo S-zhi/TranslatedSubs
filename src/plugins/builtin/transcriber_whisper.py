@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import urlsplit
 
+from src.config.endpoint import url_contains_credentials
 from src.core import transcriber
 from src.plugin_system import (
     PluginCancelled,
@@ -28,7 +29,6 @@ _ALLOWED_CONFIG_KEYS = frozenset({
 })
 _LOCAL_BACKENDS = {"local", "local_whisper", "whisper", "faster_whisper"}
 _HTTP_BACKENDS = {"http", "custom", "custom_http"}
-_SENSITIVE_QUERY_KEYS = {"token", "api_key", "key", "password", "auth"}
 
 
 def _canonical_backend(value: str) -> str | None:
@@ -201,13 +201,7 @@ class WhisperSession(BuiltinSessionBase):
             if (
                 parsed.scheme not in {"http", "https"}
                 or not parsed.netloc
-                or parsed.username
-                or parsed.password
-                or parsed.fragment
-                or any(
-                    key.lower() in _SENSITIVE_QUERY_KEYS
-                    for key, _ in parse_qsl(parsed.query, keep_blank_values=True)
-                )
+                or url_contains_credentials(service_url)
             ):
                 raise ValueError("transcription service URL contains unsupported credentials")
             card_reference = isinstance(credential_ref, str) and re.fullmatch(

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import urlsplit
 
+from src.config.endpoint import url_contains_credentials
 from src.core import downloader
 from src.plugin_system import (
     DownloadRequest,
@@ -30,23 +31,6 @@ _ALLOWED_CONFIG_KEYS = frozenset({
     "merge_output_format", "retries", "concurrent_fragments",
 })
 _QUALITY_RE = re.compile(r"^(?:best|1080p|720p|480p|360p|audio_only|\d+p?)$", re.I)
-_SENSITIVE_QUERY_KEYS = {"token", "api_key", "key", "password", "auth"}
-
-
-def _contains_url_secret(value: str) -> bool:
-    try:
-        parsed = urlsplit(value)
-        return bool(
-            parsed.username
-            or parsed.password
-            or parsed.fragment
-            or any(
-                key.lower() in _SENSITIVE_QUERY_KEYS
-                for key, _ in parse_qsl(parsed.query, keep_blank_values=True)
-            )
-        )
-    except ValueError:
-        return True
 
 
 class YtDlpFactory(BuiltinFactory):
@@ -154,7 +138,7 @@ class YtDlpSession(BuiltinSessionBase):
             if (
                 parsed.scheme not in {"http", "https", "socks4", "socks4a", "socks5"}
                 or not parsed.netloc
-                or _contains_url_secret(proxy)
+                or url_contains_credentials(proxy)
             ):
                 raise ValueError("download proxy must not contain embedded credentials")
         if self._config["cookies_ref"] not in {None, "settings:cookies_file"}:

@@ -5,8 +5,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import urlsplit
 
+from src.config.endpoint import url_contains_credentials
 from src.core import translator
 from src.plugin_system import (
     PluginCancelled,
@@ -198,17 +199,10 @@ class TranslatorEngineSession(BuiltinSessionBase):
             raise ValueError("local translation model is not supported")
         if api_type != "local_ct2":
             parsed = urlsplit(self._config["base_url"])
-            sensitive_query = {"token", "api_key", "key", "password", "auth"}
             if (
                 parsed.scheme not in {"http", "https"}
                 or not parsed.netloc
-                or parsed.username
-                or parsed.password
-                or parsed.fragment
-                or any(
-                    key.lower() in sensitive_query
-                    for key, _ in parse_qsl(parsed.query, keep_blank_values=True)
-                )
+                or url_contains_credentials(self._config["base_url"])
             ):
                 raise ValueError("translation base URL contains unsupported credentials")
         for key in ("batch_size", "local_batch_size", "timeout_seconds"):

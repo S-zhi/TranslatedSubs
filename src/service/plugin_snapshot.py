@@ -9,7 +9,8 @@ from __future__ import annotations
 import math
 import re
 from typing import Any
-from urllib.parse import parse_qsl, urlsplit
+
+from src.config.endpoint import url_contains_credentials
 
 PURPOSE_STAGES = {
     "download": "download",
@@ -74,13 +75,13 @@ def validate_instance_plan(value: object) -> dict[str, Any]:
                 raise ValueError("plugin configuration numbers must be finite")
             if isinstance(item, str) and len(item) > 8192:
                 raise ValueError("plugin configuration value is too long")
-            if isinstance(item, str) and (key.endswith("url") or key in {"proxy", "endpoint"}) and item:
-                parsed = urlsplit(item)
-                if parsed.username is not None or parsed.password is not None or parsed.fragment or any(
-                    _SECRET_FIELD.search(query_key) or query_key.lower() == "key"
-                    for query_key, _ in parse_qsl(parsed.query)
-                ):
-                    raise ValueError("plugin plan URL contains credentials")
+            if (
+                isinstance(item, str)
+                and (key.endswith("url") or key in {"proxy", "endpoint"})
+                and item
+                and url_contains_credentials(item)
+            ):
+                raise ValueError("plugin plan URL contains credentials")
         if "credential_ref" in config:
             _reference(config["credential_ref"], purpose, config, entry["plugin_id"])
         if config.get("cookies_ref") not in {None, "settings:cookies_file"}:
