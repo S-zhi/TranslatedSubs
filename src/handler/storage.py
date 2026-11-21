@@ -437,6 +437,12 @@ def _drive_artifact_snapshot(task_id: str, body: DriveSyncRequest) -> list[dict[
     return [artifact.model_dump() for artifact in artifacts]
 
 
+def _drive_http_error(exc: DriveSyncError) -> HTTPException:
+    if isinstance(exc, DriveSyncConflict):
+        return HTTPException(status_code=409, detail=str(exc))
+    return HTTPException(status_code=502, detail=str(exc))
+
+
 @router.post(
     "/tasks/{task_id}/drive/upload",
     status_code=202,
@@ -454,10 +460,8 @@ def start_drive_upload(
         raise HTTPException(status_code=400, detail="任务没有可上传的产物")
     try:
         batch = get_drive_sync_manager().start_upload(task_id, snapshot, store)
-    except DriveSyncConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except DriveSyncError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise _drive_http_error(exc) from exc
     return batch.to_payload()
 
 
@@ -475,10 +479,8 @@ def start_drive_download(
     _require_drive_task(task_id, store)
     try:
         batch = get_drive_sync_manager().start_download(task_id, store)
-    except DriveSyncConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except DriveSyncError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise _drive_http_error(exc) from exc
     return batch.to_payload()
 
 
