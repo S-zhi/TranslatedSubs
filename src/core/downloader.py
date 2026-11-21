@@ -403,6 +403,18 @@ def download_video(
     return result
 
 
+def _classify_format(f: object) -> tuple[object, bool, bool]:
+    """把单个格式条目分类为 (height, 是否含视频, 是否含音频)。"""
+    if not isinstance(f, dict):
+        return None, False, False
+    h = f.get("height")
+    vcodec = str(f.get("vcodec") or "").lower()
+    acodec = str(f.get("acodec") or "").lower()
+    is_video = bool(h or (vcodec and vcodec != "none"))
+    is_audio = bool(acodec and acodec != "none")
+    return h, is_video, is_audio
+
+
 def extract_supported_contents(info: dict) -> tuple[list[str], list[dict]]:
     """从 yt-dlp 解析出的 info 字典中提取可用清晰度标签与代表性格式列表。"""
     raw_formats = info.get("formats") or info.get("requested_formats") or []
@@ -420,13 +432,7 @@ def extract_supported_contents(info: dict) -> tuple[list[str], list[dict]]:
     has_video: bool = False
 
     for f in raw_formats:
-        if not isinstance(f, dict):
-            continue
-        h = f.get("height")
-        vcodec = str(f.get("vcodec") or "").lower()
-        acodec = str(f.get("acodec") or "").lower()
-        is_v = bool(h or (vcodec and vcodec != "none"))
-        is_a = bool(acodec and acodec != "none")
+        h, is_v, is_a = _classify_format(f)
 
         if is_v and h and isinstance(h, (int, float)):
             heights_found.add(int(h))
@@ -473,13 +479,7 @@ def extract_supported_contents(info: dict) -> tuple[list[str], list[dict]]:
     audio_formats: list[dict] = []
 
     for f in raw_formats:
-        if not isinstance(f, dict):
-            continue
-        h = f.get("height")
-        vcodec = str(f.get("vcodec") or "").lower()
-        acodec = str(f.get("acodec") or "").lower()
-        is_v = bool(h or (vcodec and vcodec != "none"))
-        is_a = bool(acodec and acodec != "none")
+        h, is_v, is_a = _classify_format(f)
 
         if not is_v and is_a:
             audio_formats.append(f)
