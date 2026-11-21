@@ -44,12 +44,12 @@ class FFmpegRenderSession(BuiltinSessionBase):
     PLUGIN_ID = PLUGIN_ID
 
     def validate(self, request) -> None:
-        if self._closed:
-            raise self._error("invalid_input", "render session is closed")
+        self._require_open("render session is closed")
+        self._require_request_type(
+            request, SubtitleRenderRequest, DubMuxRequest,
+            message="expected a render request",
+        )
         valid_subtitle = isinstance(request, SubtitleRenderRequest)
-        valid_dub = isinstance(request, DubMuxRequest)
-        if not valid_subtitle and not valid_dub:
-            raise self._error("invalid_input", "expected a render request")
         expected_op = "subtitle" if valid_subtitle else "dub_mux"
         if (
             request.stage != "render"

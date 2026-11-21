@@ -45,10 +45,8 @@ class KokoroSession(BuiltinSessionBase):
     PLUGIN_ID = PLUGIN_ID
 
     def validate(self, request: TTSRequest) -> None:
-        if self._closed:
-            raise self._error("invalid_input", "TTS session is closed")
-        if type(request) is not TTSRequest:
-            raise self._error("invalid_input", "expected a TTSRequest")
+        self._require_open("TTS session is closed")
+        self._require_request_type(request, TTSRequest)
         if (
             request.stage != "tts"
             or request.operation != "tts"

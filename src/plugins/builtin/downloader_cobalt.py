@@ -111,10 +111,8 @@ class CobaltSession(BuiltinSessionBase):
         self._closed = False
 
     def validate(self, request) -> None:
-        if self._closed:
-            raise self._error("invalid_input", "Cobalt session is closed")
-        if not isinstance(request, (DownloadRequest, ProbeRequest)):
-            raise self._error("invalid_input", "expected a DownloadRequest or ProbeRequest")
+        self._require_open("Cobalt session is closed")
+        self._require_request_type(request, DownloadRequest, ProbeRequest)
         if self._context.purpose != "download":
             raise self._error("invalid_input", "Cobalt invocation purpose must be download")
         if not isinstance(request.url, str) or not request.url.strip():

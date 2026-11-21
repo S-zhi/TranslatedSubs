@@ -39,10 +39,8 @@ class DemucsSession(BuiltinSessionBase):
     PLUGIN_ID = PLUGIN_ID
 
     def validate(self, request: VocalSeparateRequest) -> None:
-        if self._closed:
-            raise self._error("invalid_input", "vocal separation session is closed")
-        if type(request) is not VocalSeparateRequest:
-            raise self._error("invalid_input", "expected a VocalSeparateRequest")
+        self._require_open("vocal separation session is closed")
+        self._require_request_type(request, VocalSeparateRequest)
         if (
             request.stage != "vocal_separate"
             or request.operation != "vocal_separate"

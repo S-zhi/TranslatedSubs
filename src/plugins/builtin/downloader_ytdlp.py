@@ -72,13 +72,8 @@ class YtDlpSession(BuiltinSessionBase):
         self._cookie_path: Path | None = None
 
     def validate(self, request) -> None:
-        if self._closed:
-            raise PluginError("invalid_input", "download", PLUGIN_ID, "session is closed")
-        if not isinstance(request, (DownloadRequest, ProbeRequest)):
-            raise PluginError(
-                "invalid_input", "download", PLUGIN_ID,
-                "expected a DownloadRequest or ProbeRequest",
-            )
+        self._require_open("session is closed")
+        self._require_request_type(request, DownloadRequest, ProbeRequest)
         if isinstance(request, DownloadRequest):
             if (
                 request.stage != "download"

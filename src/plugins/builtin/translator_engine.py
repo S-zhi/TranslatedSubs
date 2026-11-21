@@ -66,21 +66,9 @@ class TranslatorEngineSession(BuiltinSessionBase):
     STAGE = "translate"
     PLUGIN_ID = PLUGIN_ID
 
-    def __init__(self, config: PluginConfig, context: PluginContext) -> None:
-        super().__init__(config, context)
-        self._secret: str | None = None
-
     def validate(self, request) -> None:
-        if self._closed:
-            raise PluginError(
-                "invalid_input", "translate", PLUGIN_ID,
-                "translation session is closed",
-            )
-        if not isinstance(request, TranslateRequest):
-            raise PluginError(
-                "invalid_input", "translate", PLUGIN_ID,
-                "expected a TranslateRequest",
-            )
+        self._require_open("translation session is closed")
+        self._require_request_type(request, TranslateRequest)
         if request.stage != "translate" or request.operation != "translate":
             raise PluginError(
                 "invalid_input", "translate", PLUGIN_ID,
