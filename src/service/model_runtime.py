@@ -325,6 +325,26 @@ class RuntimePlan:
     snapshot: dict[str, Any]
 
 
+def _resolve_config_stores(
+    model_store: ModelSettingsStore | None,
+    engines: Any,
+    *,
+    config_snapshot: ConfigSnapshot | None = None,
+    config_provider: Any = None,
+) -> tuple[ConfigSnapshot, ModelSettingsStore, Any]:
+    provider = config_provider or (
+        getattr(model_store, "_provider", None)
+        or getattr(engines, "_provider", None)
+    )
+    config = config_snapshot or (provider or get_config_provider()).read()
+    if model_store is None or isinstance(model_store, ModelSettingsStore):
+        model_store = ModelSettingsStore(snapshot=config)
+    from src.store import TranslationEngineStore
+    if engines is None or isinstance(engines, TranslationEngineStore):
+        engines = TranslationEngineStore(snapshot=config)
+    return config, model_store, engines
+
+
 def resolve_runtime(
     *,
     engine: str,
@@ -346,16 +366,10 @@ def resolve_runtime(
     # One aggregate read pins model cards, engines, and business settings to
     # one Redis revision. Secret values stay in the aggregate, but only the
     # non-secret routing fields below are copied into the task snapshot.
-    provider = config_provider or (
-        getattr(model_store, "_provider", None)
-        or getattr(engines, "_provider", None)
+    config, model_store, engines = _resolve_config_stores(
+        model_store, engines,
+        config_snapshot=config_snapshot, config_provider=config_provider,
     )
-    config = config_snapshot or (provider or get_config_provider()).read()
-    if model_store is None or isinstance(model_store, ModelSettingsStore):
-        model_store = ModelSettingsStore(snapshot=config)
-    from src.store import TranslationEngineStore
-    if engines is None or isinstance(engines, TranslationEngineStore):
-        engines = TranslationEngineStore(snapshot=config)
     from src.service.plugin_plan import DEFAULT_PLUGIN_IDS, resolve_plugin_defaults
 
     selected_plugins = (
@@ -405,16 +419,10 @@ def resolve_engine(
     config_provider: Any = None,
 ) -> dict[str, Any]:
     """Validate and resolve only the translation engine compatibility helper."""
-    provider = config_provider or (
-        getattr(model_store, "_provider", None)
-        or getattr(engines, "_provider", None)
+    _, model_store, engines = _resolve_config_stores(
+        model_store, engines,
+        config_snapshot=config_snapshot, config_provider=config_provider,
     )
-    config = config_snapshot or (provider or get_config_provider()).read()
-    if model_store is None or isinstance(model_store, ModelSettingsStore):
-        model_store = ModelSettingsStore(snapshot=config)
-    from src.store import TranslationEngineStore
-    if engines is None or isinstance(engines, TranslationEngineStore):
-        engines = TranslationEngineStore(snapshot=config)
     return _resolve_engine(
         engine, need_subtitle, engines, model_store=model_store,
         compat_settings=compat_settings, translation_model_manager=translation_model_manager,
