@@ -64,18 +64,9 @@ class WhisperSession(BuiltinSessionBase):
     STAGE = "transcribe"
     PLUGIN_ID = PLUGIN_ID
 
-    def __init__(self, config: PluginConfig, context: PluginContext) -> None:
-        super().__init__(config, context)
-        self._secret: str | None = None
-
     def validate(self, request) -> None:
-        if self._closed:
-            raise PluginError("invalid_input", "transcribe", PLUGIN_ID, "session is closed")
-        if not isinstance(request, TranscribeRequest):
-            raise PluginError(
-                "invalid_input", "transcribe", PLUGIN_ID,
-                "expected a TranscribeRequest",
-            )
+        self._require_open("session is closed")
+        self._require_request_type(request, TranscribeRequest)
         if (
             request.stage != "transcribe"
             or request.operation != "transcribe"

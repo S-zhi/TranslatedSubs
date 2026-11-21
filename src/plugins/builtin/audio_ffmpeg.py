@@ -43,10 +43,8 @@ class AudioFFmpegSession(BuiltinSessionBase):
     PLUGIN_ID = PLUGIN_ID
 
     def validate(self, request: AudioExtractRequest) -> None:
-        if self._closed:
-            raise self._error("invalid_input", "audio extraction session is closed")
-        if type(request) is not AudioExtractRequest:
-            raise self._error("invalid_input", "expected an AudioExtractRequest")
+        self._require_open("audio extraction session is closed")
+        self._require_request_type(request, AudioExtractRequest)
         if (
             request.stage != "audio_extract"
             or request.operation != "audio_extract"
