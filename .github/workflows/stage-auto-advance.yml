@@ -1,0 +1,145 @@
+# Issue 阶段自动流转
+#
+# 触发：Issue 上任意 role:* 标签被移除（unlabeled）。
+# 规则：
+#   1. 移除后如果 Issue 上已经没有任何 role:* 标签，视为当前阶段交接完成；
+#   2. 按 stage 顺序前进一步：
+#      stage:needs-triage → stage:assess-plan → stage:coding → stage:code-review
+#   3. 流转完成后按等级重新分配角色：
+#      grade:Citizen L1 / L2 → role:agent + role:human
+#      grade:Citizen L3      → role:agent
+#      未评级                → role:human（兜底，避免 Issue 卡在无角色状态）
+#   4. stage:code-review 为终态：角色清空后移除 stage:code-review，不添加任何新阶段。
+#
+# 说明：stage:review-nopass 是失败节点，不在本工作流的线性流转范围内。
+name: Issue 阶段自动流转
+
+on:
+  issues:
+    types:
+      - unlabeled
+
+permissions:
+  issues: write
+
+# 同一 Issue 的多次 role:* 移除事件串行执行，避免并发重复推进。
+concurrency:
+  group: issue-stage-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  advance-stage:
+    name: 推进阶段并分配角色
+    if: startsWith(github.event.label.name, 'role:')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 计算并更新标签
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+
+          STAGES=(
+            "stage:needs-triage"
+            "stage:assess-plan"
+            "stage:coding"
+            "stage:code-review"
+          )
+
+          # 以最新状态为准：unlabeled 事件里的 payload 可能已经过期；
+          # L1/L2 同时移除 role:agent、role:human 时也会产生两个事件。
+          state="$(gh issue view "$ISSUE_NUMBER" --json state --jq '.state')"
+          if [[ "$state" != "OPEN" ]]; then
+            echo "Issue #$ISSUE_NUMBER is $state; skip."
+            exit 0
+          fi
+
+          LABELS="$(gh issue view "$ISSUE_NUMBER" --json labels --jq '.labels[].name')"
+
+          # 只要还存在任意 role:* 标签，就说明本轮交接尚未完成。
+          while IFS= read -r label; do
+            if [[ "$label" == role:* ]]; then
+              echo "Issue #$ISSUE_NUMBER still has '$label'; stay at current stage."
+              exit 0
+            fi
+          done <<< "$LABELS"
+
+          # 定位当前阶段；多个 stage 标签并存时以最靠后的一个为准。
+          current_idx=-1
+          stage_count=0
+          for i in "${!STAGES[@]}"; do
+            if grep -qxF -- "${STAGES[$i]}" <<< "$LABELS"; then
+              current_idx="$i"
+              stage_count=$((stage_count + 1))
+            fi
+          done
+
+          if [[ "$current_idx" -eq -1 ]]; then
+            echo "Issue #$ISSUE_NUMBER has no stage label; nothing to advance."
+            exit 0
+          fi
+
+          # 清理多余的 stage 标签，保证一个 Issue 只保留一个阶段。
+          for i in "${!STAGES[@]}"; do
+            if [[ "$i" -ne "$current_idx" ]] && grep -qxF -- "${STAGES[$i]}" <<< "$LABELS"; then
+              echo "Remove redundant stage label: ${STAGES[$i]}"
+              gh issue edit "$ISSUE_NUMBER" --remove-label "${STAGES[$i]}" || true
+            fi
+          done
+
+          current_stage="${STAGES[$current_idx]}"
+          last_idx=$(( ${#STAGES[@]} - 1 ))
+
+          # 终态：code-review 完成后移除 stage:code-review，不添加新的 stage 标签。
+          if [[ "$current_idx" -eq "$last_idx" ]]; then
+            echo "Issue #$ISSUE_NUMBER completed final stage '$current_stage'; remove it without adding a new stage."
+            gh issue edit "$ISSUE_NUMBER" --remove-label "$current_stage"
+            exit 0
+          fi
+
+          next_stage="${STAGES[$((current_idx + 1))]}"
+
+          # 按等级确定新阶段的角色。
+          needs_human=false
+          agent_only=false
+          while IFS= read -r label; do
+            case "$label" in
+              "grade:Citizen L1"|"grade:Citizen L2") needs_human=true ;;
+              "grade:Citizen L3") agent_only=true ;;
+              "Citizen L1"|"Citizen L2") needs_human=true ;;  # 兼容旧标签写法
+              "Citizen L3") agent_only=true ;;
+            esac
+          done <<< "$LABELS"
+
+          roles=()
+          if [[ "$needs_human" == "true" ]]; then
+            roles=("role:agent" "role:human")
+          elif [[ "$agent_only" == "true" ]]; then
+            roles=("role:agent")
+          else
+            echo "::warning::Issue #$ISSUE_NUMBER has no grade:Citizen Lx label; fallback to role:human."
+            roles=("role:human")
+          fi
+
+          # 先分配角色、再移动阶段标签：如果中途失败，Issue 仍保有 role 标签，
+          # 下一次移除角色会重试本次流转，不会停在「阶段已前进但没有任何角色」的状态。
+          label_args=()
+          for role in "${roles[@]}"; do
+            label_args+=(--add-label "$role")
+          done
+          echo "Assign roles: ${roles[*]}"
+          gh issue edit "$ISSUE_NUMBER" "${label_args[@]}"
+
+          # 多个 stage 标签并存说明状态不一致：只归一到最靠后的阶段，不继续前进；
+          # 等下一轮角色交接完成后再恢复自动流转。
+          if [[ "$stage_count" -gt 1 ]]; then
+            echo "Issue #$ISSUE_NUMBER had $stage_count stage labels; normalized to '$current_stage' without advancing."
+            exit 0
+          fi
+
+          echo "Advance stage: '$current_stage' -> '$next_stage'"
+          gh issue edit "$ISSUE_NUMBER" --add-label "$next_stage"
+          gh issue edit "$ISSUE_NUMBER" --remove-label "$current_stage"
