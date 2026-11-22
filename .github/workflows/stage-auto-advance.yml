@@ -1,4 +1,4 @@
-# Issue 阶段自动流转
+# Agent-Loop正式标签开发流程
 #
 # 触发：Issue 上任意 role:* 标签被移除（unlabeled）。
 # 规则：
@@ -12,7 +12,7 @@
 #   4. stage:code-review 为终态：角色清空后移除 stage:code-review，不添加任何新阶段。
 #
 # 说明：stage:review-nopass 是失败节点，不在本工作流的线性流转范围内。
-name: Issue 阶段自动流转
+name: Agent-Loop正式标签开发流程
 
 on:
   issues:
