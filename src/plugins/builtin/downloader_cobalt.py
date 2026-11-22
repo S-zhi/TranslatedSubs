@@ -12,6 +12,7 @@ from pathlib import Path
 from types import MappingProxyType
 from urllib.parse import urlsplit
 
+from src.config.endpoint import url_contains_credentials
 from src.core import downloader
 from src.plugin_system import (
     DownloadRequest,
@@ -123,7 +124,7 @@ class CobaltSession(BuiltinSessionBase):
             parsed = urlsplit(request.url)
             valid_url = (
                 parsed.scheme in {"http", "https"} and bool(parsed.hostname)
-                and parsed.username is None and parsed.password is None
+                and not url_contains_credentials(request.url)
                 and not any(char.isspace() or ord(char) < 32 for char in request.url)
             )
             parsed.port
