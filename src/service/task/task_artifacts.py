@@ -56,9 +56,10 @@ def resolve_video(
     task_dir: Callable[[str], Path],
     output_video: str,
     output_video_names: tuple[str, ...],
+    allow_source_fallback: bool = True,
     asset_resolver: Any = AssetResolver,
 ) -> Path | None:
-    """优先定位成品视频，下载模式下回退到源视频。"""
+    """优先定位成品视频，允许回退时再查找源视频。"""
 
     directory = task_dir(task_id)
     names = output_video_names
@@ -69,6 +70,8 @@ def resolve_video(
         output = directory / name
         if output.is_file():
             return output
+    if not allow_source_fallback:
+        return None
     state, source_path, _ = asset_resolver.resolve_source(task_id)
     if state == ResourceState.AVAILABLE and source_path is not None:
         return source_path
@@ -203,7 +206,11 @@ def download_video(*, task_id: str, store: Any, resolve_video_fn: Callable[..., 
         raise LookupError("任务不存在")
     if rec.status != "SUCCESS":
         raise RuntimeError("成品视频尚未生成")
-    path = resolve_video_fn(task_id, rec.burn)
+    path = resolve_video_fn(
+        task_id,
+        rec.burn,
+        allow_source_fallback=not rec.need_subtitle,
+    )
     if path is not None:
         state = asset_resolver.check_file_state(path)
         if state == ResourceState.AVAILABLE:

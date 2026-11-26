@@ -331,13 +331,19 @@ def scan_missing_terminal(
     )
 
 
-def _resolve_video(task_id: str, mode: str | None = None):
+def _resolve_video(
+    task_id: str,
+    mode: str | None = None,
+    *,
+    allow_source_fallback: bool = True,
+):
     return _task_artifacts.resolve_video(
         task_id,
         mode,
         task_dir=task_dir,
         output_video=OUTPUT_VIDEO,
         output_video_names=OUTPUT_VIDEO_NAMES,
+        allow_source_fallback=allow_source_fallback,
     )
 
 
