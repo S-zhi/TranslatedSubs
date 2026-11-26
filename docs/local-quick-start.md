@@ -65,6 +65,10 @@ curl http://127.0.0.1:8000/api/health/ready
 
 然后访问 <http://127.0.0.1:8000/>。MCP 配置也保存在 `config.local.json`；参见 [MCP Server 文档](./mcp-server.md)。
 
+### 任务视频下载
+
+对于执行成功的任务，`GET /api/tasks/{task_id}/download` 返回可用成品，`HEAD` 在可以下载时返回 204。仅下载任务（`needSubtitle=false`）在缺少成品时可以下载源视频。完整字幕任务（`needSubtitle=true`）缺少成品时，两个方法都返回 409，资源状态标记为 `MISSING`。如果源文件仍可访问，可以通过 `GET /api/tasks/{task_id}/source` 预览。
+
 ## 可选：cobalt 下载服务
 
 默认下载器仍是 yt-dlp。需要 cobalt 时，另行部署 `ghcr.io/imputnet/cobalt:11`，或配置已获授权的服务；不提供默认公共实例。`httpx` 已由基础依赖安装，无需新增 Python extra，后续转写与 FFmpeg 依赖照常按需准备。

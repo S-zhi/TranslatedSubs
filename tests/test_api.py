@@ -1977,17 +1977,71 @@ def test_download_video_returns_409_during_downloading_with_part_file(client, tm
     assert r.json()["detail"] == "成品视频尚未生成"
 
 
-def test_download_409_when_only_source_no_output(client, tmp_path):
-    """仅下载模式（无 output.mp4）下走 /download 不应 409：可回退到 source.*。"""
-    cid = client.post("/api/tasks", json=_payload()).json()["id"]
+def test_download_only_task_serves_source_without_output(client):
+    cid = client.post("/api/tasks", json=_payload(needSubtitle=False)).json()["id"]
     client._store.update(cid, status="SUCCESS", progress=100)
     d = client._tmp / cid
     d.mkdir(parents=True, exist_ok=True)
     (d / "source.mp4").write_bytes(b"SRC")
 
-    r = client.get(f"/api/tasks/{cid}/download")
+    url = f"/api/tasks/{cid}/download"
+    r = client.get(url)
     assert r.status_code == 200
     assert r.content == b"SRC"
+    assert client.head(url).status_code == 204
+    assert client._store.get(cid).resource_status == RESOURCE_STATUS_AVAILABLE
+
+
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+def test_subtitle_task_download_marks_output_missing_when_only_source_exists(client, method):
+    cid = client.post("/api/tasks", json=_payload(needSubtitle=True)).json()["id"]
+    client._store.update(cid, status="SUCCESS", progress=100)
+    d = client._tmp / cid
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "source.mp4").write_bytes(b"SRC")
+    assert client._store.get(cid).resource_status == RESOURCE_STATUS_AVAILABLE
+
+    task_url = f"/api/tasks/{cid}"
+    response = client.request(method, f"{task_url}/download")
+    assert response.status_code == 409
+    if method == "GET":
+        assert response.json()["detail"] == "资源已删除"
+    assert client._store.get(cid).resource_status == RESOURCE_STATUS_MISSING
+    detail = client.get(task_url).json()
+    assert detail["status"] == "SUCCESS"
+    assert detail["resourceStatus"] == RESOURCE_STATUS_MISSING
+    assert detail["outputs"] is None
+
+    source = client.get(f"{task_url}/source")
+    assert source.status_code == 200
+    assert source.content == b"SRC"
+    assert client.head(f"{task_url}/source").status_code == 204
+
+
+@pytest.mark.parametrize("need_subtitle", [False, True])
+@pytest.mark.parametrize(("burn", "other_burn"), [("hard", "soft"), ("soft", "hard")])
+def test_download_prefers_matching_output_then_legacy_output(client, need_subtitle, burn, other_burn):
+    cid = client.post("/api/tasks", json=_payload(needSubtitle=need_subtitle, burn=burn)).json()["id"]
+    client._store.update(cid, status="SUCCESS", progress=100)
+    d = client._tmp / cid
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "source.mp4").write_bytes(b"SRC")
+    (d / f"output_{other_burn}.mp4").write_bytes(b"OTHER_MODE")
+    (d / "output.mp4").write_bytes(b"LEGACY")
+    preferred = d / f"output_{burn}.mp4"
+    preferred.write_bytes(b"PREFERRED")
+
+    url = f"/api/tasks/{cid}/download"
+    response = client.get(url)
+    assert response.status_code == 200
+    assert response.content == b"PREFERRED"
+    assert client.head(url).status_code == 204
+
+    preferred.unlink()
+    response = client.get(url)
+    assert response.status_code == 200
+    assert response.content == b"LEGACY"
+    assert client.head(url).status_code == 204
 
 
 def test_download_subtitle_409_when_need_subtitle_false(client, tmp_path):
