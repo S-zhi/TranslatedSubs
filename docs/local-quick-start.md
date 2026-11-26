@@ -63,6 +63,10 @@ curl http://127.0.0.1:8000/api/health
 curl http://127.0.0.1:8000/api/health/ready
 ```
 
+- `/api/health` 返回 `{"ok": true}` 表示 API 可响应。如果 `curl` 无法连接，先确认服务已启动并监听 `127.0.0.1:8000`。
+- `/api/health/ready` 的 JSON 中，`ok: true` 表示默认完整流水线（含硬字幕）的基础环境已就绪。HTTP 200 也可能包含 `ok: false`，请以响应正文中的 `ok` 判断。
+- 如果就绪检查返回 `ok: false`，先查看 `missing` 列出的缺项，再按任务所需功能查看 `capabilities`。仅下载看 `capabilities.download`，使用软字幕看 `capabilities.soft_burn`。如果只缺 FFmpeg 的 `subtitles` 滤镜，`ok` 为 `false`，而 `capabilities.soft_burn` 和 `initialized` 为 `true`。这时可使用软字幕，或安装带 `libass` 的 FFmpeg 后再使用硬字幕。
+
 然后访问 <http://127.0.0.1:8000/>。MCP 配置也保存在 `config.local.json`；参见 [MCP Server 文档](./mcp-server.md)。
 
 ## 可选：cobalt 下载服务
