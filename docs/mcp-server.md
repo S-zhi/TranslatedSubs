@@ -19,13 +19,28 @@ uv run python -m src.cli
 uv run python -m src.mcp_server.server
 ```
 
-切换到 Streamable HTTP 时，编辑 `config.local.json` 中的 `mcp.transport`，并设置需要的监听地址、端口和路径，然后启动：
+在本机切换到 Streamable HTTP 时，将下面四项合并进 `config.local.json` 中已有的 `mcp` 对象。保留该对象里的 `baseUrl`、`timeout`、`logLevel`，以及文件中的其他配置。
+
+```json
+{
+  "mcp": {
+    "transport": "streamable-http",
+    "host": "127.0.0.1",
+    "port": 3001,
+    "path": "/mcp"
+  }
+}
+```
+
+然后从仓库根目录启动 MCP 服务。
 
 ```bash
 uv run python -m src.mcp_server.server
 ```
 
-`mcp.host` 只控制 MCP Server 的监听地址；`mcp.baseUrl` 始终应指向业务 FastAPI，而不是 MCP 地址。生产环境请在受控网络中暴露 MCP，并按部署环境配置认证和 TLS。
+启动后，将 MCP 客户端连接到 <http://127.0.0.1:3001/mcp>。`mcp.baseUrl` 是 MCP 服务调用业务 FastAPI 的地址，默认是 <http://127.0.0.1:8000>。如果已配置自定义业务 API 地址，继续使用该值。
+
+生产环境请在受控网络中暴露 MCP，并按部署环境配置认证和 TLS。
 
 ## MCP 工具
 
