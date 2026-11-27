@@ -501,6 +501,8 @@ class DriveSyncManager:
             batch = self.repository.get(batch_id)
             if not batch:
                 raise DriveSyncError("同步批次不存在")
+            if batch_id in self._futures:
+                raise DriveSyncConflict("同步批次仍在后台收尾，请稍后重试")
             for entry in batch.entries:
                 if entry.state == "FAILED":
                     entry.state = "PENDING"

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import threading
 import time
 
+import pytest
+
 from src.service import drive_sync
-from src.service.drive_sync import DriveSyncManager, _BatchRepository
+from src.service.drive_sync import DriveSyncConflict, DriveSyncManager, _BatchRepository
 from src.store import TaskStore
 
 
@@ -151,6 +154,60 @@ def test_upload_processes_entries_serially_and_clears_pending(tmp_path, monkeypa
     assert [name for kind, name in fake.calls if kind == "create-upload"] == ["a.txt", "b.txt"]
     assert fake.calls.index(("create-upload", "a.txt")) < fake.calls.index(("create-upload", "b.txt"))
     manager.executor.shutdown(wait=True)
+
+
+def test_retry_waits_for_cancelled_worker_cleanup(tmp_path):
+    store = TaskStore(tmp_path / "tasks.db")
+    record = store.create(
+        url="https://example.com/video",
+        source_lang="auto",
+        target_lang="zh-CN",
+        mode="mono",
+        burn="hard",
+        model="small",
+        engine="deepseek",
+        title="retry task",
+    )
+    store.update(record.id, status="SUCCESS", progress=100)
+    manager = DriveSyncManager(repository=_BatchRepository(tmp_path / "batches.json"))
+    started = threading.Event()
+    release = threading.Event()
+    calls: list[str] = []
+
+    def worker(batch_id, _store):
+        calls.append(batch_id)
+        if len(calls) == 1:
+            started.set()
+            assert release.wait(timeout=3)
+        manager._finish(batch_id)
+
+    manager._run_upload = worker
+    batch = manager.start_upload(
+        record.id,
+        [{"name": "a.txt", "size": 1, "kind": "other", "mime": "text/plain"}],
+        store,
+    )
+    try:
+        assert started.wait(timeout=3)
+        cancelled = manager.cancel(batch.id)
+        assert cancelled.state == "CANCELLED"
+        with pytest.raises(DriveSyncConflict, match="后台收尾"):
+            manager.retry(batch.id, store)
+
+        release.set()
+        deadline = time.time() + 3
+        while batch.id in manager._futures and time.time() < deadline:
+            time.sleep(0.01)
+        assert batch.id not in manager._futures
+
+        manager.retry(batch.id, store)
+        deadline = time.time() + 3
+        while len(calls) < 2 and time.time() < deadline:
+            time.sleep(0.01)
+        assert calls == [batch.id, batch.id]
+    finally:
+        release.set()
+        manager.executor.shutdown(wait=True)
 
 
 def test_download_resumes_part_file_and_clears_each_entry(tmp_path, monkeypatch):
