@@ -179,6 +179,12 @@ sudo systemctl enable --now subtitles-ai
 sudo systemctl status subtitles-ai --no-pager
 ```
 
+查看本次开机的已有服务日志。命令会把日志直接输出到终端，输出完成后返回。
+
+```bash
+sudo journalctl -b -u subtitles-ai --no-pager
+```
+
 查看实时日志：
 
 ```bash
