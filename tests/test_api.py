@@ -562,6 +562,31 @@ def test_retry_resets_status(client, monkeypatch):
     assert enqueued == [cid]
 
 
+def test_retry_enqueue_failure_restores_terminal_state(client, monkeypatch):
+    cid = client.post("/api/tasks", json=_payload()).json()["id"]
+    client._store.update(
+        cid,
+        status="FAILED",
+        progress=40,
+        current_step="TRANSLATING",
+        error="boom",
+    )
+
+    def fail_enqueue(_task_id):
+        raise RuntimeError("queue unavailable")
+
+    monkeypatch.setattr(tasks_routes, "enqueue_pipeline", fail_enqueue)
+
+    response = client.post(f"/api/tasks/{cid}/retry")
+
+    assert response.status_code == 409
+    rec = client._store.get(cid)
+    assert rec.status == "FAILED"
+    assert rec.progress == 40
+    assert rec.current_step == "TRANSLATING"
+    assert rec.error == "boom"
+
+
 def test_retry_running_task_returns_409(client, monkeypatch):
     """运行中任务重试应返回 409 且不能重复入队。"""
     cid = client.post("/api/tasks", json=_payload()).json()["id"]
